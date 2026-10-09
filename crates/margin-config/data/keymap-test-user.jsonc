@@ -1,0 +1,7 @@
+// A user keymap for the resolver cases in keymap-cases.jsonc. It unbinds `down` in Reader, binds
+// shift-j, adds the chord `g g` (which makes the built-in `g` a chord prefix), and rebinds Ctrl+P
+// to the palette and binds x to the next page in a block without a context.
+[
+  { "bindings": { "ctrl-p": "view.palette", "x": "reader.page.next" } },
+  { "context": "Reader", "bindings": { "down": null, "shift-j": "reader.page.next", "g g": "reader.page.first" } }
+]

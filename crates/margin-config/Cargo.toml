@@ -1,0 +1,27 @@
+[package]
+name = "margin-config"
+description = "Margin's settings and keymap files: Settings, validation, the keymap compiler and resolver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-engine = { workspace = true }
+serde = { workspace = true }
+# No `preserve_order`: features unify across the workspace, and PdfCraft's JSON output must not
+# change. Key order is kept where it matters by sorting on file positions instead.
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# The per-OS config directory (`~/.config/margin` on Linux).
+dirs = "7"
+# JSONC with byte ranges, for `file:line:col` in problems.
+jsonc-parser = "0.34"
+# JSON Schema from the Settings struct: the validator walks it and editors complete from it.
+schemars = "1"
+
+[dev-dependencies]
+# Generated schemas checked against an independent validator.
+jsonschema = { version = "0.58", default-features = false }

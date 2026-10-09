@@ -1,0 +1,38 @@
+// Margin's built-in keymap, in Zed's format: a list of { context?, bindings }. A binding is a
+// command id, [id, args], or null (unbind). `secondary-` is Cmd on macOS and Ctrl elsewhere, like
+// PdfCraft's Shortcut.command. It follows the reader mockup's keys where the egui app has the
+// command, and PdfCraft's shortcuts and view keys everywhere else. Every id here runs; a PdfCraft
+// shortcut Margin leaves out goes in "$pdfcraft_ignored" with the reason.
+// The user's <config>/keymap.jsonc is compiled after this file, so its bindings win at equal depth.
+// The first block has no context, the shallowest depth, so any user binding of the same keys wins.
+[
+  { "bindings": {
+      "secondary-k": "view.palette", "secondary-o": "file.open", "secondary-,": "app.preferences",
+      "secondary-s": "file.save", "secondary-shift-s": "file.save_as", "secondary-p": "print.dialog",
+      "secondary-w": "file.close", "secondary-shift-w": "file.close_all", "secondary-d": "file.properties",
+      "secondary-z": "edit.undo", "secondary-shift-z": "edit.redo", "secondary-f": "edit.find",
+      "secondary-shift-f": "edit.advanced_search", "secondary-l": "view.full_screen", "ctrl-secondary-h": "view.read_mode",
+      "secondary-shift-n": "view.focus_page_input", "secondary-3": "view.fit_visible", "secondary-b": "bookmark.add",
+      "secondary-j": "tools.js_console", "secondary-shift-k": "app.key_context",
+      "escape": "app.close_layer", "?": "help.shortcuts" } },
+  { "context": "Reader", "bindings": {
+      "/": "edit.find", "f3": "reader.find.next", "shift-f3": "reader.find.prev",
+      "secondary-g": "reader.find.next", "secondary-shift-g": "reader.find.prev",
+      "secondary-=": "view.zoom.in", "secondary-+": "view.zoom.in", "secondary--": "view.zoom.out",
+      "secondary-0": "view.fit.page", "secondary-1": ["view.zoom.set", { "percent": 100 }], "secondary-2": "view.fit.width",
+      "secondary-r": "view.rotate.cw", "secondary-shift-r": "view.rotate.ccw",
+      "w": "view.fit.toggle_width", "f": "view.read_mode", "g": "view.focus_page_input",
+      "alt-left": "reader.back", "alt-right": "reader.forward", "secondary-[": "reader.back", "secondary-]": "reader.forward",
+      "j": "reader.scroll.down", "down": "reader.scroll.down", "k": "reader.scroll.up", "up": "reader.scroll.up",
+      "space": "reader.screen.down", "pagedown": "reader.screen.down", "shift-space": "reader.screen.up", "pageup": "reader.screen.up",
+      "right": "reader.page.next", "left": "reader.page.prev", "secondary-pagedown": "reader.page.next", "secondary-pageup": "reader.page.prev",
+      "home": "reader.page.first", "end": "reader.page.last" } },
+  { "context": "Find > TextInput", "bindings": {
+      "enter": "reader.find.next", "shift-enter": "reader.find.prev", "down": "reader.find.next", "up": "reader.find.prev" } },
+  { "context": "Selection", "bindings": {
+      "h": "comment.highlight", "u": "comment.underline", "s": "comment.strikeout", "q": "comment.squiggly" } },
+  { "context": "AnnotateMode", "bindings": {
+      "v": "reader.tool.select", "c": "edit.snapshot", "h": "comment.highlight", "u": "comment.underline",
+      "s": "comment.strikeout", "q": "comment.squiggly", "n": "comment.note", "p": "comment.ink",
+      "t": "comment.freetext", "r": "comment.square", "e": "comment.eraser" } }
+]

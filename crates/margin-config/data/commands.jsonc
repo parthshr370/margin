@@ -1,0 +1,34 @@
+// Margin's own command ids, checked against the commands schema (schema::commands_schema).
+// PdfCraft's ids come from pdfcraft_engine::commands::COMMANDS and catalog::TOOL_GROUPS and are
+// never repeated here. Margin adds ids only under app.*, view.*, reader.*, library.* and note.*,
+// and only ids the egui app runs (crates/ui-egui/src/margin/keys.rs `run`): a keymap binding to
+// an id that is not listed here is dropped with a message.
+// Most of them are the document view's keys that PdfCraft hard-codes in canvas::shortcuts.
+[
+  { "id": "app.close_layer", "title": "Close", "group": "App", "in_text": true },
+  { "id": "app.key_context", "title": "Show key context", "icon": "keyboard", "group": "Help", "in_text": true },
+
+  { "id": "view.zoom.in", "title": "Zoom in", "icon": "zoom-in", "group": "View", "when": "Reader", "aliases": ["bigger", "magnify"] },
+  { "id": "view.zoom.out", "title": "Zoom out", "icon": "zoom-out", "group": "View", "when": "Reader", "aliases": ["smaller"] },
+  { "id": "view.zoom.set", "title": "Zoom", "group": "View", "when": "Reader",
+    "args": { "type": "object", "required": ["percent"], "properties": { "percent": { "type": "integer", "minimum": 10, "maximum": 6400 } } } },
+  { "id": "view.fit.page", "title": "Fit page", "group": "View", "when": "Reader" },
+  { "id": "view.fit.width", "title": "Fit width", "group": "View", "when": "Reader" },
+  { "id": "view.fit.toggle_width", "title": "Toggle fit width", "group": "View", "when": "Reader" },
+  { "id": "view.rotate.cw", "title": "Rotate view clockwise", "icon": "rotate-cw", "group": "View", "when": "Reader" },
+  { "id": "view.rotate.ccw", "title": "Rotate view counterclockwise", "icon": "rotate-ccw", "group": "View", "when": "Reader" },
+
+  { "id": "reader.find.next", "title": "Next match", "group": "Find", "when": "Reader", "in_text": true },
+  { "id": "reader.find.prev", "title": "Previous match", "group": "Find", "when": "Reader", "in_text": true },
+  { "id": "reader.back", "title": "Back", "icon": "arrow-left", "group": "Go", "when": "Reader" },
+  { "id": "reader.forward", "title": "Forward", "icon": "arrow-right", "group": "Go", "when": "Reader" },
+  { "id": "reader.scroll.down", "title": "Scroll down", "group": "Go", "when": "Reader" },
+  { "id": "reader.scroll.up", "title": "Scroll up", "group": "Go", "when": "Reader" },
+  { "id": "reader.screen.down", "title": "Next screen", "group": "Go", "when": "Reader" },
+  { "id": "reader.screen.up", "title": "Previous screen", "group": "Go", "when": "Reader" },
+  { "id": "reader.page.next", "title": "Next page", "group": "Go", "when": "Reader" },
+  { "id": "reader.page.prev", "title": "Previous page", "group": "Go", "when": "Reader" },
+  { "id": "reader.page.first", "title": "First page", "group": "Go", "when": "Reader" },
+  { "id": "reader.page.last", "title": "Last page", "group": "Go", "when": "Reader" },
+  { "id": "reader.tool.select", "title": "Select", "group": "Mark", "when": "Reader" }
+]
