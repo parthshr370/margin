@@ -179,6 +179,8 @@ impl Selection {
 struct PageTex {
     tag: u64,
     tex: TextureHandle,
+    /// The Margin page colour the pixels were recoloured with (`PageColorCache::key`).
+    color: u64,
 }
 
 pub struct DocView {
@@ -208,6 +210,8 @@ pub struct DocView {
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
     pages: HashMap<usize, PageTex>,
+    /// Margin page colour applied to rasters before upload (nothing in PdfCraft).
+    pub(crate) page_color: crate::margin::display::PageColorCache,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
@@ -356,6 +360,7 @@ impl DocView {
             flash: None,
             compare_marks: Vec::new(),
             pages: HashMap::new(),
+            page_color: Default::default(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
@@ -872,8 +877,14 @@ impl DocView {
                 self.errors.insert(r.request.page, e);
                 continue;
             }
-            let img = egui::ColorImage::from_rgba_premultiplied([r.width as usize, r.height as usize], &r.rgba);
+            let size = [r.width as usize, r.height as usize];
             let page = r.request.page;
+            let img = if r.request.tag & THUMB_TAG != 0 {
+                egui::ColorImage::from_rgba_premultiplied(size, &r.rgba)
+            } else {
+                // Margin page colour; whole pages keep their source pixels to recolour later.
+                self.page_color.image(r.request.tile.is_none().then_some(page), self.current, size, r.rgba)
+            };
             if let Some(t) = r.request.tile {
                 let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
                 self.tiles.insert((page, t.x / TILE, t.y / TILE), (r.request.tag, tex));
@@ -885,7 +896,7 @@ impl DocView {
                 self.stale_thumbs.remove(&page);
             } else {
                 let tex = ctx.load_texture(format!("page-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
-                self.pages.insert(page, PageTex { tag: r.request.tag, tex });
+                self.pages.insert(page, PageTex { tag: r.request.tag, tex, color: self.page_color.key() });
                 self.signature_drag.page_received(page);
                 self.waiting_since.remove(&page);
             }
@@ -1207,7 +1218,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Edit a PDF: added text and images can be selected, moved and edited.
     let editing_content = (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || app.quick_tool == QuickTool::AddText;
     let text_style = app.text_style.clone();
+    let page_color = crate::margin::display::page_color_for(app, ui.ctx());
     let view = &mut app.views[index];
+    // Margin page colour: tiles in an older colour are dropped (whole pages recolour lazily below).
+    if view.page_color.configure(page_color) {
+        view.tiles.clear();
+    }
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
@@ -1439,7 +1455,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
             // Soft shadow + paper.
             painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
-            painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+            painter.rect_filled(r, CornerRadius::ZERO, view.page_color.paper());
             if let Some(err) = view.errors.get(&i) {
                 painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
                 icons::paint(
@@ -1463,6 +1479,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 } else {
                     (scale, tag)
                 };
+                // Margin: a page in an older page colour is recoloured from its kept source, or
+                // rendered again; only pages on screen get here.
+                let color = view.page_color.key();
+                if let Some(p) = view.pages.get_mut(&i)
+                    && p.color != color
+                {
+                    if view.page_color.recolor(i, &mut p.tex) {
+                        p.color = color;
+                    } else {
+                        p.tag = STALE_TAG;
+                    }
+                }
                 match view.pages.get(&i) {
                     Some(p) => {
                         if !tiled && p.tag == want_tag {
@@ -1916,6 +1944,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let cur = view.current;
         view.pages.retain(|&p, _| p.abs_diff(cur) <= 8);
     }
+    view.page_color.retain_near(view.current);
     // Schedule renders: visible pages first (nearest the current page), then thumbnails.
     let (mut wanted, visible_now) = out.inner;
     let cur = view.current;

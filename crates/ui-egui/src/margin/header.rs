@@ -5,9 +5,8 @@
 use egui::{Align, Layout, Stroke};
 use pdfcraft_engine::commands;
 
-use crate::canvas::{Fit, PageLayout};
 use crate::margin::{SidebarTab, current_section, open_tab, outline_at};
-use crate::theme::{self, ThemePreference, Tokens};
+use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
 pub const HEIGHT: f32 = 44.0;
@@ -185,39 +184,7 @@ fn document_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The Display popover's body: page layout, fit and theme from PdfCraft's commands. The page
-/// colour controls (R1) take this popover over.
+/// The Display popover's body: page colour, layout and fit (`margin::display`).
 fn display_popover(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    ui.set_min_width(220.0);
-    let mut command = None;
-    if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
-        ui.label(egui::RichText::new("Pages").font(theme::medium(11.5)).color(t.text_faint));
-        for layout in PageLayout::ORDER {
-            if ui.radio(view.layout == layout, crate::i18n::t(layout.label())).clicked() {
-                command = Some(layout.command());
-            }
-        }
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("Fit").font(theme::medium(11.5)).color(t.text_faint));
-        for (fit, label) in [(Fit::Width, "Width"), (Fit::Page, "Page")] {
-            if ui.radio(view.fit == fit, label).clicked() {
-                view.set_fit(fit);
-            }
-        }
-        ui.add_space(4.0);
-    }
-    ui.label(egui::RichText::new("Theme").font(theme::medium(11.5)).color(t.text_faint));
-    for (preference, id, label) in [
-        (ThemePreference::Dark, "view.theme.dark", "Dark"),
-        (ThemePreference::Light, "view.theme.light", "Light"),
-        (ThemePreference::System, "view.theme.system", "Follow the system"),
-    ] {
-        if ui.radio(app.theme_preference == preference, label).clicked() {
-            command = Some(id);
-        }
-    }
-    if let Some(id) = command {
-        app.execute(id);
-    }
+    crate::margin::display::popover_contents(app, ui);
 }

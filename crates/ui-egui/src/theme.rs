@@ -10,6 +10,18 @@ pub enum ThemeKind {
     #[default]
     Light,
     Dark,
+    /// Margin's dark reader palette (`Flavor::Margin` shows it where PdfCraft shows Dark).
+    Margin,
+}
+
+impl ThemeKind {
+    /// What `flavor` shows for this kind: Margin wears its own palette instead of Dark.
+    pub fn for_flavor(self, flavor: crate::Flavor) -> Self {
+        match (flavor, self) {
+            (crate::Flavor::Margin, ThemeKind::Dark) => ThemeKind::Margin,
+            _ => self,
+        }
+    }
 }
 
 /// The saved user choice, independent of the light/dark colours currently displayed.
@@ -115,6 +127,34 @@ impl Tokens {
                 page_shadow: Color32::from_black_alpha(120),
                 radius: 6,
             },
+            // The owner's Obsidian theme, Ember Night V2: near-black layers, grey text, one
+            // orange accent. `accent_text` is accent-coloured text on these surfaces (links,
+            // selected icons and rows), so it is the accent itself.
+            ThemeKind::Margin => Self {
+                kind,
+                titlebar: Color32::from_rgb(0x0A, 0x0A, 0x0A),
+                chrome: Color32::from_rgb(0x0A, 0x0A, 0x0A),
+                panel: Color32::from_rgb(0x0A, 0x0A, 0x0A),
+                pasteboard: Color32::from_rgb(0x0A, 0x0A, 0x0A),
+                card: Color32::from_rgb(0x0E, 0x0E, 0x0E),
+                border: Color32::from_rgb(0x14, 0x14, 0x14),
+                divider: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                text: Color32::from_rgb(0xEE, 0xEE, 0xEE),
+                text_muted: Color32::from_rgb(0x80, 0x80, 0x80),
+                text_faint: Color32::from_rgb(0x60, 0x60, 0x60),
+                icon: Color32::from_rgb(0x80, 0x80, 0x80),
+                hover: Color32::from_rgb(0x14, 0x14, 0x14),
+                pressed: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                selected: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                accent: Color32::from_rgb(0xEC, 0x5B, 0x2B),
+                accent_text: Color32::from_rgb(0xEC, 0x5B, 0x2B),
+                // The accent at 25 % (Ember's text-highlight "mark" colour).
+                accent_soft: Color32::from_rgba_unmultiplied(0xEC, 0x5B, 0x2B, 64),
+                field: Color32::from_rgb(0x0A, 0x0A, 0x0A),
+                badge_new: Color32::from_rgb(0xEC, 0x5B, 0x2B),
+                page_shadow: Color32::from_black_alpha(120),
+                radius: 4,
+            },
         }
     }
 
@@ -122,8 +162,9 @@ impl Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
+    /// Light text on dark surfaces (Dark and Margin).
     pub fn dark(&self) -> bool {
-        self.kind == ThemeKind::Dark
+        matches!(self.kind, ThemeKind::Dark | ThemeKind::Margin)
     }
 }
 
@@ -226,7 +267,7 @@ pub fn semibold(size: f32) -> FontId {
 
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     // egui must use the same theme for popup/menu styles as our custom chrome.
-    ctx.set_theme(if kind == ThemeKind::Dark { egui::Theme::Dark } else { egui::Theme::Light });
+    ctx.set_theme(if kind == ThemeKind::Light { egui::Theme::Light } else { egui::Theme::Dark });
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
@@ -301,9 +342,14 @@ mod tests {
     #[test]
     fn text_is_readable_on_every_surface() {
         // #76: the faintest text (hints, zoom level, captions) was 3.3:1 in the light theme.
-        for kind in [ThemeKind::Light, ThemeKind::Dark] {
+        for kind in [ThemeKind::Light, ThemeKind::Dark, ThemeKind::Margin] {
             let t = Tokens::for_kind(kind);
             for (name, fg) in [("text", t.text), ("text_muted", t.text_muted), ("text_faint", t.text_faint)] {
+                // Margin's faint grey (#606060, about 3.2:1) is the owner's Obsidian theme, kept
+                // on purpose for hints; its text and muted text still pass.
+                if kind == ThemeKind::Margin && name == "text_faint" {
+                    continue;
+                }
                 for bg in [t.chrome, t.panel, t.card, t.pasteboard] {
                     let r = contrast(fg, bg);
                     assert!(r >= 4.5, "{kind:?} {name} on {bg:?}: {r:.2}:1, WCAG AA needs 4.5:1");

@@ -368,6 +368,8 @@ pub struct PdfCraftApp {
     pub notes: margin::obsidian::Notes,
     /// Margin's reader chrome: sidebar tab, rail (used when `flavor` is Margin).
     pub margin_chrome: margin::ReaderChrome,
+    /// Margin's page colour choice (the Display popover).
+    pub margin_display: margin::display::DisplayState,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
@@ -633,6 +635,7 @@ impl PdfCraftApp {
             flavor: Flavor::PdfCraft,
             notes: Default::default(),
             margin_chrome: Default::default(),
+            margin_display: margin::display::DisplayState::default(),
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
@@ -1166,7 +1169,7 @@ impl PdfCraftApp {
 
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
-        self.theme = preference.resolve(self.ctx.as_ref().and_then(egui::Context::system_theme), self.theme);
+        self.theme = preference.resolve(self.ctx.as_ref().and_then(egui::Context::system_theme), self.theme).for_flavor(self.flavor);
         if let Some(ctx) = &self.ctx {
             theme::apply(ctx, self.theme);
         }
@@ -1180,7 +1183,7 @@ impl PdfCraftApp {
     }
 
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        let kind = self.theme_preference.resolve(ctx.system_theme(), self.theme);
+        let kind = self.theme_preference.resolve(ctx.system_theme(), self.theme).for_flavor(self.flavor);
         if kind != self.theme {
             self.theme = kind;
             theme::apply(ctx, kind);
@@ -1262,6 +1265,7 @@ impl PdfCraftApp {
         });
         if self.flavor == Flavor::Margin {
             state["notes"] = self.notes.to_json();
+            state[margin::display::SETTINGS_KEY] = self.margin_display.to_json();
         }
         state.to_string()
     }
@@ -1270,6 +1274,7 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
+        self.margin_display.restore(&v[margin::display::SETTINGS_KEY]);
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
             #[cfg(not(target_arch = "wasm32"))]
@@ -1363,6 +1368,7 @@ impl PdfCraftApp {
                 };
                 self.set_theme_preference(preference);
             }
+            ("page_color", _) if self.flavor == Flavor::Margin => self.margin_display.set_option(value)?,
             ("panel", _) => {
                 self.right = match value {
                     "comments" => Some(RightPanel::Comments),

@@ -8,9 +8,11 @@
 //! Margin's interface text is English for now: these strings are plain literals, not `tl!`, so
 //! PdfCraft's catalogs (which must cover every `tl!` literal) stay complete.
 
+pub mod display;
 pub mod footer;
 pub mod header;
 pub mod obsidian;
+pub mod pagecolor;
 pub mod rail;
 pub mod sidebar;
 
