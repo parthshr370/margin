@@ -513,6 +513,7 @@ impl PdfCraftApp {
                 self.dialog = Some(Dialog::RotatePages);
             }
             "page.split" => self.dialog = Some(Dialog::Split),
+            "help.shortcuts" if self.flavor == crate::Flavor::Margin => self.margin_keys.toggle_sheet(),
             "help.shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "help.about" => self.dialog = Some(Dialog::About),
             "help.check_updates" => self.check_for_updates(),
@@ -524,13 +525,18 @@ impl PdfCraftApp {
     /// Run the registered keyboard shortcuts (more specific combinations first).
     pub(crate) fn registry_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
+        // Margin: the keymap runs first; PdfCraft's table below only covers what it leaves alone.
+        let margin = self.flavor == crate::Flavor::Margin;
+        if margin {
+            crate::margin::keys::dispatch(self, ctx);
+        }
         let typing = ctx.egui_wants_keyboard_input();
         // A form field's editor is open on the page: its text isn't in the document until
         // committed. (Not egui's keyboard focus: an Escape in this frame has already cleared that,
         // while the field has yet to see the Escape and discard its draft.)
         let active = self.active_ids();
         let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some());
-        let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
+        let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some() && (!margin || self.margin_keys.falls_back(c))).collect();
         specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
         for spec in specs {
             let Some(s) = spec.shortcut else { continue };

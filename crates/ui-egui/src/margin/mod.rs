@@ -11,9 +11,12 @@
 pub mod display;
 pub mod footer;
 pub mod header;
+pub mod keys;
+pub mod keysheet;
 pub mod obsidian;
 pub mod pagecolor;
 pub mod rail;
+pub mod settings_watch;
 pub mod sidebar;
 
 use crate::{PdfCraftApp, RightPanel};
@@ -214,6 +217,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     app.process_pending_edits();
     crate::palette::show(app, ctx);
     crate::dialogs::show(app, ctx);
+    keys::show(app, ctx);
     app.show_progress(ctx);
     crate::widgets::toast(app, ctx);
 }

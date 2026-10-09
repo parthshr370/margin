@@ -230,7 +230,7 @@ pub struct DocView {
     clicks: u32,
     last_queue: Vec<RenderRequest>,
     viewport_w: f32,
-    viewport_h: f32,
+    pub(crate) viewport_h: f32,
     page_count: usize,
     /// Page heights in points (view space), for mapping text positions to scroll offsets.
     page_heights: Vec<f32>,

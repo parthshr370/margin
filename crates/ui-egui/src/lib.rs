@@ -370,6 +370,8 @@ pub struct PdfCraftApp {
     pub margin_chrome: margin::ReaderChrome,
     /// Margin's page colour choice (the Display popover).
     pub margin_display: margin::display::DisplayState,
+    /// Margin flavor: settings, keymap and the keyboard sheet (empty in the PdfCraft flavor).
+    pub margin_keys: margin::keys::MarginKeys,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
@@ -636,6 +638,7 @@ impl PdfCraftApp {
             notes: Default::default(),
             margin_chrome: Default::default(),
             margin_display: margin::display::DisplayState::default(),
+            margin_keys: Default::default(),
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
@@ -1593,8 +1596,13 @@ impl PdfCraftApp {
             {
                 self.views[i].select_all();
             }
-            self.tool_keys(i, ctx);
-            canvas::shortcuts(&mut self.views[i], ctx);
+            if self.flavor == Flavor::Margin {
+                // The keymap ran these keys in `registry_shortcuts`.
+                margin::keys::view_keys(&mut self.views[i], ctx);
+            } else {
+                self.tool_keys(i, ctx);
+                canvas::shortcuts(&mut self.views[i], ctx);
+            }
         }
     }
 }
@@ -1791,6 +1799,9 @@ impl eframe::App for PdfCraftApp {
                 },
             );
             dialogs::show(self, &ctx);
+            if self.flavor == Flavor::Margin {
+                margin::keys::show(self, &ctx);
+            }
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);

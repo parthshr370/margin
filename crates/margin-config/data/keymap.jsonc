@@ -12,14 +12,17 @@
       "secondary-w": "file.close", "secondary-shift-w": "file.close_all", "secondary-d": "file.properties",
       "secondary-z": "edit.undo", "secondary-shift-z": "edit.redo", "secondary-f": "edit.find",
       "secondary-shift-f": "edit.advanced_search", "secondary-l": "view.full_screen", "ctrl-secondary-h": "view.read_mode",
-      "secondary-shift-n": "view.focus_page_input", "secondary-3": "view.fit_visible", "secondary-b": "bookmark.add",
+      "secondary-shift-n": "view.focus_page_input", "secondary-b": "bookmark.add",
       "secondary-j": "tools.js_console", "secondary-shift-k": "app.key_context",
       "escape": "app.close_layer", "?": "help.shortcuts" } },
   { "context": "Reader", "bindings": {
       "/": "edit.find", "f3": "reader.find.next", "shift-f3": "reader.find.prev",
       "secondary-g": "reader.find.next", "secondary-shift-g": "reader.find.prev",
       "secondary-=": "view.zoom.in", "secondary-+": "view.zoom.in", "secondary--": "view.zoom.out",
-      "secondary-0": "view.fit.page", "secondary-1": ["view.zoom.set", { "percent": 100 }], "secondary-2": "view.fit.width",
+      "secondary-0": ["view.zoom.set", { "percent": 100 }],
+      "secondary-1": ["view.sidebar.tab", { "tab": "contents" }], "secondary-2": ["view.sidebar.tab", { "tab": "highlights" }],
+      "secondary-3": ["view.sidebar.tab", { "tab": "pages" }], "secondary-4": ["view.sidebar.tab", { "tab": "bookmarks" }],
+      "[": "view.sidebar.toggle", "a": "reader.annotate.toggle",
       "secondary-r": "view.rotate.cw", "secondary-shift-r": "view.rotate.ccw",
       "w": "view.fit.toggle_width", "f": "view.read_mode", "g": "view.focus_page_input",
       "alt-left": "reader.back", "alt-right": "reader.forward", "secondary-[": "reader.back", "secondary-]": "reader.forward",
@@ -34,5 +37,7 @@
   { "context": "AnnotateMode", "bindings": {
       "v": "reader.tool.select", "c": "edit.snapshot", "h": "comment.highlight", "u": "comment.underline",
       "s": "comment.strikeout", "q": "comment.squiggly", "n": "comment.note", "p": "comment.ink",
-      "t": "comment.freetext", "r": "comment.square", "e": "comment.eraser" } }
+      "t": "comment.freetext", "r": "comment.square", "e": "comment.eraser" } },
+  { "$pdfcraft_ignored": {
+      "view.fit_visible": "Ctrl+3 shows the Pages sidebar tab in Margin (mockup keys); Fit visible stays in the palette" } }
 ]
