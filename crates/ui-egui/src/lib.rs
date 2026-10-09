@@ -41,6 +41,7 @@ mod crop;
 mod drag_pointer;
 mod export_ui;
 mod js_ui;
+pub mod margin;
 mod marks_ui;
 mod measure_ui;
 mod ocr_ui;
@@ -353,6 +354,8 @@ pub struct PdfCraftApp {
     pub session: Session,
     /// PdfCraft or Margin (see [`Flavor`]).
     pub flavor: Flavor,
+    /// Margin's Obsidian notes settings (`notes.*`); unused in PdfCraft.
+    pub notes: margin::obsidian::Notes,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
@@ -616,6 +619,7 @@ impl PdfCraftApp {
         Self {
             session: Session::new(),
             flavor: Flavor::PdfCraft,
+            notes: Default::default(),
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
@@ -1212,7 +1216,7 @@ impl PdfCraftApp {
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
-        serde_json::json!({
+        let mut state = serde_json::json!({
             "recent": self.recent,
             "reopen_last_session": self.reopen_last_session,
             // Kept only while the preference is on.
@@ -1238,8 +1242,11 @@ impl PdfCraftApp {
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
             "comments_panel_closed": self.comments_panel_closed,
-        })
-        .to_string()
+        });
+        if self.flavor == Flavor::Margin {
+            state["notes"] = self.notes.to_json();
+        }
+        state.to_string()
     }
 
     /// Restore state written by `persist`. Unknown or malformed data is ignored.
@@ -1272,6 +1279,7 @@ impl PdfCraftApp {
         if let Some(closed) = v["comments_panel_closed"].as_bool() {
             self.comments_panel_closed = closed;
         }
+        self.notes.restore(&v["notes"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
@@ -1515,6 +1523,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            (notes, _) if self.flavor == Flavor::Margin && notes.starts_with("notes.") => margin::obsidian::set_option(self, notes, value)?,
             ("comment", Some(v)) => {
                 // `--comment 2:4` selects the 4th annotation of page 2 (1-based, as comment_list reports).
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;
@@ -1717,6 +1726,7 @@ impl eframe::App for PdfCraftApp {
         self.poll_optimize();
         self.poll_action();
         self.process_file_requests();
+        margin::obsidian::tick(self);
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
         // Pull finished renders into textures for every open document.

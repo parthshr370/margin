@@ -406,6 +406,8 @@ pub struct CommentView {
     pub context_at: Option<(usize, [f64; 2])>,
     /// A one-shot tool just finished; the app returns to the Select tool unless pinned.
     pub tool_done: bool,
+    /// Margin's notes buttons (inactive in PdfCraft).
+    pub notes: crate::margin::obsidian::NotesUi,
 }
 
 /// Comments panel order (Acrobat: Sort by page, author, date, type, colour).
@@ -1252,6 +1254,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }
+            crate::margin::obsidian::menu_items(ui, &mut view.comments.notes, a);
             ui.separator();
             if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
@@ -1296,7 +1299,8 @@ pub enum CanvasAction {
 pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     let mut picked = None;
     egui::Grid::new(ui.id().with("swatches")).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
-        for (i, (name, c)) in SWATCHES.iter().enumerate() {
+        let swatches = crate::margin::obsidian::swatches(ui.ctx()).unwrap_or_else(|| SWATCHES.iter().map(|(n, c)| (n.to_string(), *c)).collect());
+        for (i, (name, c)) in swatches.iter().enumerate() {
             let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
             let on = current.is_some_and(|cur| cur.iter().zip(c).all(|(a, b)| (a - b).abs() < 0.02));
             ui.painter().circle_filled(r.center(), 9.0, color32(*c));

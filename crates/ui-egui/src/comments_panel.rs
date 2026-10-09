@@ -105,6 +105,7 @@ pub(crate) fn show(
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
     let mut edit = None;
+    crate::margin::obsidian::panel_block(ui, t, &mut view.comments.notes);
     // Search (the header's magnifier toggles it).
     if let Some(q) = view.comments.search.as_mut() {
         let r = ui.add(egui::TextEdit::singleline(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"));
@@ -273,6 +274,7 @@ fn card(
                         open_menu = more.clicked();
                         more_rect = Some(more.rect);
                     }
+                    crate::margin::obsidian::card_buttons(ui, &mut view.comments.notes, a, selected && allowed);
                     // Acrobat's per-comment checkmark: a toggle on the selected card, a mark otherwise.
                     let tip = if marked { tl!("Remove checkmark") } else { tl!("Mark with checkmark") };
                     if selected && allowed {
@@ -431,6 +433,7 @@ fn card(
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }
+            crate::margin::obsidian::menu_items(ui, &mut view.comments.notes, a);
             if ui.button(tl!("Properties…")).clicked() {
                 view.comments.props_request = Some((a.page, a.index));
                 ui.close();
