@@ -13,7 +13,7 @@ use pdfcraft_engine::catalog;
 use pdfcraft_render::{DocInfo, OutlineItem};
 
 use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
-use crate::margin::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, SidebarTab, current_section, open_tab};
+use crate::margin::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, SidebarTab, current_section, open_tab, outline_at, reading};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{DocView, LeftPanel, PdfCraftApp, icons};
@@ -32,6 +32,9 @@ const TWISTY: f32 = 16.0;
 const COVER: egui::Vec2 = vec2(52.0, 67.0);
 /// Annotation subtypes the Highlights tab lists.
 const MARKUP: [&str; 4] = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
+/// The page bookmark list scrolls past this height, leaving room for the PDF's bookmarks.
+const PAGE_BOOKMARKS_MAX_HEIGHT: f32 = 220.0;
+const ROW_BUTTON: f32 = 22.0;
 
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -195,7 +198,12 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.add_space(GAP_LARGE);
             crate::panels::panel_body(app, ui);
         }
-        SidebarTab::Pages | SidebarTab::Bookmarks | SidebarTab::Other(_) => {
+        SidebarTab::Bookmarks => {
+            // Margin's page bookmarks first, then the PDF's bookmarks (its outline, editable).
+            page_bookmarks(app, ui, t, index);
+            crate::panels::panel_body(app, ui);
+        }
+        SidebarTab::Pages | SidebarTab::Other(_) => {
             // PdfCraft's panel, its title row a section label here (`look::RowLook::Ember`).
             ui.add_space(GAP_LARGE);
             crate::panels::panel_body(app, ui);
@@ -356,5 +364,96 @@ fn tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // The panel's close button.
     if !app.left_open {
         app.margin_chrome.sidebar_open = false;
+    }
+}
+
+/// Margin's page bookmarks (`reader.bookmark.toggle`), listed above the PDF's own bookmarks.
+fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
+    let key = look::shortcut(app, "reader.bookmark.toggle");
+    let Some(view) = app.views.get(index) else { return };
+    let Some(doc) = app.session.get(view.id) else { return };
+    let info = &doc.info;
+    // Unnamed bookmarks show the section they are in.
+    let rows: Vec<(usize, String, String)> = view
+        .margin
+        .bookmarks
+        .iter()
+        .filter_map(|bookmark| {
+            let page = reading::bookmark_page(bookmark).filter(|page| *page < info.pages.len())?;
+            let section =
+                || current_section(&info.outline, page).and_then(|path| outline_at(&info.outline, &path)).map(|item| item.title.trim().to_owned());
+            let title = Some(bookmark.name.trim().to_owned())
+                .filter(|name| !name.is_empty())
+                .or_else(section)
+                .unwrap_or_else(|| format!("Page {}", page + 1));
+            Some((page, title, info.pages.get(page).map(|p| p.label.clone()).unwrap_or_default()))
+        })
+        .collect();
+    let current = view.current;
+    let marked = rows.iter().any(|(page, ..)| *page == current);
+    let (mut toggle, mut go, mut remove) = (false, None, None);
+    ui.add_space(GAP_LARGE);
+    ui.horizontal(|ui| {
+        look::section_label(ui, t, "Page bookmarks", Some(rows.len()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let label = if marked { "Remove this page's bookmark" } else { "Bookmark this page" };
+            toggle = look::icon_button(ui, if marked { "bookmark" } else { "bookmark-plus" }, 26.0, marked, label, key.as_deref()).clicked();
+        });
+    });
+    ui.add_space(GAP);
+    if rows.is_empty() {
+        let hint = match &key {
+            Some(key) => format!("Press {key} to bookmark the page you're on."),
+            None => "Bookmark the page you're on with the button above.".to_owned(),
+        };
+        ui.horizontal(|ui| {
+            ui.add_space(ROW_PAD);
+            ui.label(egui::RichText::new(hint).font(theme::regular(12.0)).color(t.text_muted));
+        });
+    } else {
+        egui::ScrollArea::vertical().id_salt("margin-page-bookmarks").max_height(PAGE_BOOKMARKS_MAX_HEIGHT).auto_shrink([false, true]).show(
+            ui,
+            |ui| {
+                ui.spacing_mut().item_spacing.y = ROW_SPACING;
+                for (page, title, label) in &rows {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *page == current, title));
+                    look::row_fill(ui, t, rect, resp.hovered(), *page == current);
+                    let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
+                    icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
+                    // Hovered rows trade the page label for a remove button.
+                    let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
+                    let label_width = if resp.hovered() || ui.rect_contains_pointer(side) {
+                        let x = ui.interact(side, ui.id().with(("remove-page-bookmark", *page)), Sense::click());
+                        icons::paint(ui, side, "x", 12.0, if x.hovered() { t.text } else { t.text_muted });
+                        if x.on_hover_text("Remove bookmark").clicked() {
+                            remove = Some(*page);
+                        }
+                        ROW_BUTTON
+                    } else {
+                        ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, label, theme::regular(11.0), t.text_muted);
+                        ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(11.0), t.text_muted).size().x)
+                    };
+                    let text_left = icon.right() + GAP;
+                    let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
+                    let color = look::row_text(t, *page == current, t.text);
+                    crate::widgets::row_text(ui, egui::pos2(text_left, rect.center().y), title.as_str(), theme::regular(12.5), color, max_width);
+                    if resp.clicked() && remove.is_none() {
+                        go = Some(*page);
+                    }
+                }
+            },
+        );
+    }
+    ui.add_space(GAP);
+    let Some(view) = app.views.get_mut(index) else { return };
+    if toggle {
+        reading::toggle_bookmark(view);
+    }
+    if let Some(page) = remove {
+        view.margin.bookmarks.retain(|bookmark| reading::bookmark_page(bookmark) != Some(page));
+    }
+    if let Some(page) = go {
+        view.go_to_page(page);
     }
 }

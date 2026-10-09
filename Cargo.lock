@@ -2993,6 +2993,8 @@ dependencies = [
  "dirs",
  "jsonc-parser",
  "jsonschema",
+ "log",
+ "md-5",
  "pdfcraft-engine",
  "schemars",
  "serde",

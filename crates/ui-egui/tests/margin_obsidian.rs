@@ -180,7 +180,12 @@ fn autoadd_writes_each_new_highlight_with_its_note() {
     let note = std::fs::read_to_string(vault.note()).unwrap();
     assert!(note.contains(&format!("{CALLOUT}>\n> speed matters\n")), "{note}");
     assert_eq!(toast(&h), "Added to reading/text.md");
-    assert!(h.state().persist().contains("\"autoadd\""));
+    // The flag lives in the document's sidecar, not in the app's saved state.
+    assert!(!h.state().persist().contains("\"autoadd\""));
+    pdfcraft_ui_egui::margin::reading::flush(h.state_mut());
+    let sidecar = std::fs::read_to_string(vault.dir().join("papers/text.pdf.margin.json")).unwrap();
+    let sidecar: serde_json::Value = serde_json::from_str(&sidecar).unwrap();
+    assert_eq!(sidecar["obsidian"]["auto_add"], true);
 }
 
 #[test]

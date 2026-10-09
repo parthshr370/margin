@@ -41,8 +41,6 @@ const MARKER_OPEN: &str = "<!-- margin:";
 const MARKER_CLOSE: &str = " -->";
 /// A reading note larger than this is not a note Margin wrote: refuse rather than load it.
 const MAX_NOTE_BYTES: u64 = 16 * 1024 * 1024;
-/// Untrusted settings: at most this many documents keep "Add highlights to this note" on.
-const MAX_AUTOADD_DOCUMENTS: usize = 10_000;
 /// Two colours within this many 8-bit steps per channel count as the same named colour.
 const COLOR_MATCH_STEPS: u8 = 3;
 /// The annotation subtypes that mark text, which are the ones a callout quotes.
@@ -74,7 +72,8 @@ pub struct Notes {
     pub note_template: String,
     /// `notes.colors`: the highlight palette, the first being the default highlight colour.
     pub colors: Vec<NoteColor>,
-    /// `notes.autoadd`: paths of the documents whose new highlights go to their note as made.
+    /// `notes.autoadd`: paths of the open documents whose new highlights go to their note as
+    /// made. Each document's sidecar remembers its flag (`margin::reading`).
     pub autoadd: BTreeSet<String>,
     /// Hand `obsidian://` addresses to the system. Off in tests, which only read
     /// `PdfCraftApp::last_opened_url`, so they never start Obsidian.
@@ -110,13 +109,13 @@ struct AutoaddWatch {
 }
 
 impl Notes {
-    /// The settings as stored in the app's persisted JSON (key `notes`).
+    /// The settings as stored in the app's persisted JSON (key `notes`). Autoadd is per document,
+    /// in its sidecar.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "vault": self.vault.as_ref().map(|v| v.to_string_lossy().into_owned()),
             "note_template": self.note_template,
             "colors": self.colors.iter().map(|c| [c.name.clone(), hex(c.rgb)]).collect::<Vec<_>>(),
-            "autoadd": self.autoadd,
         })
     }
 
@@ -142,9 +141,6 @@ impl Notes {
             .unwrap_or_default();
         if !colors.is_empty() {
             self.colors = colors;
-        }
-        if let Some(list) = v["autoadd"].as_array() {
-            self.autoadd = list.iter().filter_map(|p| p.as_str()).take(MAX_AUTOADD_DOCUMENTS).map(str::to_string).collect();
         }
     }
 
@@ -1139,11 +1135,10 @@ mod tests {
 
     #[test]
     fn settings_round_trip_and_reject_garbage() {
-        let mut notes = Notes { vault: Some(PathBuf::from("/v")), ..Notes::default() };
-        notes.autoadd.insert("/p/a.pdf".into());
+        let notes = Notes { vault: Some(PathBuf::from("/v")), ..Notes::default() };
         let mut back = Notes::default();
         back.restore(&notes.to_json());
-        assert_eq!((back.vault, back.colors, back.autoadd), (notes.vault.clone(), notes.colors.clone(), notes.autoadd.clone()));
+        assert_eq!((back.vault, back.colors), (notes.vault.clone(), notes.colors.clone()));
         let mut bad = Notes::default();
         bad.restore(&serde_json::json!({ "vault": "relative", "note_template": "../x.md", "colors": [["", "#zzzzzz"]] }));
         assert_eq!((bad.vault, bad.note_template, bad.colors), (None, DEFAULT_NOTE_TEMPLATE.to_string(), default_colors()));

@@ -22,7 +22,7 @@
       "secondary-0": ["view.zoom.set", { "percent": 100 }],
       "secondary-1": ["view.sidebar.tab", { "tab": "contents" }], "secondary-2": ["view.sidebar.tab", { "tab": "highlights" }],
       "secondary-3": ["view.sidebar.tab", { "tab": "pages" }], "secondary-4": ["view.sidebar.tab", { "tab": "bookmarks" }],
-      "[": "view.sidebar.toggle", "a": "reader.annotate.toggle",
+      "[": "view.sidebar.toggle", "a": "reader.annotate.toggle", "b": "reader.bookmark.toggle", "shift-t": "view.trim.toggle",
       "secondary-r": "view.rotate.cw", "secondary-shift-r": "view.rotate.ccw",
       "w": "view.fit.toggle_width", "f": "view.read_mode", "g": "view.focus_page_input",
       "alt-left": "reader.back", "alt-right": "reader.forward", "secondary-[": "reader.back", "secondary-]": "reader.forward",

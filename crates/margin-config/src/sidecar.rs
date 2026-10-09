@@ -210,6 +210,42 @@ pub struct PageNote {
     pub extra: Map<String, Value>,
 }
 
+/// A manual trim: the share of the page cut from each side, `[left, top, right, bottom]`, each
+/// `0..0.45` of the page's view box (after `/Rotate`, before the view rotation).
+pub type TrimMargins = [f64; 4];
+
+/// How a document's pages are trimmed for display. Whether trimming is on is the `[doc]`
+/// setting `view.trim`; this block says how.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Trim {
+    /// false: each page's content box, found on the rendered page; true: the margins below
+    #[serde(default)]
+    pub manual: bool,
+    /// manual margins of odd pages (1, 3, …), or of every page unless `separate`
+    #[serde(default)]
+    pub odd: TrimMargins,
+    /// manual margins of even pages, used when `separate`
+    #[serde(default)]
+    pub even: TrimMargins,
+    /// odd and even pages keep their own margins (book scans)
+    #[serde(default)]
+    pub separate: bool,
+    /// fields from newer versions, kept on rewrite
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The document's link to Obsidian (CU-OBS-1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SidecarObsidian {
+    /// new highlights are added to the document's note as they are made
+    #[serde(default)]
+    pub auto_add: bool,
+    /// fields from newer versions, kept on rewrite
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
 /// A sidecar file, `<file>.margin.json` or `<data>/sidecars/<book_id>.margin.json`. A pointer file
 /// left by a store migration holds only `format`, `version`, `book_id` and `migrated_to` (CU-SC-7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -254,6 +290,12 @@ pub struct Sidecar {
     /// page notes
     #[serde(default)]
     pub notes: Vec<PageNote>,
+    /// how pages are trimmed when `view.trim` is on
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trim: Option<Trim>,
+    /// the document's Obsidian link
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obsidian: Option<SidecarObsidian>,
     /// fields from newer versions, kept on rewrite
     #[serde(flatten)]
     pub extra: Map<String, Value>,

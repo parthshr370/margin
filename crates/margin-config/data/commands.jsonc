@@ -36,5 +36,7 @@
   { "id": "reader.page.prev", "title": "Previous page", "group": "Go", "when": "Reader" },
   { "id": "reader.page.first", "title": "First page", "group": "Go", "when": "Reader" },
   { "id": "reader.page.last", "title": "Last page", "group": "Go", "when": "Reader" },
-  { "id": "reader.tool.select", "title": "Select", "group": "Mark", "when": "Reader" }
+  { "id": "reader.tool.select", "title": "Select", "group": "Mark", "when": "Reader" },
+  { "id": "reader.bookmark.toggle", "title": "Bookmark this page", "icon": "bookmark", "group": "Go", "when": "Reader && format == pdf" },
+  { "id": "view.trim.toggle", "title": "Trim margins", "icon": "crop", "group": "View", "when": "Reader && format == pdf" }
 ]

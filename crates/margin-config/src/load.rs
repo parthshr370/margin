@@ -90,6 +90,27 @@ impl Settings {
         }
     }
 
+    /// These settings with a document's layer over them (CU-SET-1 layer 5, a sidecar's
+    /// `settings`). The layer is validated like a file; bad values keep the value below. `file`
+    /// names the source in problems.
+    pub fn with_layer(&self, layer: &Value, file: &str) -> LoadedSettings {
+        let Value::Object(_) = layer else {
+            return LoadedSettings { settings: self.clone(), problems: vec![file_problem(file, 1, 1, "settings must be a JSON object".to_owned())] };
+        };
+        let below = serde_json::to_value(self).unwrap_or(Value::Null);
+        let positions = jsonc::Positions::default();
+        let mut validator = Validator { root: &SCHEMA, fallback: &below, positions: &positions, file, problems: Vec::new() };
+        let cleaned = validator.document(layer.clone());
+        let mut problems = validator.problems;
+        match serde_json::from_value(merge(below, cleaned)) {
+            Ok(settings) => LoadedSettings { settings, problems },
+            Err(err) => {
+                problems.push(file_problem(file, 1, 1, format!("{err}; ignoring the layer")));
+                LoadedSettings { settings: self.clone(), problems }
+            }
+        }
+    }
+
     /// The value at a dotted key (`view.zoom_steps`, or a whole block such as `view`). Map keys
     /// that contain dots (`ui.rail.tool_options.comment.ink`) are matched whole.
     pub fn get(&self, key: &str) -> Option<Value> {
@@ -226,5 +247,18 @@ mod tests {
         let loaded = Settings::from_user_text(r#"{ "view": { "zoom": 150.0 } }"#, "s");
         assert_eq!(loaded.problems, []);
         assert_eq!(loaded.settings.view.zoom, 150);
+    }
+
+    #[test]
+    fn a_document_layer_overrides_and_bad_values_keep_the_layer_below() {
+        let mut user = Settings::default();
+        user.view.page_color = crate::PageColor::Sepia;
+        let layer = json!({ "view": { "zoom": 999, "layout": "two_up", "page_color": "purple" } });
+        let loaded = user.with_layer(&layer, "a.pdf.margin.json");
+        assert_eq!(loaded.settings.view.zoom, 300, "clamped");
+        assert_eq!(loaded.settings.view.layout, crate::Layout::TwoUp);
+        assert_eq!(loaded.settings.view.page_color, crate::PageColor::Sepia, "the user's value, not the default");
+        assert_eq!(loaded.problems.len(), 2, "{:?}", loaded.problems);
+        assert_eq!(user.with_layer(&json!(3), "x").settings, user);
     }
 }

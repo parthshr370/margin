@@ -50,6 +50,7 @@ fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
         rot: s.views[0].rotation,
         pw: page.width,
         ph: page.height,
+        crop: pdfcraft_ui_egui::margin::trim::FULL,
     };
     let p = page.user_to_view(x, y);
     xf.norm_to_screen(p[0] / xf.pw, p[1] / xf.ph)
@@ -65,6 +66,7 @@ fn shown(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32, dx: f32, dy: f32) ->
         rot: s.views[0].rotation,
         pw: page.width,
         ph: page.height,
+        crop: pdfcraft_ui_egui::margin::trim::FULL,
     };
     let p = page.user_to_view(x, y);
     xf.norm_to_screen((p[0] + dx) / xf.pw, (p[1] - dy) / xf.ph)

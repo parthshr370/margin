@@ -1,23 +1,25 @@
 //! Margin's Display popover and page colour state.
 //!
-//! [`DisplayState`] is the user's choice (saved with the app settings for now; per-document
-//! reading state moves it to a sidecar later). [`PageColorCache`] lives in each `DocView`: it
-//! recolours rasters on their way to the GPU and keeps the source pixels of the pages around the
-//! current one, so a mode switch re-uploads only the pages on screen, without re-rendering them.
+//! [`DisplayState`] is one document's choice: it opens from `settings.jsonc` (`view.page_color`
+//! and its neighbours) under the document's sidecar layer, and every change goes back to the
+//! sidecar (`margin::reading`). [`PageColorCache`] lives in each `DocView`: it recolours rasters
+//! on their way to the GPU and keeps the source pixels of the pages around the current one, so a
+//! mode switch re-uploads only the pages on screen, without re-rendering them.
 
 use std::collections::HashMap;
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, TextureOptions, pos2, vec2};
-use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use super::pagecolor::{BRIGHTNESS_RANGE, CONTRAST_RANGE, NEUTRAL_PERCENT, PageColor, PageMode};
+use super::reading::{self, DefaultRow};
+use super::trim::{self, Margins};
 use crate::canvas::{Fit, PageLayout};
 use crate::theme::{self, Tokens};
-use crate::{Flavor, PdfCraftApp, i18n};
+use crate::{DocView, Flavor, PdfCraftApp, i18n};
 
-/// The page colour choice saved in the settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+/// A document's page colour choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DisplayState {
     pub color: PageColor,
     /// Night while the system is dark, Paper while it is light. Picking a mode by hand turns it
@@ -27,12 +29,9 @@ pub struct DisplayState {
 
 impl Default for DisplayState {
     fn default() -> Self {
-        Self { color: PageColor { mode: PageMode::Night, ..PageColor::default() }, follow_system: true }
+        Self::from_settings(&margin_config::View::default())
     }
 }
-
-/// The settings key [`DisplayState`] is saved under.
-pub const SETTINGS_KEY: &str = "margin_display";
 
 impl DisplayState {
     /// The page colour in effect: the saved one, with the mode following the system when asked
@@ -52,15 +51,30 @@ impl DisplayState {
         self.follow_system = false;
     }
 
-    pub fn to_json(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or_default()
+    /// The choice the `[doc]` settings `view` describe.
+    pub fn from_settings(view: &margin_config::View) -> Self {
+        let mode = match view.page_color {
+            margin_config::PageColor::Paper => PageMode::Paper,
+            margin_config::PageColor::Sepia => PageMode::Sepia,
+            margin_config::PageColor::Night => PageMode::Night,
+            margin_config::PageColor::Ink => PageMode::Ink,
+            margin_config::PageColor::Mono => PageMode::Mono,
+        };
+        let percent = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
+        let color = PageColor { mode, keep_hues: view.keep_figures, brightness: percent(view.brightness), contrast: percent(view.contrast) };
+        Self { color: color.clamped(), follow_system: view.follow_system }
     }
 
-    /// Read what [`Self::to_json`] wrote; anything malformed keeps the current choice.
-    pub fn restore(&mut self, value: &serde_json::Value) {
-        if let Ok(state) = serde_json::from_value::<DisplayState>(value.clone()) {
-            *self = Self { color: state.color.clamped(), ..state };
-        }
+    /// This choice as `view.*` settings values: `page_color`, `follow_system`, `keep_figures`,
+    /// `brightness`, `contrast`.
+    pub fn settings_values(&self) -> Map<String, Value> {
+        let mut values = Map::new();
+        values.insert("page_color".into(), self.color.mode.name().to_lowercase().into());
+        values.insert("follow_system".into(), self.follow_system.into());
+        values.insert("keep_figures".into(), self.color.keep_hues.into());
+        values.insert("brightness".into(), self.color.brightness.into());
+        values.insert("contrast".into(), self.color.contrast.into());
+        values
     }
 
     /// `--page_color paper|sepia|night|ink|mono|system` (and the control channel's `set`).
@@ -78,14 +92,15 @@ impl DisplayState {
     }
 }
 
-/// The page colour a document view should show this frame: `None` keeps PdfCraft's pages as
+/// The page colour view `index` should show this frame: `None` keeps PdfCraft's pages as
 /// rendered.
-pub fn page_color_for(app: &PdfCraftApp, ctx: &egui::Context) -> Option<PageColor> {
-    (app.flavor == Flavor::Margin).then(|| app.margin_display.effective(ctx.system_theme()))
+pub fn page_color_for(app: &PdfCraftApp, index: usize, ctx: &egui::Context) -> Option<PageColor> {
+    let view = app.views.get(index).filter(|_| app.flavor == Flavor::Margin)?;
+    Some(view.margin.display.effective(ctx.system_theme()))
 }
 
 /// Pages within this distance of the current page keep their source pixels for recolouring.
-const SOURCE_NEAR: usize = 2;
+pub(crate) const SOURCE_NEAR: usize = 2;
 
 /// One document view's recolouring: the colour in effect and the source pixels of nearby pages.
 #[derive(Default)]
@@ -155,6 +170,11 @@ impl PageColorCache {
     pub fn retain_near(&mut self, current: usize) {
         self.sources.retain(|page, _| page.abs_diff(current) <= SOURCE_NEAR);
     }
+
+    /// The pixels `page` was rendered with, if they are kept (it is near the current page).
+    pub(crate) fn source(&self, page: usize) -> Option<([usize; 2], &[u8])> {
+        self.sources.get(&page).map(|source| (source.size, source.rgba.as_slice()))
+    }
 }
 
 const POPOVER_WIDTH: f32 = 384.0;
@@ -166,23 +186,82 @@ const SWITCH_SIZE: egui::Vec2 = egui::Vec2::new(30.0, 18.0);
 const ROW_HEIGHT: f32 = 22.0;
 const SLIDER_RAIL_HEIGHT: f32 = 3.0;
 
-/// The Display popover's body, laid out like the mockup: page colour swatches, keep figure hues
-/// (Ink and Mono), brightness and contrast (double-click a slider to reset it) and their reset;
-/// then the page layout and fit (PdfCraft's commands) and follow system. The caller owns the
-/// popup frame and its placement.
+/// The trim editor's page previews.
+const TRIM_PREVIEW_WIDTH: f32 = 96.0;
+/// A drag smaller than this share of the preview on either side is a slip, not a crop.
+const MIN_TRIM_DRAG: f32 = 0.1;
+/// How dark the trimmed-off part of a preview is drawn.
+const TRIMMED_SHADE: u8 = 150;
+
+/// The Display popover's body for the active document, laid out like the mockup: page colour
+/// swatches, keep figure hues (Ink and Mono), brightness and contrast (double-click a slider to
+/// reset it) and their reset; then layout, cover page, fit and trim; then follow system. "Set
+/// as default" copies the page colour or layout into `settings.jsonc`. The caller owns the popup
+/// frame and its placement.
 pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let system = ui.ctx().system_theme();
-    let state = &mut app.margin_display;
-    let shown = state.effective(system);
     ui.set_width(POPOVER_WIDTH);
     ui.spacing_mut().item_spacing.y = 6.0;
-    crate::widgets::section_title(ui, "Page color");
+    let Some(index) = app.active.filter(|i| *i < app.views.len()) else {
+        ui.label(egui::RichText::new(i18n::t("Open a document to change how it shows.")).font(theme::regular(12.5)).color(t.text_muted));
+        return;
+    };
+    let mut default_row = None;
+    if section_with_default(ui, &t, "Page color") {
+        default_row = Some(DefaultRow::PageColor);
+    }
+    page_color_rows(&mut app.views[index].margin.display, ui, &t);
+    ui.add_space(6.0);
+    ui.separator();
+    if section_with_default(ui, &t, "Layout") {
+        default_row = Some(DefaultRow::Layout);
+    }
+    let reading_width = app.margin_keys.settings().view.reading_width_px;
+    if let Some(id) = layout_rows(&mut app.views[index], reading_width, ui, &t) {
+        app.execute(id);
+    }
+    let pages = app.session.get(app.views[index].id).map(|doc| doc.info.pages.iter().map(|p| (p.width, p.height)).collect::<Vec<_>>());
+    trim_rows(&mut app.views[index], &pages.unwrap_or_default(), ui, &t);
+    ui.add_space(6.0);
+    ui.separator();
+    let state = &mut app.views[index].margin.display;
+    let follow_sub = if state.follow_system {
+        i18n::t("Night when the system is dark, Paper when light")
+    } else {
+        i18n::t("Off: the page color stays as you set it")
+    };
+    if switch_row(ui, &t, i18n::t("Follow system dark mode"), Some(follow_sub), state.follow_system) {
+        state.follow_system = !state.follow_system;
+    }
+    if let Some(row) = default_row {
+        let message = reading::set_as_default(app, index, row);
+        app.notify(message);
+    }
+}
+
+/// A section title with "Set as default" on the right. True when that was clicked.
+fn section_with_default(ui: &mut egui::Ui, t: &Tokens, title: &str) -> bool {
+    ui.horizontal(|ui| {
+        crate::widgets::section_title(ui, title);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+            let label = egui::RichText::new(i18n::t("Set as default")).font(theme::regular(12.0)).color(t.accent_text);
+            ui.add(egui::Button::new(label).frame(false))
+                .on_hover_text(i18n::t("Use this for documents opened for the first time (settings.jsonc)"))
+                .clicked()
+        })
+        .inner
+    })
+    .inner
+}
+
+/// Swatches, keep figure hues, brightness, contrast and their reset.
+fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
+    let shown = state.effective(ui.ctx().system_theme());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = SWATCH_GAP;
         let w = (POPOVER_WIDTH - SWATCH_GAP * 4.0) / 5.0;
         for mode in PageMode::ALL {
-            if swatch(ui, &t, mode, mode == shown.mode, w).clicked() {
+            if swatch(ui, t, mode, mode == shown.mode, w).clicked() {
                 state.pick(mode);
             }
         }
@@ -191,16 +270,16 @@ pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     ui.add(egui::Label::new(egui::RichText::new(i18n::t(shown.mode.description())).font(theme::regular(12.0)).color(t.text_muted)).wrap());
     if shown.mode.offers_keep_hues() {
         let sub = i18n::t("Ink and Mono only: figures get Night colors, not two-tone");
-        if switch_row(ui, &t, i18n::t("Keep figure hues"), Some(sub), state.color.keep_hues) {
+        if switch_row(ui, t, i18n::t("Keep figure hues"), Some(sub), state.color.keep_hues) {
             state.color.keep_hues = !state.color.keep_hues;
         }
     }
     ui.add_space(4.0);
-    slider_row(ui, &t, i18n::t("Brightness"), &mut state.color.brightness, BRIGHTNESS_RANGE, |v| v.to_string());
+    slider_row(ui, t, i18n::t("Brightness"), &mut state.color.brightness, BRIGHTNESS_RANGE, |v| v.to_string());
     let mono = shown.mode == PageMode::Mono;
     let (label, low, high) = (if mono { i18n::t("Cut-off") } else { i18n::t("Contrast") }, *CONTRAST_RANGE.start(), *CONTRAST_RANGE.end());
     let show = move |v: u16| if mono { format!("{}%", u32::from(v.saturating_sub(low)) * 100 / u32::from(high - low)) } else { v.to_string() };
-    slider_row(ui, &t, label, &mut state.color.contrast, CONTRAST_RANGE, show);
+    slider_row(ui, t, label, &mut state.color.contrast, CONTRAST_RANGE, show);
     let reset_row = vec2(POPOVER_WIDTH, ROW_HEIGHT);
     ui.allocate_ui_with_layout(reset_row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let reset = egui::Button::new(egui::RichText::new(i18n::t("Reset brightness & contrast")).font(theme::regular(12.0)).color(t.accent_text))
@@ -210,49 +289,150 @@ pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             state.color.contrast = NEUTRAL_PERCENT;
         }
     });
-    ui.add_space(6.0);
-    ui.separator();
-    layout_rows(app, ui, &t);
-    let state = &mut app.margin_display;
-    let follow_sub = if state.follow_system {
-        i18n::t("Night when the system is dark, Paper when light")
-    } else {
-        i18n::t("Off: the page color stays as you set it")
-    };
-    if switch_row(ui, &t, i18n::t("Follow system dark mode"), Some(follow_sub), state.follow_system) {
-        state.follow_system = !state.follow_system;
-    }
 }
 
-/// The Layout section: page display (Scroll, Single, Two-up) and fit, through the same commands
-/// and view calls as PdfCraft's View menu. Nothing without an open document.
-fn layout_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    let Some((layout, fit)) = app.active.and_then(|i| app.views.get(i)).map(|v| (v.layout, v.fit)) else { return };
-    crate::widgets::section_title(ui, "Layout");
+/// Page display (Scroll, Single, Two-up, through PdfCraft's commands, which it returns), the
+/// cover page in Two-up, and fit (Read, Page, Width).
+fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &Tokens) -> Option<&'static str> {
     let mut command = None;
-    let mut new_fit = None;
     choice_row(ui, t, i18n::t("Pages"), |ui| {
         for (choice, name) in [(PageLayout::TwoUp, "Two-up"), (PageLayout::Single, "Single"), (PageLayout::Continuous, "Scroll")] {
-            if ui.selectable_label(layout == choice, i18n::t(name)).clicked() {
+            if ui.selectable_label(view.layout == choice, i18n::t(name)).clicked() {
                 command = Some(choice.command());
             }
         }
     });
+    if view.cover_applies() {
+        let sub = i18n::t("The first page sits alone on the right, like a book's cover");
+        if switch_row(ui, t, i18n::t("Cover page alone"), Some(sub), view.cover) {
+            view.set_cover(!view.cover);
+        }
+    }
+    let reading = reading::reads(view);
     choice_row(ui, t, i18n::t("Fit"), |ui| {
-        for (choice, name) in [(Fit::Page, "Page"), (Fit::Width, "Width")] {
-            if ui.selectable_label(fit == choice, i18n::t(name)).clicked() {
-                new_fit = Some(choice);
+        if ui.selectable_label(!reading && view.fit == Fit::Width, i18n::t("Width")).clicked() {
+            view.set_fit(Fit::Width);
+        }
+        if ui.selectable_label(!reading && view.fit == Fit::Page, i18n::t("Page")).clicked() {
+            view.set_fit(Fit::Page);
+        }
+        if ui.selectable_label(reading, i18n::t("Read")).on_hover_text(i18n::t("A comfortable reading width (view.reading_width_px)")).clicked() {
+            reading::fit_read(view, reading_width);
+        }
+    });
+    command
+}
+
+/// Trim (Off, Auto, Manual) and, for Manual, the page previews to drag the kept part on.
+fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &Tokens) {
+    let (on, manual) = (view.margin.trim.on, view.margin.trim.manual);
+    let mut pick = None;
+    choice_row(ui, t, i18n::t("Trim"), |ui| {
+        for (choice, name) in [((true, true), "Manual"), ((true, false), "Auto"), ((false, manual), "Off")] {
+            let selected = if choice.0 { on && manual == choice.1 } else { !on };
+            if ui.selectable_label(selected, i18n::t(name)).clicked() {
+                pick = Some(choice);
             }
         }
     });
-    if let Some(choice) = new_fit
-        && let Some(view) = app.active.and_then(|i| app.views.get_mut(i))
+    if let Some((on, manual)) = pick {
+        // Manual starts from what auto trim found on this page.
+        if manual && !view.margin.trim.manual && view.margin.trim.odd == Margins::default() {
+            let found = view.margin.trim.crop(view.current);
+            let current = view.current;
+            view.margin.trim.set_margins(current, trim::to_margins(found));
+        }
+        let place = reading::place(view);
+        view.margin.trim.on = on;
+        view.margin.trim.manual = manual;
+        view.goto = Some(place);
+    }
+    if !(view.margin.trim.on && view.margin.trim.manual) {
+        return;
+    }
+    let current = view.current;
+    let separate = view.margin.trim.separate;
+    // Odd pages are 1, 3, … (0-based even indices).
+    let shown: Vec<(usize, &str)> = if separate {
+        let odd = current - current % 2;
+        vec![(odd, "Odd pages"), (odd + 1, "Even pages")]
+    } else {
+        vec![(current, "All pages")]
+    };
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        for (page, label) in shown {
+            ui.vertical(|ui| {
+                changed |= trim_preview(view, page, pages.get(page.min(pages.len().saturating_sub(1))).copied(), label, ui, t);
+                ui.label(egui::RichText::new(i18n::t(label)).font(theme::regular(11.0)).color(t.text_faint));
+            });
+        }
+    });
+    ui.label(egui::RichText::new(i18n::t("Drag across a page to keep that part")).font(theme::regular(11.5)).color(t.text_faint));
+    let sub = i18n::t("For scanned books, whose margins swap sides");
+    if switch_row(ui, t, i18n::t("Odd and even pages separately"), Some(sub), separate) {
+        let trim = &mut view.margin.trim;
+        trim.separate = !separate;
+        if trim.separate {
+            trim.even = trim.odd;
+        }
+        changed = true;
+    }
+    if changed {
+        view.goto = Some(reading::place(view));
+    }
+}
+
+/// One page preview of the manual trim: the page (its raster when one has arrived) with the
+/// trimmed-off part shaded. A drag across it sets the margins of `page`'s parity. True when
+/// they changed.
+fn trim_preview(view: &mut DocView, page: usize, size: Option<(f32, f32)>, label: &str, ui: &mut egui::Ui, t: &Tokens) -> bool {
+    let (w, h) = size.filter(|(w, h)| *w > 0.0 && *h > 0.0).unwrap_or((1.0, 1.41));
+    let preview = vec2(TRIM_PREVIEW_WIDTH, TRIM_PREVIEW_WIDTH * h / w);
+    let (rect, resp) = ui.allocate_exact_size(preview, Sense::drag());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, format!("Trim preview: {label}")));
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, CornerRadius::ZERO, view.page_color.paper());
+    if let Some(tex) = view.page_texture(page) {
+        painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    }
+    let start_id = resp.id.with("trim-drag-start");
+    let mut changed = false;
+    if resp.drag_started()
+        && let Some(at) = resp.interact_pointer_pos()
     {
-        view.set_fit(choice);
+        ui.data_mut(|d| d.insert_temp(start_id, at));
     }
-    if let Some(id) = command {
-        app.execute(id);
+    if resp.dragged()
+        && let (Some(start), Some(at)) = (ui.data(|d| d.get_temp::<egui::Pos2>(start_id)), resp.interact_pointer_pos())
+    {
+        let kept = Rect::from_two_pos(start, at).intersect(rect);
+        if kept.width() >= rect.width() * MIN_TRIM_DRAG && kept.height() >= rect.height() * MIN_TRIM_DRAG {
+            let margins = [
+                (kept.left() - rect.left()) / rect.width(),
+                (kept.top() - rect.top()) / rect.height(),
+                (rect.right() - kept.right()) / rect.width(),
+                (rect.bottom() - kept.bottom()) / rect.height(),
+            ];
+            view.margin.trim.set_margins(page, margins);
+            changed = true;
+        }
     }
+    let [u0, v0, u1, v1] = trim::from_margins(view.margin.trim.margins(page));
+    let kept = Rect::from_min_max(rect.lerp_inside(vec2(u0, v0)), rect.lerp_inside(vec2(u1, v1)));
+    let shade = Color32::from_black_alpha(TRIMMED_SHADE);
+    for part in [
+        Rect::from_min_max(rect.min, pos2(rect.right(), kept.top())),
+        Rect::from_min_max(pos2(rect.left(), kept.bottom()), rect.max),
+        Rect::from_min_max(pos2(rect.left(), kept.top()), pos2(kept.left(), kept.bottom())),
+        Rect::from_min_max(pos2(kept.right(), kept.top()), pos2(rect.right(), kept.bottom())),
+    ] {
+        painter.rect_filled(part, CornerRadius::ZERO, shade);
+    }
+    painter.rect_stroke(kept, CornerRadius::ZERO, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    resp.on_hover_cursor(egui::CursorIcon::Crosshair);
+    changed
 }
 
 /// A label on the left and choices packed against the right edge (right to left, so list them
@@ -369,18 +549,17 @@ mod tests {
     }
 
     #[test]
-    fn restore_round_trips_and_ignores_garbage() {
+    fn settings_round_trip_through_the_doc_layer() {
         let mut s = DisplayState::default();
         s.pick(PageMode::Ink);
         s.color.brightness = 90;
-        let mut back = DisplayState::default();
-        back.restore(&s.to_json());
-        assert_eq!(back, s);
-        back.restore(&serde_json::json!({"color": {"mode": "nope"}}));
-        assert_eq!(back, s);
-        back.restore(&serde_json::json!({"color": {"mode": "mono", "brightness": 4000}}));
-        assert_eq!(back.color.mode, PageMode::Mono);
-        assert_eq!(back.color.brightness, *BRIGHTNESS_RANGE.end());
+        s.color.keep_hues = false;
+        let layer = serde_json::json!({ "view": s.settings_values() });
+        let loaded = margin_config::Settings::default().with_layer(&layer, "test");
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert_eq!(DisplayState::from_settings(&loaded.settings.view), s);
+        let view = margin_config::View { brightness: 4000, ..margin_config::View::default() };
+        assert_eq!(DisplayState::from_settings(&view).color.brightness, *BRIGHTNESS_RANGE.end());
     }
 
     #[test]

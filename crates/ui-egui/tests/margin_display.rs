@@ -1,12 +1,47 @@
 //! Margin's theme and Display popover: `Flavor::Margin` wears the Margin palette, the popover
-//! drives the page colour, and PdfCraft is unchanged.
+//! drives the document's page colour, layout and trim, and PdfCraft is unchanged.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use pdfcraft_ui_egui::canvas::PageLayout;
 use pdfcraft_ui_egui::margin::display::{self, DisplayState};
 use pdfcraft_ui_egui::margin::pagecolor::PageMode;
 use pdfcraft_ui_egui::theme::{self, ThemeKind, ThemePreference, Tokens};
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
+
+/// Two 200×300 pages.
+fn fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A Margin app reading its settings from an empty folder, with the fixture open (no file:
+/// nothing is written).
+fn margin_app(name: &str) -> PdfCraftApp {
+    let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+    let config = std::env::temp_dir().join(format!("margin-display-{name}-{}", std::process::id()));
+    std::fs::remove_dir_all(&config).ok();
+    app.margin_keys.set_config_dir(config);
+    app.open_bytes("doc.pdf", None, fixture()).unwrap();
+    app
+}
 
 fn app_harness(flavor: Flavor) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_eframe(move |_cc| {
@@ -33,27 +68,28 @@ fn margin_wears_its_palette_where_pdfcraft_is_dark() {
     assert_eq!(Tokens::get(&h.ctx).kind, ThemeKind::Dark);
 }
 
+/// The page colour belongs to the document (its sidecar), not to the app's saved state.
 #[test]
-fn page_color_is_saved_only_for_margin() {
-    let mut margin = PdfCraftApp::with_flavor(Flavor::Margin);
+fn page_color_is_per_document_and_margin_only() {
+    let mut margin = margin_app("option");
     margin.set_option("page_color", "sepia").unwrap();
-    let saved: serde_json::Value = serde_json::from_str(&margin.persist()).unwrap();
-    assert_eq!(saved[display::SETTINGS_KEY]["color"]["mode"], "sepia");
-    let mut back = PdfCraftApp::with_flavor(Flavor::Margin);
-    back.restore(&margin.persist());
-    assert_eq!(back.margin_display, margin.margin_display);
+    assert_eq!(margin.views[0].margin.display.color.mode, PageMode::Sepia);
+    assert!(!margin.persist().contains("margin_display"), "nothing in the app's saved state");
+    let mut empty = PdfCraftApp::with_flavor(Flavor::Margin);
+    assert!(empty.set_option("page_color", "night").is_err(), "needs a document");
 
     let mut pdfcraft = PdfCraftApp::new();
+    pdfcraft.open_bytes("doc.pdf", None, fixture()).unwrap();
     assert!(pdfcraft.set_option("page_color", "night").is_err());
-    let saved: serde_json::Value = serde_json::from_str(&pdfcraft.persist()).unwrap();
-    assert!(saved.get(display::SETTINGS_KEY).is_none());
+    assert!(pdfcraft.set_option("trim", "auto").is_err());
+    assert_eq!(pdfcraft.views[0].margin.trim.crop(0), pdfcraft_ui_egui::margin::trim::FULL);
 }
 
-/// The popover alone, in a popup frame, over an app in the Margin flavour.
-fn popover_harness() -> Harness<'static, (PdfCraftApp, bool)> {
-    let app = PdfCraftApp::with_flavor(Flavor::Margin);
+/// The popover alone, in a popup frame, over a Margin app with a document open.
+fn popover_harness(name: &str) -> Harness<'static, (PdfCraftApp, bool)> {
+    let app = margin_app(name);
     // 60 fps: the harness feeds one input event per frame, so a double-click spans a few frames.
-    let mut h = Harness::builder().with_size(egui::vec2(440.0, 520.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = Harness::builder().with_size(egui::vec2(440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, (app, styled): &mut (PdfCraftApp, bool)| {
             // Named font families exist only from the frame after they are installed.
             if !*styled {
@@ -72,8 +108,8 @@ fn popover_harness() -> Harness<'static, (PdfCraftApp, bool)> {
 
 #[test]
 fn popover_picks_modes_and_resets_sliders() {
-    let mut h = popover_harness();
-    let state = |h: &Harness<'static, (PdfCraftApp, bool)>| h.state().0.margin_display;
+    let mut h = popover_harness("modes");
+    let state = |h: &Harness<'static, (PdfCraftApp, bool)>| h.state().0.views[0].margin.display;
     assert_eq!(state(&h), DisplayState::default());
 
     h.get_by_label("Sepia").click();
@@ -88,8 +124,8 @@ fn popover_picks_modes_and_resets_sliders() {
     h.run_steps(2);
     assert!(!state(&h).color.keep_hues);
 
-    h.state_mut().0.margin_display.color.brightness = 80;
-    h.state_mut().0.margin_display.color.contrast = 140;
+    h.state_mut().0.views[0].margin.display.color.brightness = 80;
+    h.state_mut().0.views[0].margin.display.color.contrast = 140;
     h.run_steps(2);
     let sliders = h.get_all_by_role(egui::accesskit::Role::Slider).collect::<Vec<_>>();
     assert_eq!(sliders.len(), 2);
@@ -107,4 +143,44 @@ fn popover_picks_modes_and_resets_sliders() {
     h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").click();
     h.run_steps(2);
     assert!(state(&h).follow_system);
+}
+
+#[test]
+fn popover_sets_two_up_with_a_cover_and_a_manual_trim() {
+    let mut h = popover_harness("layout");
+    assert!(h.query_by_label("Cover page alone").is_none(), "only Two-up has a cover page");
+    h.get_by_label("Two-up").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.views[0].layout, PageLayout::TwoUp);
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Cover page alone").click();
+    h.run_steps(2);
+    assert!(h.state().0.views[0].cover);
+
+    h.get_by_label("Manual").click();
+    h.run_steps(2);
+    let trim = &h.state().0.views[0].margin.trim;
+    assert!(trim.on && trim.manual);
+    // Drag across the middle of the preview: keep its central part.
+    let page = h.get_by_label("Trim preview: All pages").rect();
+    let (from, to) = (page.lerp_inside(egui::vec2(0.2, 0.1)), page.lerp_inside(egui::vec2(0.8, 0.9)));
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(2);
+    let [left, top, right, bottom] = h.state().0.views[0].margin.trim.odd;
+    for (got, want) in [(left, 0.2), (top, 0.1), (right, 0.2), (bottom, 0.1)] {
+        assert!((got - want).abs() < 0.03, "margins {:?}", h.state().0.views[0].margin.trim.odd);
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Odd and even pages separately").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Trim preview: Odd pages").is_some() && h.query_by_label("Trim preview: Even pages").is_some());
+    h.get_by_label("Off").click();
+    h.run_steps(2);
+    assert!(!h.state().0.views[0].margin.trim.on);
 }

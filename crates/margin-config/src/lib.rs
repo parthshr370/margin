@@ -10,11 +10,13 @@
 //! keymap files (the shipped [`MARGIN_KEYMAP`], then the user's `keymap.jsonc`) into one
 //! [`CompiledKeymap`]; [`resolve::step`] matches a keystroke against it for a context stack.
 //!
-//! Theme, profile and sidecar file formats are here too; nothing loads them yet.
+//! Sidecars: [`Sidecar`] is the v1 file format and [`store`] reads and writes it. Theme and
+//! profile file formats are here too; nothing loads them yet.
 //!
 //! Nothing here depends on egui, and no config file can crash it.
 
 mod context;
+mod edit;
 mod error;
 mod jsonc;
 mod keymap;
@@ -27,12 +29,14 @@ pub mod resolve;
 pub mod schema;
 mod settings;
 mod sidecar;
+pub mod store;
 mod theme;
 mod validate;
 #[cfg(test)]
 mod vectors;
 
 pub use context::{ContextExpr, ContextNode, depth_of, holds, parse_stack};
+pub use edit::{set_user_values, with_values};
 pub use error::{Error, Result};
 pub use keymap::{
     BindingTarget, CompileOptions, Compiled, CompiledBinding, CompiledKeymap, KEYMAP_FILE, KeymapBlock, KeymapFile, KeymapSource, MARGIN_KEYMAP,
@@ -47,5 +51,8 @@ pub use settings::{
     FindOptions, Fit, KeymapBase, Keys, Layout, PageColor, Perf, Rail, RailSide, Reader, SETTINGS_SCHEMA_URL, SETTINGS_VERSION, Settings, Start,
     TileFormat, ToolOptions, Ui, View,
 };
-pub use sidecar::{Bookmark, Highlight, HighlightSource, HighlightStyle, Locator, PageNote, PdfAnnot, Progress, Sidecar, SidecarDoc, SidecarFormat};
+pub use sidecar::{
+    Bookmark, Highlight, HighlightSource, HighlightStyle, Locator, PageNote, PdfAnnot, Progress, Sidecar, SidecarDoc, SidecarFormat, SidecarObsidian,
+    Trim, TrimMargins,
+};
 pub use theme::{Appearance, DEFAULT_THEME, Theme};

@@ -6,6 +6,7 @@ use egui::{Align, CornerRadius, Layout, Sense, Stroke, vec2};
 use crate::PdfCraftApp;
 use crate::canvas::Fit;
 use crate::margin::look::{self, GAP, GAP_LARGE};
+use crate::margin::reading::SaveStatus;
 use crate::theme::{self, Tokens};
 
 pub const HEIGHT: f32 = 36.0;
@@ -24,7 +25,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some(doc) = app.session.get(id) else { return };
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
     let sections: Vec<usize> = doc.info.outline.iter().filter_map(|o| o.page).collect();
-    let dirty = doc.dirty;
+    let status = crate::margin::reading::save_status(app, index);
+    let save_key = look::shortcut(app, "file.save");
     let keys = ZoomKeys {
         zoom_out: look::shortcut(app, "view.zoom.out"),
         zoom_in: look::shortcut(app, "view.zoom.in"),
@@ -45,8 +47,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.allocate_ui(vec2(STATUS_WIDTH, HEIGHT), |ui| {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let (text, color) = if dirty { ("Unsaved changes", t.accent_text) } else { ("Saved", t.text_muted) };
-                            ui.label(egui::RichText::new(text).font(theme::regular(11.5)).color(color));
+                            let color = if status == SaveStatus::Unsaved { t.accent_text } else { t.text_muted };
+                            let hint = match save_key.as_deref() {
+                                Some(key) => format!("Annotations save to the PDF by themselves; {key} saves now"),
+                                None => "Annotations save to the PDF by themselves".to_owned(),
+                            };
+                            ui.label(egui::RichText::new(status.label()).font(theme::regular(11.5)).color(color)).on_hover_text(hint);
                         });
                     });
                     ui.add_space(GAP_LARGE);

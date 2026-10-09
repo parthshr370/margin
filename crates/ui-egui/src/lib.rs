@@ -368,8 +368,6 @@ pub struct PdfCraftApp {
     pub notes: margin::obsidian::Notes,
     /// Margin's reader chrome: sidebar tab, rail (used when `flavor` is Margin).
     pub margin_chrome: margin::ReaderChrome,
-    /// Margin's page colour choice (the Display popover).
-    pub margin_display: margin::display::DisplayState,
     /// Margin flavor: settings, keymap and the keyboard sheet (empty in the PdfCraft flavor).
     pub margin_keys: margin::keys::MarginKeys,
     pub views: Vec<DocView>,
@@ -637,7 +635,6 @@ impl PdfCraftApp {
             flavor: Flavor::PdfCraft,
             notes: Default::default(),
             margin_chrome: Default::default(),
-            margin_display: margin::display::DisplayState::default(),
             margin_keys: Default::default(),
             views: Vec::new(),
             active: None,
@@ -861,6 +858,8 @@ impl PdfCraftApp {
         self.views.push(DocView::new(id, &doc.info, self.view_defaults));
         self.active = Some(self.views.len() - 1);
         self.apply_initial_view(self.views.len() - 1, &initial);
+        // Margin: the document's sidecar (or settings.jsonc) says how it shows, before any paint.
+        margin::reading::opened(self, self.views.len() - 1);
         if let Some(mode) = self.mode_override {
             // Explicit mode options do not reset independent --tool / --left choices.
             self.mode = mode;
@@ -1086,6 +1085,8 @@ impl PdfCraftApp {
         if index >= self.views.len() {
             return;
         }
+        // Margin writes the tab's pending reading state first.
+        margin::reading::closing(self, index);
         let id = self.views.remove(index).id;
         self.forget_recovery(id);
         self.session.close(id);
@@ -1268,7 +1269,6 @@ impl PdfCraftApp {
         });
         if self.flavor == Flavor::Margin {
             state["notes"] = self.notes.to_json();
-            state[margin::display::SETTINGS_KEY] = self.margin_display.to_json();
         }
         state.to_string()
     }
@@ -1277,7 +1277,6 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
-        self.margin_display.restore(&v[margin::display::SETTINGS_KEY]);
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
             #[cfg(not(target_arch = "wasm32"))]
@@ -1371,7 +1370,9 @@ impl PdfCraftApp {
                 };
                 self.set_theme_preference(preference);
             }
-            ("page_color", _) if self.flavor == Flavor::Margin => self.margin_display.set_option(value)?,
+            ("page_color", Some(v)) if self.flavor == Flavor::Margin => v.margin.display.set_option(value)?,
+            ("trim", Some(v)) if self.flavor == Flavor::Margin => margin::reading::set_trim_option(v, value)?,
+            ("page_color" | "trim", None) if self.flavor == Flavor::Margin => return Err(format!("`{key}` needs an open document")),
             ("panel", _) => {
                 self.right = match value {
                     "comments" => Some(RightPanel::Comments),
@@ -1766,6 +1767,9 @@ impl eframe::App for PdfCraftApp {
                 view.receive(ctx, &doc.renderer);
             }
         }
+        // Margin: keep the reader's place, save reading state and autosave (after renders, which
+        // may teach the trim new page boxes).
+        margin::reading::tick(self, ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

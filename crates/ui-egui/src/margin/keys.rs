@@ -53,6 +53,8 @@ pub struct MarginKeys {
     pub(crate) sheet: Option<super::keysheet::Sheet>,
     /// `<config>` chosen by the embedder instead of `margin_config::config_dir()`.
     config_override: Option<PathBuf>,
+    /// `<data>` (central sidecars) chosen by the embedder instead of `margin_config::store::data_dir()`.
+    data_override: Option<PathBuf>,
     /// The `app.key_context` window is open.
     pub(crate) key_context_open: bool,
     /// The last keystroke resolved, for the key context window.
@@ -120,6 +122,31 @@ impl MarginKeys {
     pub fn set_config_dir(&mut self, dir: PathBuf) {
         self.config_override = Some(dir);
         self.loaded = None;
+    }
+
+    /// Keeps central sidecars in `dir` instead of `~/.local/share/margin` (tests, portable
+    /// setups).
+    pub fn set_data_dir(&mut self, dir: PathBuf) {
+        self.data_override = Some(dir);
+    }
+
+    /// `<data>`, where sidecars go when a document's folder can't be written.
+    pub(crate) fn data_dir(&self) -> Option<PathBuf> {
+        self.data_override.clone().or_else(margin_config::store::data_dir)
+    }
+
+    /// `<config>` as the next load will read it: the embedder's choice, else the OS's.
+    pub(crate) fn settings_dir(&self) -> Option<PathBuf> {
+        self.config_override.clone().or_else(margin_config::config_dir)
+    }
+
+    /// The settings a document opens with. A file given on the command line opens before the
+    /// first frame loads the files: then `settings.jsonc` is read now (the watch starts later).
+    pub(crate) fn settings_for_open(&self) -> Settings {
+        match &self.loaded {
+            Some(loaded) => loaded.settings.clone(),
+            None => self.settings_dir().map(|dir| Settings::load(&dir).settings).unwrap_or_default(),
+        }
     }
 
     /// Whether the keyboard sheet is open.
@@ -695,8 +722,9 @@ mod tests {
         }
     }
 
-    /// The ids `margin::run` (the reader chrome) handles.
-    const CHROME_COMMANDS: [&str; 3] = ["view.sidebar.toggle", "view.sidebar.tab", "reader.annotate.toggle"];
+    /// The ids `margin::run` (the reader chrome and reading state) handles.
+    const CHROME_COMMANDS: [&str; 5] =
+        ["view.sidebar.toggle", "view.sidebar.tab", "reader.annotate.toggle", "reader.bookmark.toggle", "view.trim.toggle"];
 
     /// Every id the built-in keymap binds is one the app runs.
     #[test]

@@ -17,10 +17,10 @@ use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).
 pub const PT: f32 = 96.0 / 72.0;
-const GAP: f32 = 14.0;
+pub(crate) const GAP: f32 = 14.0;
 const MARGIN: f32 = 28.0;
 /// Horizontal gutter that keeps pages clear of the floating quick-action bar.
-const SIDE: f32 = 70.0;
+pub(crate) const SIDE: f32 = 70.0;
 const THUMB_TAG: u64 = 1 << 63;
 const TEXT_TAG: u64 = 1 << 62;
 /// The tag of a raster that is out of date (shown until its replacement arrives).
@@ -212,6 +212,9 @@ pub struct DocView {
     pages: HashMap<usize, PageTex>,
     /// Margin page colour applied to rasters before upload (nothing in PdfCraft).
     pub(crate) page_color: crate::margin::display::PageColorCache,
+    /// Margin's per-document reading state: trim, page colour, page bookmarks, sidecar and
+    /// autosave (inert in PdfCraft: no trim, nothing saved).
+    pub margin: crate::margin::reading::DocReading,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
@@ -361,6 +364,7 @@ impl DocView {
             compare_marks: Vec::new(),
             pages: HashMap::new(),
             page_color: Default::default(),
+            margin: Default::default(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
@@ -654,6 +658,11 @@ impl DocView {
         self.thumbs.get(&page)
     }
 
+    /// `page`'s whole-page raster, when one has arrived (Margin's trim preview).
+    pub(crate) fn page_texture(&self, page: usize) -> Option<&TextureHandle> {
+        self.pages.get(&page).map(|p| &p.tex)
+    }
+
     pub fn go_to_page(&mut self, page: usize) {
         let page = page.min(self.page_count.saturating_sub(1));
         if page != self.current {
@@ -788,9 +797,12 @@ impl DocView {
         self.current != before
     }
 
-    /// Displayed page size in points for this view rotation.
-    fn display_size(&self, p: &pdfcraft_render::PageInfo) -> (f32, f32) {
-        if self.rotation % 180 == 90 { (p.height, p.width) } else { (p.width, p.height) }
+    /// Displayed size of page `page` in points for this view rotation: the part Margin's trim
+    /// shows (the whole page without trim).
+    pub(crate) fn display_size(&self, page: usize, p: &pdfcraft_render::PageInfo) -> (f32, f32) {
+        let [u0, v0, u1, v1] = self.margin.trim.crop(page);
+        let (w, h) = (p.width * (u1 - u0), p.height * (v1 - v0));
+        if self.rotation % 180 == 90 { (h, w) } else { (w, h) }
     }
 
     /// Marquee Zoom: zoom so `r` (on screen) fills the window, centred.
@@ -879,6 +891,8 @@ impl DocView {
             }
             let size = [r.width as usize, r.height as usize];
             let page = r.request.page;
+            // Margin's auto trim learns the page's content box from its first whole-page raster.
+            self.margin.trim.observe(page, r.request.tile.is_none() && r.request.tag & THUMB_TAG == 0, size, &r.rgba);
             let img = if r.request.tag & THUMB_TAG != 0 {
                 egui::ColorImage::from_rgba_premultiplied(size, &r.rgba)
             } else {
@@ -907,12 +921,12 @@ impl DocView {
     }
 
     fn fit_zoom(&mut self, info: &DocInfo) {
-        let largest = |side: fn((f32, f32)) -> f32| info.pages.iter().map(|p| side(self.display_size(p))).fold(1.0, f32::max);
+        let largest = |side: fn((f32, f32)) -> f32| info.pages.iter().enumerate().map(|(i, p)| side(self.display_size(i, p))).fold(1.0, f32::max);
         let max_w = largest(|s| s.0);
         // Single-page view fits the page it shows. The scrolling views fit their largest page,
         // so the zoom holds still while pages of other sizes scroll past.
         let (w, h) = match self.layout {
-            PageLayout::Single => info.pages.get(self.current).map_or_else(|| (max_w, largest(|s| s.1)), |p| self.display_size(p)),
+            PageLayout::Single => info.pages.get(self.current).map_or_else(|| (max_w, largest(|s| s.1)), |p| self.display_size(self.current, p)),
             PageLayout::Continuous | PageLayout::TwoUp => (max_w, largest(|s| s.1)),
         };
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
@@ -937,8 +951,8 @@ impl DocView {
         let mut y = MARGIN;
         match self.layout {
             PageLayout::Continuous | PageLayout::Single => {
-                for p in &info.pages {
-                    let (w, h) = self.display_size(p);
+                for (i, p) in info.pages.iter().enumerate() {
+                    let (w, h) = self.display_size(i, p);
                     let size = vec2(w * s, h * s);
                     rects.push(Rect::from_min_size(pos2(((content_w - size.x) / 2.0).max(SIDE), y), size));
                     y += size.y + GAP;
@@ -946,13 +960,12 @@ impl DocView {
             }
             PageLayout::TwoUp => {
                 // With a cover page, the first page sits alone on the right.
-                let rows: Vec<&[pdfcraft_render::PageInfo]> = if self.cover && !info.pages.is_empty() {
-                    std::iter::once(&info.pages[..1]).chain(info.pages[1..].chunks(2)).collect()
-                } else {
-                    info.pages.chunks(2).collect()
-                };
-                for (ri, pair) in rows.into_iter().enumerate() {
-                    let sizes: Vec<Vec2> = pair.iter().map(|p| self.display_size(p)).map(|(w, h)| vec2(w * s, h * s)).collect();
+                let n = info.pages.len();
+                let pairs = |from: usize| (from..n).step_by(2).map(move |i| i..(i + 2).min(n));
+                let rows: Vec<Range<usize>> = if self.cover && n > 0 { std::iter::once(0..1).chain(pairs(1)).collect() } else { pairs(0).collect() };
+                for (ri, row) in rows.into_iter().enumerate() {
+                    let sizes: Vec<Vec2> =
+                        row.filter_map(|i| info.pages.get(i).map(|p| self.display_size(i, p))).map(|(w, h)| vec2(w * s, h * s)).collect();
                     let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + GAP * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
                     let mut x = if self.cover && ri == 0 { (content_w / 2.0 + GAP / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
@@ -999,6 +1012,9 @@ pub struct PageXform {
     /// Page size in view space (unrotated by the view).
     pub pw: f32,
     pub ph: f32,
+    /// The part of the page `rect` shows, in normalised page coordinates `[u0, v0, u1, v1]`:
+    /// Margin's trim, [`crate::margin::trim::FULL`] otherwise.
+    pub crop: [f32; 4],
 }
 
 impl PageXform {
@@ -1029,7 +1045,15 @@ impl PageXform {
         mesh.add_triangle(0, 2, 3);
         painter.add(egui::Shape::mesh(mesh));
     }
+
+    /// Normalised page coordinates as shares of the shown (trimmed) part.
+    fn shown_share(&self, u: f32, v: f32) -> (f32, f32) {
+        let [u0, v0, u1, v1] = self.crop;
+        ((u - u0) / (u1 - u0).max(f32::EPSILON), (v - v0) / (v1 - v0).max(f32::EPSILON))
+    }
+
     pub fn norm_to_screen(&self, u: f32, v: f32) -> Pos2 {
+        let (u, v) = self.shown_share(u, v);
         let (a, b) = match self.rot {
             90 => (1.0 - v, u),
             180 => (1.0 - u, 1.0 - v),
@@ -1041,12 +1065,14 @@ impl PageXform {
 
     pub fn screen_to_norm(&self, p: Pos2) -> (f32, f32) {
         let (a, b) = ((p.x - self.rect.left()) / self.rect.width().max(1e-3), (p.y - self.rect.top()) / self.rect.height().max(1e-3));
-        match self.rot {
+        let (u, v) = match self.rot {
             90 => (b, 1.0 - a),
             180 => (1.0 - a, 1.0 - b),
             270 => (1.0 - b, a),
             _ => (a, b),
-        }
+        };
+        let [u0, v0, u1, v1] = self.crop;
+        (u0 + u * (u1 - u0), v0 + v * (v1 - v0))
     }
 
     /// Screen point → view space (points).
@@ -1080,19 +1106,29 @@ impl PageXform {
 
     /// This transform resized to a raster of `px` device pixels (width, height before the view
     /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
-    /// already be on a whole pixel ([`snap_to_pixels`]).
+    /// already be on a whole pixel ([`snap_to_pixels`]). A trim is moved onto texel boundaries.
     fn texel_aligned(&self, px: [usize; 2], ppp: f32) -> PageXform {
-        let (w, h) = (px[0] as f32 / ppp, px[1] as f32 / ppp);
+        let (pw, ph) = (px[0].max(1) as f32, px[1].max(1) as f32);
+        let snap = |share: f32, texels: f32| (share * texels).round() / texels;
+        let [u0, v0, u1, v1] = self.crop;
+        let crop = [snap(u0, pw), snap(v0, ph), snap(u1, pw), snap(v1, ph)];
+        let (w, h) = ((crop[2] - crop[0]) * pw / ppp, (crop[3] - crop[1]) * ph / ppp);
         let size = if self.rot % 180 == 90 { vec2(h, w) } else { vec2(w, h) };
-        PageXform { rect: Rect::from_min_size(self.rect.min, size), ..*self }
+        PageXform { rect: Rect::from_min_size(self.rect.min, size), crop, ..*self }
     }
 
-    /// Draw a texture covering the normalised page region, rotated with the view.
+    /// Draw a texture covering the normalised page region, rotated with the view; only the part
+    /// inside the trim shows.
     pub fn paint_image(&self, painter: &egui::Painter, tex: egui::TextureId, u0: f32, v0: f32, u1: f32, v1: f32) {
+        let [c0, c1, c2, c3] = self.crop;
+        let (su0, sv0, su1, sv1) = (u0.max(c0), v0.max(c1), u1.min(c2), v1.min(c3));
+        if su0 >= su1 || sv0 >= sv1 {
+            return;
+        }
+        let texel = |u: f32, v: f32| pos2((u - u0) / (u1 - u0), (v - v0) / (v1 - v0));
         let mut mesh = egui::Mesh::with_texture(tex);
-        let corners = [(u0, v0, 0.0, 0.0), (u1, v0, 1.0, 0.0), (u1, v1, 1.0, 1.0), (u0, v1, 0.0, 1.0)];
-        for (u, v, tu, tv) in corners {
-            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(u, v), uv: pos2(tu, tv), color: Color32::WHITE });
+        for (u, v) in [(su0, sv0), (su1, sv0), (su1, sv1), (su0, sv1)] {
+            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(u, v), uv: texel(u, v), color: Color32::WHITE });
         }
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
@@ -1218,7 +1254,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Edit a PDF: added text and images can be selected, moved and edited.
     let editing_content = (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || app.quick_tool == QuickTool::AddText;
     let text_style = app.text_style.clone();
-    let page_color = crate::margin::display::page_color_for(app, ui.ctx());
+    let page_color = crate::margin::display::page_color_for(app, index, ui.ctx());
     let view = &mut app.views[index];
     // Margin page colour: tiles in an older colour are dropped (whole pages recolour lazily below).
     if view.page_color.configure(page_color) {
@@ -1263,7 +1299,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Vec2::ZERO
     };
 
-    let max_w = info.pages.iter().map(|p| view.display_size(p).0).fold(0.0, f32::max)
+    let max_w = info.pages.iter().enumerate().map(|(i, p)| view.display_size(i, p).0).fold(0.0, f32::max)
         * view.zoom
         * PT
         * if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
@@ -1326,6 +1362,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else if let Some((page, frac)) = view.goto.take() {
         let page = page.min(rects.len() - 1);
         let r = rects[page];
+        // `frac` is a share of the whole page; Margin's trim may show only part of it.
+        let frac = view.margin.trim.shown_fraction(page, frac);
         scroll = scroll.vertical_scroll_offset((r.top() - y_shift - GAP + frac * r.height()).max(0.0));
     }
     let ppp = ui.ctx().pixels_per_point();
@@ -1439,8 +1477,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if r.intersects(visible) {
                 visible_now.push(i);
                 view.screen_rects.push((i, r));
-                view.screen_xforms
-                    .push((i, PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) }));
+                view.screen_xforms.push((
+                    i,
+                    PageXform {
+                        rect: r,
+                        rot: view.rotation,
+                        pw: info.pages[i].width.max(1.0),
+                        ph: info.pages[i].height.max(1.0),
+                        crop: view.margin.trim.crop(i),
+                    },
+                ));
             }
             let overlap = r.intersect(visible).height();
             if i == view.current {
@@ -1452,7 +1498,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 best_overlap = overlap;
                 current = i;
             }
-            let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
+            let xf = PageXform {
+                rect: r,
+                rot: view.rotation,
+                pw: info.pages[i].width.max(1.0),
+                ph: info.pages[i].height.max(1.0),
+                crop: view.margin.trim.crop(i),
+            };
             // Soft shadow + paper.
             painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
             painter.rect_filled(r, CornerRadius::ZERO, view.page_color.paper());

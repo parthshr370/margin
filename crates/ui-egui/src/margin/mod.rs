@@ -17,8 +17,10 @@ pub mod look;
 pub mod obsidian;
 pub mod pagecolor;
 pub mod rail;
+pub mod reading;
 pub mod settings_watch;
 pub mod sidebar;
+pub mod trim;
 
 use crate::{PdfCraftApp, RightPanel};
 
@@ -126,8 +128,9 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
 }
 
 /// Run a Margin-only action (the keymap's ids): `view.sidebar.toggle`, `view.sidebar.tab` with
-/// `{"tab": "contents" | "highlights" | "pages" | "bookmarks" | "find" | "tools"}`, and
-/// `reader.annotate.toggle` (the rail). Returns `false` for an unknown id or tab.
+/// `{"tab": "contents" | "highlights" | "pages" | "bookmarks" | "find" | "tools"}`,
+/// `reader.annotate.toggle` (the rail), `reader.bookmark.toggle` (a page bookmark on the current
+/// page) and `view.trim.toggle`. Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
         "view.sidebar.toggle" => app.margin_chrome.sidebar_open = !app.margin_chrome.sidebar_open,
@@ -138,6 +141,18 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
                 Some(tab) => open_tab(app, tab),
                 None => return false,
             }
+        }
+        // Without a document the key is spent, as PdfCraft's view keys are.
+        "reader.bookmark.toggle" => {
+            let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
+            let page = view.current + 1;
+            let message =
+                if reading::toggle_bookmark(view) { format!("Bookmarked page {page}") } else { format!("Removed the bookmark on page {page}") };
+            app.notify(message);
+        }
+        "view.trim.toggle" => {
+            let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
+            reading::toggle_trim(view);
         }
         _ => return false,
     }

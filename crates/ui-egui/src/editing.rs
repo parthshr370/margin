@@ -385,7 +385,10 @@ impl PdfCraftApp {
                 {
                     view.document_changed(&doc.info);
                 }
-                self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                // Margin's footer says "Saved"; a toast for every autosave would be noise.
+                if self.flavor != crate::Flavor::Margin {
+                    self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                }
                 true
             }
             Err(e) => {
