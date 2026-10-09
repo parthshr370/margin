@@ -52,7 +52,7 @@ fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool
     (go_back, close)
 }
 
-fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub(crate) fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let (_, close) = panel_header(ui, t, "All tools", false);
     if close {
         app.left_open = false;
@@ -109,7 +109,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
     resp.on_hover_text(tip)
 }
 
-fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+pub(crate) fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
     let (back, close) = panel_header(ui, t, g.label, true);
     if back {
         app.left = LeftPanel::AllTools;
@@ -383,6 +383,26 @@ pub(crate) enum Nav {
 
 pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    if app.right.is_none() || app.active_ids().and_then(|(_, id)| app.session.get(id)).is_none() {
+        return;
+    }
+    egui::Panel::right("right_panel")
+        .resizable(true)
+        .default_size(330.0)
+        .size_range(260.0..=520.0)
+        .frame(
+            egui::Frame::NONE
+                .fill(t.panel)
+                .inner_margin(egui::Margin { left: 14, right: 12, top: 12, bottom: 8 })
+                .stroke(Stroke::new(1.0, t.divider)),
+        )
+        .show(ui, |ui| panel_body(app, ui));
+}
+
+/// The right panel's contents: the panel `app.right` names, for the active document. Margin's
+/// sidebar shows them too.
+pub(crate) fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
     let Some(panel) = app.right else { return };
     let mut nav: Option<Nav> = None;
@@ -411,213 +431,199 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let comment_allowed = doc.allows_annotation();
         // A dialog or the palette owns the keyboard: the panel leaves Escape to it.
         let modal = app.dialog.is_some() || app.palette_open;
-        egui::Panel::right("right_panel")
-            .resizable(true)
-            .default_size(330.0)
-            .size_range(260.0..=520.0)
-            .frame(
-                egui::Frame::NONE
-                    .fill(t.panel)
-                    .inner_margin(egui::Margin { left: 14, right: 12, top: 12, bottom: 8 })
-                    .stroke(Stroke::new(1.0, t.divider)),
-            )
-            .show(ui, |ui| {
-                let (title, count) = match panel {
-                    RightPanel::Comments => ("Comments", Some(crate::comments_panel::count(info))),
-                    RightPanel::Bookmarks => ("Bookmarks", None),
-                    RightPanel::Pages => ("Pages", Some(info.pages.len())),
-                    RightPanel::Fields => ("Fields", Some(info.fields.len())),
-                    RightPanel::Layers => ("Layers", Some(info.layers.len())),
-                    RightPanel::Attachments => ("Attachments", Some(info.attachments.len())),
-                    RightPanel::Signatures => ("Signatures", Some(doc.signatures.iter().filter(|s| s.signed).count())),
-                    RightPanel::Accessibility => ("Accessibility Checker", None),
-                    RightPanel::Search => ("Search", None),
-                    RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
-                };
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
-                    if let Some(c) = count {
-                        ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
-                    }
-                    if panel == RightPanel::Pages && view.selected.len() > 1 {
-                        let n = view.selected.len().to_string();
-                        let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
-                        ui.label(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text));
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
-                            close = true;
-                        }
-                        // Right to left: close, "…", filter, search (Acrobat's order left to right).
-                        if panel == RightPanel::Comments {
-                            panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
-                        }
-                        if panel == RightPanel::Comments
-                            && icons::button(ui, "search", 26.0, view.comments.search.is_some(), tl!("Search comments")).clicked()
+        let (title, count) = match panel {
+            RightPanel::Comments => ("Comments", Some(crate::comments_panel::count(info))),
+            RightPanel::Bookmarks => ("Bookmarks", None),
+            RightPanel::Pages => ("Pages", Some(info.pages.len())),
+            RightPanel::Fields => ("Fields", Some(info.fields.len())),
+            RightPanel::Layers => ("Layers", Some(info.layers.len())),
+            RightPanel::Attachments => ("Attachments", Some(info.attachments.len())),
+            RightPanel::Signatures => ("Signatures", Some(doc.signatures.iter().filter(|s| s.signed).count())),
+            RightPanel::Accessibility => ("Accessibility Checker", None),
+            RightPanel::Search => ("Search", None),
+            RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
+        };
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
+            if let Some(c) = count {
+                ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
+            }
+            if panel == RightPanel::Pages && view.selected.len() > 1 {
+                let n = view.selected.len().to_string();
+                let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
+                ui.label(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text));
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
+                    close = true;
+                }
+                // Right to left: close, "…", filter, search (Acrobat's order left to right).
+                if panel == RightPanel::Comments {
+                    panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
+                }
+                if panel == RightPanel::Comments
+                    && icons::button(ui, "search", 26.0, view.comments.search.is_some(), tl!("Search comments")).clicked()
+                {
+                    view.comments.search = match view.comments.search {
+                        Some(_) => None,
+                        None => Some(String::new()),
+                    };
+                    view.comments.search_focus = true;
+                }
+                if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
+                    let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Bookmark options"));
+                    egui::Popup::menu(&more).show(|ui| {
+                        ui.set_min_width(200.0);
+                        for (levels, label) in
+                            [(usize::MAX, tl!("Expand all bookmarks")), (1, tl!("Expand top-level bookmarks")), (0, tl!("Collapse all bookmarks"))]
                         {
-                            view.comments.search = match view.comments.search {
-                                Some(_) => None,
-                                None => Some(String::new()),
-                            };
-                            view.comments.search_focus = true;
+                            if ui.button(label).clicked() {
+                                bm_expand = Some(levels);
+                                ui.close();
+                            }
                         }
-                        if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
-                            let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Bookmark options"));
-                            egui::Popup::menu(&more).show(|ui| {
-                                ui.set_min_width(200.0);
-                                for (levels, label) in [
-                                    (usize::MAX, tl!("Expand all bookmarks")),
-                                    (1, tl!("Expand top-level bookmarks")),
-                                    (0, tl!("Collapse all bookmarks")),
-                                ] {
-                                    if ui.button(label).clicked() {
-                                        bm_expand = Some(levels);
-                                        ui.close();
-                                    }
+                    });
+                }
+                if panel == RightPanel::Bookmarks
+                    && bm_editable
+                    && icons::button(ui, "bookmark-plus", 26.0, false, tl!("New bookmark (⌘B)")).clicked()
+                {
+                    bm_action = Some(BmAction::New);
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let search_id = egui::Id::new(("bookmark_search", id.0));
+        let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+        if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
+            ui.horizontal(|ui| {
+                let label = ui.label(tl!("Search"));
+                let previous = bookmark_query.clone();
+                let response =
+                    ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(ui.available_width() - 32.0)).labelled_by(label.id);
+                response.widget_info(|| {
+                    let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), &previous, &bookmark_query, "");
+                    info.label = Some(tl!("Search").to_string());
+                    info
+                });
+                if icons::button(ui, "x", 26.0, false, tl!("Clear")).clicked() {
+                    bookmark_query.clear();
+                }
+            });
+            ui.data_mut(|d| d.insert_temp(search_id, bookmark_query.clone()));
+            ui.add_space(6.0);
+        }
+        let bookmark_query = bookmark_query.trim().to_lowercase();
+        let mut bookmark_matches =
+            if panel == RightPanel::Bookmarks { outline_matches(&info.outline, &bookmark_query) } else { std::collections::HashSet::new() };
+        // A new bookmark must stay nameable even when its initial title doesn't match.
+        if let Some((path, _)) = &bm_rename {
+            let mut ancestor = path.clone();
+            while !ancestor.is_empty() {
+                bookmark_matches.insert(ancestor.clone());
+                ancestor.pop();
+            }
+        }
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
+            RightPanel::Comments => {
+                if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
+                    panel_edit = Some(e);
+                }
+            }
+            RightPanel::Bookmarks => {
+                if info.outline.is_empty() {
+                    empty(ui, &t, "bookmark", "This document has no bookmarks.");
+                }
+                let mut ctx = OutlineCtx {
+                    nav: &mut nav,
+                    action: &mut bm_action,
+                    rename: &mut bm_rename,
+                    editable: bm_editable,
+                    current: view.current,
+                    expand: bm_expand,
+                    matches: &bookmark_matches,
+                    searching: !bookmark_query.is_empty(),
+                };
+                if ctx.searching && bookmark_matches.is_empty() && !info.outline.is_empty() {
+                    ui.label(tl!("No matches."));
+                }
+                for (i, item) in info.outline.iter().enumerate() {
+                    outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
+                }
+            }
+            RightPanel::Pages => pages(ui, &t, info, view, modal, &mut nav),
+            RightPanel::Fields => fields(ui, &t, info, &doc.form, preparing, &mut nav, &mut panel_edit),
+            RightPanel::Layers => {
+                if info.layers.is_empty() {
+                    empty(ui, &t, "layers", "This document has no layers.");
+                }
+                for (li, l) in info.layers.iter().enumerate() {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, l.visible, &l.name));
+                    if resp.hovered() {
+                        ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
+                    }
+                    icons::paint(
+                        ui,
+                        Rect::from_min_size(rect.min + vec2(4.0, 7.0), vec2(18.0, 18.0)),
+                        if l.visible { "eye" } else { "eye-off" },
+                        16.0,
+                        t.icon,
+                    );
+                    let fg = if l.visible { t.text } else { t.text_faint };
+                    ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &l.name, theme::regular(13.0), fg);
+                    if resp.on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
+                        toggle_layer = Some((li, !l.visible));
+                    }
+                }
+            }
+            RightPanel::Signatures => {
+                sig_action = crate::sign_ui::panel(ui, &t, &doc.signatures, sig_expanded);
+            }
+            RightPanel::Accessibility => {
+                a11y_action = crate::a11y_ui::panel(ui, &t, a11y, id);
+            }
+            RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
+            RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+            RightPanel::Attachments => {
+                if info.attachments.is_empty() {
+                    empty(ui, &t, "paperclip", "This document has no attachments.");
+                }
+                for (ai, a) in info.attachments.iter().enumerate() {
+                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add(icons::image("paperclip", 16.0, t.icon));
+                            ui.vertical(|ui| {
+                                ui.set_width(ui.available_width() - 70.0);
+                                ui.add(egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate());
+                                let mut meta = a.size.map(human_size).unwrap_or_default();
+                                if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
+                                    let on_page = crate::i18n::fmt(
+                                        tl!("on page {label}"),
+                                        &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
+                                    );
+                                    meta = format!("{meta}  ·  {on_page}");
+                                }
+                                if let Some(d) = &a.description {
+                                    meta = format!("{meta}  ·  {d}");
+                                }
+                                ui.add(egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate());
+                            });
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…")).clicked() {
+                                    attachment_action = Some((ai, false));
+                                }
+                                if a.name.to_lowercase().ends_with(".pdf")
+                                    && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
+                                {
+                                    attachment_action = Some((ai, true));
                                 }
                             });
-                        }
-                        if panel == RightPanel::Bookmarks
-                            && bm_editable
-                            && icons::button(ui, "bookmark-plus", 26.0, false, tl!("New bookmark (⌘B)")).clicked()
-                        {
-                            bm_action = Some(BmAction::New);
-                        }
-                    });
-                });
-                ui.add_space(6.0);
-                let search_id = egui::Id::new(("bookmark_search", id.0));
-                let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-                if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
-                    ui.horizontal(|ui| {
-                        let label = ui.label(tl!("Search"));
-                        let previous = bookmark_query.clone();
-                        let response =
-                            ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(ui.available_width() - 32.0)).labelled_by(label.id);
-                        response.widget_info(|| {
-                            let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), &previous, &bookmark_query, "");
-                            info.label = Some(tl!("Search").to_string());
-                            info
                         });
-                        if icons::button(ui, "x", 26.0, false, tl!("Clear")).clicked() {
-                            bookmark_query.clear();
-                        }
                     });
-                    ui.data_mut(|d| d.insert_temp(search_id, bookmark_query.clone()));
-                    ui.add_space(6.0);
                 }
-                let bookmark_query = bookmark_query.trim().to_lowercase();
-                let mut bookmark_matches =
-                    if panel == RightPanel::Bookmarks { outline_matches(&info.outline, &bookmark_query) } else { std::collections::HashSet::new() };
-                // A new bookmark must stay nameable even when its initial title doesn't match.
-                if let Some((path, _)) = &bm_rename {
-                    let mut ancestor = path.clone();
-                    while !ancestor.is_empty() {
-                        bookmark_matches.insert(ancestor.clone());
-                        ancestor.pop();
-                    }
-                }
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
-                    RightPanel::Comments => {
-                        if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
-                            panel_edit = Some(e);
-                        }
-                    }
-                    RightPanel::Bookmarks => {
-                        if info.outline.is_empty() {
-                            empty(ui, &t, "bookmark", "This document has no bookmarks.");
-                        }
-                        let mut ctx = OutlineCtx {
-                            nav: &mut nav,
-                            action: &mut bm_action,
-                            rename: &mut bm_rename,
-                            editable: bm_editable,
-                            current: view.current,
-                            expand: bm_expand,
-                            matches: &bookmark_matches,
-                            searching: !bookmark_query.is_empty(),
-                        };
-                        if ctx.searching && bookmark_matches.is_empty() && !info.outline.is_empty() {
-                            ui.label(tl!("No matches."));
-                        }
-                        for (i, item) in info.outline.iter().enumerate() {
-                            outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
-                        }
-                    }
-                    RightPanel::Pages => pages(ui, &t, info, view, modal, &mut nav),
-                    RightPanel::Fields => fields(ui, &t, info, &doc.form, preparing, &mut nav, &mut panel_edit),
-                    RightPanel::Layers => {
-                        if info.layers.is_empty() {
-                            empty(ui, &t, "layers", "This document has no layers.");
-                        }
-                        for (li, l) in info.layers.iter().enumerate() {
-                            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, l.visible, &l.name));
-                            if resp.hovered() {
-                                ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
-                            }
-                            icons::paint(
-                                ui,
-                                Rect::from_min_size(rect.min + vec2(4.0, 7.0), vec2(18.0, 18.0)),
-                                if l.visible { "eye" } else { "eye-off" },
-                                16.0,
-                                t.icon,
-                            );
-                            let fg = if l.visible { t.text } else { t.text_faint };
-                            ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &l.name, theme::regular(13.0), fg);
-                            if resp.on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
-                                toggle_layer = Some((li, !l.visible));
-                            }
-                        }
-                    }
-                    RightPanel::Signatures => {
-                        sig_action = crate::sign_ui::panel(ui, &t, &doc.signatures, sig_expanded);
-                    }
-                    RightPanel::Accessibility => {
-                        a11y_action = crate::a11y_ui::panel(ui, &t, a11y, id);
-                    }
-                    RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
-                    RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
-                    RightPanel::Attachments => {
-                        if info.attachments.is_empty() {
-                            empty(ui, &t, "paperclip", "This document has no attachments.");
-                        }
-                        for (ai, a) in info.attachments.iter().enumerate() {
-                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.add(icons::image("paperclip", 16.0, t.icon));
-                                    ui.vertical(|ui| {
-                                        ui.set_width(ui.available_width() - 70.0);
-                                        ui.add(egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate());
-                                        let mut meta = a.size.map(human_size).unwrap_or_default();
-                                        if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
-                                            let on_page = crate::i18n::fmt(
-                                                tl!("on page {label}"),
-                                                &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
-                                            );
-                                            meta = format!("{meta}  ·  {on_page}");
-                                        }
-                                        if let Some(d) = &a.description {
-                                            meta = format!("{meta}  ·  {d}");
-                                        }
-                                        ui.add(egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate());
-                                    });
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…")).clicked() {
-                                            attachment_action = Some((ai, false));
-                                        }
-                                        if a.name.to_lowercase().ends_with(".pdf")
-                                            && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
-                                        {
-                                            attachment_action = Some((ai, true));
-                                        }
-                                    });
-                                });
-                            });
-                        }
-                    }
-                });
-            });
+            }
+        });
     }
     if close {
         app.choose_right_panel(None);

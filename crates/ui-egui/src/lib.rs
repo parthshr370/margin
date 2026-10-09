@@ -141,6 +141,16 @@ pub enum Flavor {
     Margin,
 }
 
+impl Flavor {
+    /// The app's name, as the window title shows it.
+    pub fn app_name(self) -> &'static str {
+        match self {
+            Self::PdfCraft => "PdfCraft",
+            Self::Margin => "Margin",
+        }
+    }
+}
+
 /// What the left panel shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftPanel {
@@ -356,6 +366,8 @@ pub struct PdfCraftApp {
     pub flavor: Flavor,
     /// Margin's Obsidian notes settings (`notes.*`); unused in PdfCraft.
     pub notes: margin::obsidian::Notes,
+    /// Margin's reader chrome: sidebar tab, rail (used when `flavor` is Margin).
+    pub margin_chrome: margin::ReaderChrome,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
@@ -620,6 +632,7 @@ impl PdfCraftApp {
             session: Session::new(),
             flavor: Flavor::PdfCraft,
             notes: Default::default(),
+            margin_chrome: Default::default(),
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
@@ -753,7 +766,11 @@ impl PdfCraftApp {
 
     /// A new app wearing `flavor`'s interface.
     pub fn with_flavor(flavor: Flavor) -> Self {
-        Self { flavor, ..Self::new() }
+        let mut app = Self { flavor, ..Self::new() };
+        if flavor == Flavor::Margin {
+            margin::apply_defaults(&mut app);
+        }
+        app
     }
 
     /// Fields are being edited (Prepare a form is open or a field tool is picked), unless the
@@ -1751,7 +1768,7 @@ impl eframe::App for PdfCraftApp {
             .and_then(|i| self.session.get(self.views[i].id))
             .map(|d| d.display_name())
             .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
-            .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
+            .map_or_else(|| self.flavor.app_name().to_owned(), |name| format!("{name} — {}", self.flavor.app_name()));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
@@ -1771,6 +1788,10 @@ impl eframe::App for PdfCraftApp {
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
+            return;
+        }
+        if self.flavor == Flavor::Margin {
+            margin::ui(self, ui, &ctx);
             return;
         }
         chrome::tab_strip(self, ui);

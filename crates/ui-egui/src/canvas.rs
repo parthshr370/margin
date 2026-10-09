@@ -2112,7 +2112,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((name, action)) = app.views[index].forms.button.take() {
         run_button(app, index, &name, action);
     }
-    quick_bar(app, avail, ui);
+    if app.flavor == crate::Flavor::Margin {
+        crate::margin::rail::show(app, avail, ui);
+    } else {
+        quick_bar(app, avail, ui);
+    }
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).

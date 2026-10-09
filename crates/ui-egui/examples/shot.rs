@@ -3,14 +3,15 @@
 //! ```text
 //! cargo run -p pdfcraft-ui-egui --example shot -- out.png [file.pdf] [--size 1440x900] [--scale 2] [--page 3 --panel pages …]
 //! ```
-//! `--width N` downscales the image to N pixels wide (README screenshots). Any other
+//! `--width N` downscales the image to N pixels wide (README screenshots). `--flavor margin`
+//! shows Margin's reader layout (dark theme, like `apps/margin`). Any other
 //! `--key value` pair is passed to `PdfCraftApp::set_option`
 //! (the same verbs as the desktop app's command-line flags and the future control channel).
 
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
 fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
@@ -18,6 +19,7 @@ fn main() -> Result<(), String> {
     let (mut file, mut opts) = (None, Vec::new());
     let (mut size, mut scale) = (egui::vec2(1440.0, 900.0), 2.0f32);
     let mut width: Option<u32> = None;
+    let mut flavor = Flavor::PdfCraft;
     while let Some(a) = args.next() {
         match a.strip_prefix("--") {
             Some("size") => {
@@ -27,12 +29,22 @@ fn main() -> Result<(), String> {
             }
             Some("scale") => scale = args.next().and_then(|v| v.parse().ok()).ok_or("bad --scale")?,
             Some("width") => width = Some(args.next().and_then(|v| v.parse().ok()).ok_or("bad --width")?),
+            Some("flavor") => {
+                flavor = match args.next().as_deref() {
+                    Some("margin") => Flavor::Margin,
+                    Some("pdfcraft") => Flavor::PdfCraft,
+                    _ => return Err("--flavor pdfcraft|margin".into()),
+                }
+            }
             Some(k) => opts.push((k.to_string(), args.next().unwrap_or_default())),
             None => file = Some(a),
         }
     }
     let mut harness = Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::with_flavor(flavor);
+        if flavor == Flavor::Margin {
+            app.set_theme_preference(pdfcraft_ui_egui::theme::ThemePreference::Dark);
+        }
         if let Some(f) = &file {
             let bytes = std::fs::read(f).unwrap_or_default();
             let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
