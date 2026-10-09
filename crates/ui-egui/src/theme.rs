@@ -298,6 +298,13 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.widgets.active.weak_bg_fill = t.pressed;
     v.widgets.active.bg_fill = t.pressed;
     v.widgets.open.weak_bg_fill = t.hover;
+    if kind == ThemeKind::Margin {
+        // No egui default stroke colours in Margin: a pressed widget gets no white outline, an
+        // open menu button the theme's border, and the text cursor is the accent.
+        v.widgets.active.bg_stroke = Stroke::NONE;
+        v.widgets.open.bg_stroke = Stroke::new(1.0, t.border);
+        v.text_cursor.stroke = Stroke::new(2.0, t.accent);
+    }
     // Crisper text at 100–150 % scaling (#76): glyphs sit on whole pixels instead of being
     // rendered at quarter-pixel offsets, which egui notes blurs them. In the light theme, a mild
     // gamma darkens the antialiased edges of dark text (egui's default is linear, which reads thin

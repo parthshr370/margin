@@ -252,19 +252,27 @@ fn card(
     let marked = is_marked(thread);
     let replies: Vec<&&Annotation> = thread.iter().filter(|r| r.state.is_none()).collect();
     let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key);
-    let fill = if selected { t.hover.gamma_multiply(0.7) } else { Color32::TRANSPARENT };
+    let card_id = ui.id().with(("card", key));
+    let ember = view.comments.rows == crate::margin::look::RowLook::Ember;
+    let (fill, radius, author_color) = if ember {
+        // Margin: the hover fill under the selected or hovered card, the author in the accent.
+        let hovered = ui.read_response(card_id).is_some_and(|r| r.hovered());
+        let fill = if selected || hovered { t.hover } else { Color32::TRANSPARENT };
+        (fill, CornerRadius::same(t.radius), crate::margin::look::row_text(t, selected, t.text))
+    } else {
+        (if selected { t.hover.gamma_multiply(0.7) } else { Color32::TRANSPARENT }, CornerRadius::same(6), t.text)
+    };
     let mut open_menu = false;
     let mut more_rect = None;
-    let frame = egui::Frame::NONE
-        .fill(fill)
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(egui::Margin { left: 10, right: 8, top: 10, bottom: 10 })
-        .show(ui, |ui| {
+    let frame =
+        egui::Frame::NONE.fill(fill).corner_radius(radius).inner_margin(egui::Margin { left: 10, right: 8, top: 10, bottom: 10 }).show(ui, |ui| {
             ui.set_width(ui.available_width());
             let mut buttons_left = f32::INFINITY;
             let head = ui.horizontal(|ui| {
                 avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
-                ui.label(egui::RichText::new(a.author.as_deref().unwrap_or_else(|| tl!("Unknown author"))).font(theme::semibold(12.5)).color(t.text));
+                ui.label(
+                    egui::RichText::new(a.author.as_deref().unwrap_or_else(|| tl!("Unknown author"))).font(theme::semibold(12.5)).color(author_color),
+                );
                 if let Some(m) = &a.modified {
                     ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
                 }
@@ -378,8 +386,10 @@ fn card(
         });
     let rect = frame.response.rect;
     if selected {
-        let bar = egui::Rect::from_min_size(rect.min, vec2(4.0, rect.height()));
-        ui.painter().rect_filled(bar, CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, CARD_ACCENT);
+        if !ember {
+            let bar = egui::Rect::from_min_size(rect.min, vec2(4.0, rect.height()));
+            ui.painter().rect_filled(bar, CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, CARD_ACCENT);
+        }
         if std::mem::take(&mut view.comments.reveal) {
             frame.response.scroll_to_me(Some(Align::Center));
         }
@@ -390,7 +400,7 @@ fn card(
     // clickable everywhere.
     let hit = if selected { frame.inner } else { rect };
     let click = ui
-        .interact(hit, ui.id().with(("card", key)), Sense::click())
+        .interact(hit, card_id, Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
     if click.clicked() {

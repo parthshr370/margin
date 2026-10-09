@@ -90,7 +90,7 @@ fn every_rail_button_runs_its_command() {
         ("Draw freehand", QuickTool::Comment(CommentTool::Ink)),
         ("Add a text box", QuickTool::Comment(CommentTool::TextBox)),
         ("Erase drawings", QuickTool::Comment(CommentTool::Eraser)),
-        ("Select  (V)", QuickTool::Select),
+        ("Select", QuickTool::Select),
     ];
     for (label, tool) in tools {
         click(&mut h, label);
@@ -108,10 +108,10 @@ fn every_rail_button_runs_its_command() {
     h.run_steps(3);
     let rotated = rotation(&h);
     assert_ne!(rotated, before);
-    h.get_by_label_contains("Undo  (").click();
+    h.get_by_label("Undo").click();
     h.run_steps(3);
     assert_eq!(rotation(&h), before);
-    h.get_by_label_contains("Redo  (").click();
+    h.get_by_label("Redo").click();
     h.run_steps(3);
     assert_eq!(rotation(&h), rotated);
 }
@@ -177,7 +177,7 @@ fn margin_actions_run_by_id() {
     assert!(!app.margin_chrome.sidebar_open);
     assert!(!pdfcraft_ui_egui::margin::run(app, "view.unknown", &serde_json::Value::Null));
     h.run_steps(3);
-    assert!(h.query_by_label("Select  (V)").is_none(), "the rail hides when annotating is off");
+    assert!(h.query_by_label("Select").is_none(), "the rail hides when annotating is off");
 }
 
 /// `pages` letter-size pages of text, each with its own outline entry (so Bookmarks has rows and
@@ -243,4 +243,25 @@ fn switching_sidebar_tabs_keeps_the_page_still() {
         assert_eq!(h.state().margin_chrome.tab, tab);
         assert_eq!(place(&h), before, "{} moved the document", tab.label());
     }
+}
+
+#[test]
+fn tooltips_name_the_keymap_shortcut_apart() {
+    let mut h = harness(Flavor::Margin);
+    // The shipped keymap only, not the user's `~/.config/margin`.
+    let config = std::env::temp_dir().join(format!("margin-tooltip-test-{}", std::process::id()));
+    std::fs::create_dir_all(&config).expect("temp dir");
+    h.state_mut().margin_keys.set_config_dir(config.clone());
+    h.run_steps(2);
+    // The rail's Select: "Select", then its annotate-mode key from the keymap as a second label.
+    h.get_by_label("Select").hover();
+    for _ in 0..60 {
+        h.run_steps(1);
+        if h.query_by_label("V").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(h.query_by_label("V").is_some(), "the tooltip shows the shortcut");
+    std::fs::remove_dir_all(&config).expect("temp dir removed");
 }

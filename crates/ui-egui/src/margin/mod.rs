@@ -13,6 +13,7 @@ pub mod footer;
 pub mod header;
 pub mod keys;
 pub mod keysheet;
+pub mod look;
 pub mod obsidian;
 pub mod pagecolor;
 pub mod rail;

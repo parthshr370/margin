@@ -2,9 +2,10 @@
 //! title and current section in the middle; find, annotate, display, full screen and the
 //! document menu on the right.
 
-use egui::{Align, Layout, Stroke};
+use egui::{Align, Layout};
 use pdfcraft_engine::commands;
 
+use crate::margin::look::{self, GAP_LARGE};
 use crate::margin::{SidebarTab, current_section, open_tab, outline_at};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
@@ -35,9 +36,10 @@ const EXPORT_MENU: &[&str] = &["export.text", "export.docx", "export.html", "exp
 
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // egui draws the panel's bottom divider line.
     egui::Panel::top("margin_header")
         .exact_size(HEIGHT)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             let full = ui.max_rect();
             let mut left_end = full.left();
@@ -58,20 +60,22 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 fn left_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let has_doc = app.active.is_some();
     let open = app.margin_chrome.sidebar_open;
-    if ui.add_enabled_ui(has_doc, |ui| icons::button(ui, "panel-left", BUTTON, open && has_doc, "Sidebar")).inner.clicked() {
+    let keys = look::shortcut(app, "view.sidebar.toggle");
+    if ui.add_enabled_ui(has_doc, |ui| look::icon_button(ui, "panel-left", BUTTON, open && has_doc, "Sidebar", keys.as_deref())).inner.clicked() {
         app.margin_chrome.sidebar_open = !open;
     }
+    let (back_keys, forward_keys) = (look::shortcut(app, "reader.back"), look::shortcut(app, "reader.forward"));
     let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return };
     let (back, forward) = (!view.back.is_empty(), !view.forward.is_empty());
-    if ui.add_enabled_ui(back, |ui| icons::button(ui, "chevron-left", BUTTON, false, "Previous view")).inner.clicked() {
+    if ui.add_enabled_ui(back, |ui| look::icon_button(ui, "chevron-left", BUTTON, false, "Previous view", back_keys.as_deref())).inner.clicked() {
         view.view_history(false);
     }
-    if ui.add_enabled_ui(forward, |ui| icons::button(ui, "chevron-right", BUTTON, false, "Next view")).inner.clicked() {
+    if ui.add_enabled_ui(forward, |ui| look::icon_button(ui, "chevron-right", BUTTON, false, "Next view", forward_keys.as_deref())).inner.clicked() {
         view.view_history(true);
     }
     ui.add_space(4.0);
     let tools_open = open && app.margin_chrome.tab == SidebarTab::Tools;
-    if crate::widgets::ghost_button(ui, "wrench", "Tools").on_hover_text("All tools").clicked() {
+    if look::text_button(ui, "wrench", "Tools", BUTTON, tools_open, "All tools").clicked() {
         if tools_open {
             app.margin_chrome.sidebar_open = false;
         } else {
@@ -81,20 +85,23 @@ fn left_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 }
 
 fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let menu = icons::button(ui, "ellipsis", BUTTON, false, "Document: save, export, print, settings");
+    let menu = look::icon_button(ui, "ellipsis", BUTTON, false, "Document: save, export, print, settings", None);
     egui::Popup::menu(&menu).show(|ui| document_menu(app, ui));
     let Some(index) = app.active else { return };
-    if icons::button(ui, "maximize", BUTTON, app.full_screen, &with_shortcut("Full screen", "view.full_screen")).clicked() {
+    let keys = look::shortcut(app, "view.full_screen");
+    if look::icon_button(ui, "maximize", BUTTON, app.full_screen, "Full screen", keys.as_deref()).clicked() {
         app.execute("view.full_screen");
     }
-    let display = icons::button(ui, "contrast", BUTTON, false, "Page colour and layout");
+    let display = look::icon_button(ui, "contrast", BUTTON, false, "Page colour and layout", None);
     egui::Popup::menu(&display).show(|ui| display_popover(app, ui));
     let rail = app.margin_chrome.rail_open;
-    if icons::button(ui, "pen-tool", BUTTON, rail, "Annotate").clicked() {
+    let keys = look::shortcut(app, "reader.annotate.toggle");
+    if look::icon_button(ui, "pen-tool", BUTTON, rail, "Annotate", keys.as_deref()).clicked() {
         app.margin_chrome.rail_open = !rail;
     }
     let finding = app.views.get(index).is_some_and(|v| v.find.is_some());
-    if icons::button(ui, "search", BUTTON, finding, &with_shortcut("Find in document", "edit.find")).clicked() {
+    let keys = look::shortcut(app, "edit.find");
+    if look::icon_button(ui, "search", BUTTON, finding, "Find in document", keys.as_deref()).clicked() {
         match app.views.get_mut(index) {
             Some(view) if finding => view.find = None,
             _ => {
@@ -132,15 +139,6 @@ fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui::Rect, lef
     let galley = ui.painter().layout_job(job);
     let pos = egui::pos2(center - galley.size().x / 2.0, full.center().y - galley.size().y / 2.0);
     ui.painter().galley(pos, galley, t.text);
-}
-
-/// A command's label with its shortcut, for tooltips.
-fn with_shortcut(label: &str, id: &str) -> String {
-    let mac = cfg!(target_os = "macos");
-    match commands::command(id).and_then(|c| c.shortcut) {
-        Some(s) => format!("{label}  ({})", s.label(mac)),
-        None => label.to_string(),
-    }
 }
 
 /// One registered command as a menu row: its live label, shortcut and enabled state.

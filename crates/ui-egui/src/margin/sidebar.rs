@@ -8,10 +8,11 @@
 
 use std::collections::HashSet;
 
-use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
+use egui::{Align2, CornerRadius, Rect, Sense, vec2};
 use pdfcraft_engine::catalog;
 use pdfcraft_render::{DocInfo, OutlineItem};
 
+use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
 use crate::margin::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, SidebarTab, current_section, open_tab};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
@@ -21,76 +22,96 @@ const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 440.0;
 const TAB_HEIGHT: f32 = 32.0;
-const ROW_HEIGHT: f32 = 26.0;
-const INDENT: f32 = 14.0;
+const TOP_BUTTON: f32 = 30.0;
+const ROW_HEIGHT: f32 = 28.0;
+/// Rows sit nearly touching, so neighbouring hover fills read as one list.
+const ROW_SPACING: f32 = 2.0;
+const INDENT: f32 = 12.0;
+/// The expand/collapse chevron's box.
+const TWISTY: f32 = 16.0;
 const COVER: egui::Vec2 = vec2(52.0, 67.0);
 /// Annotation subtypes the Highlights tab lists.
 const MARKUP: [&str; 4] = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
 
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // Each panel draws its own divider line (egui's separator, in the theme's divider colour).
     egui::Panel::left("margin_sidebar")
         .resizable(true)
         .default_size(DEFAULT_WIDTH)
         .size_range(MIN_WIDTH..=MAX_WIDTH)
-        .frame(egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.divider)))
+        .frame(egui::Frame::NONE.fill(t.panel))
         .show(ui, |ui| {
-            egui::Panel::top("margin_sidebar_top")
-                .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 0 }).stroke(Stroke::new(1.0, t.divider)))
-                .show(ui, |ui| {
-                    top_buttons(app, ui);
-                    document_card(app, ui, &t);
-                });
-            egui::Panel::bottom("margin_sidebar_tabs")
-                .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 10 }).stroke(Stroke::new(1.0, t.divider)))
-                .show(ui, |ui| tab_strip(app, ui, &t));
-            egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 10, right: 8, top: 4, bottom: 8 })).show(
-                ui,
-                |ui| {
-                    pane(app, ui, &t);
-                },
-            );
+            // The reader sets the sidebar's width by dragging its edge; its contents never do.
+            // egui widens a panel to what its contents use, so a pane row a little too wide
+            // (Bookmarks' search field was) widened it more every frame, shrinking the page and
+            // moving it. The panes draw in a child the panel doesn't measure, clipped to it.
+            let rect = ui.max_rect();
+            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+            body.set_clip_rect(rect.intersect(ui.clip_rect()));
+            sections(app, &mut body, &t);
+            ui.expand_to_include_rect(rect);
         });
+}
+
+/// The sidebar's three parts: buttons and the document card, the pane, the tab strip.
+fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let edge = GAP_LARGE as i8;
+    egui::Panel::top("margin_sidebar_top")
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: edge, bottom: 0 }))
+        .show(ui, |ui| {
+            top_buttons(app, ui);
+            document_card(app, ui, t);
+        });
+    egui::Panel::bottom("margin_sidebar_tabs")
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: GAP as i8, bottom: edge }))
+        .show(ui, |ui| tab_strip(app, ui, t));
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP as i8, right: GAP as i8, top: 0, bottom: GAP as i8 }))
+        .show(ui, |ui| pane(app, ui, t));
 }
 
 fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if icons::button(ui, "book-open", 30.0, false, "Library").clicked() {
+        if look::icon_button(ui, "book-open", TOP_BUTTON, false, "Library", None).clicked() {
             app.active = None;
         }
-        let palette = match pdfcraft_engine::commands::command("view.palette").and_then(|c| c.shortcut) {
-            Some(s) => format!("Command palette  ({})", s.label(cfg!(target_os = "macos"))),
-            None => "Command palette".to_string(),
-        };
-        if icons::button(ui, "square-terminal", 30.0, app.palette_open, &palette).clicked() {
+        let palette = look::shortcut(app, "view.palette");
+        if look::icon_button(ui, "square-terminal", TOP_BUTTON, app.palette_open, "Command palette", palette.as_deref()).clicked() {
             app.palette_open = true;
         }
     });
 }
 
-/// Cover, title, author and how far in the reader is.
+/// Cover, title, author and how far in the reader is: the title in full text, everything else
+/// muted, the progress bar's fill the only accent.
 fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
     let info = &doc.info;
     let pages = info.pages.len();
-    ui.add_space(6.0);
+    let radius = CornerRadius::same(t.radius);
+    ui.add_space(GAP);
     ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.spacing_mut().item_spacing.x = GAP_LARGE;
         let (cover, _) = ui.allocate_exact_size(COVER, Sense::hover());
         match view.thumb(0) {
             Some(tex) => {
                 let size = tex.size_vec2();
                 let scale = (COVER.x / size.x.max(1.0)).min(COVER.y / size.y.max(1.0));
                 let rect = Rect::from_center_size(cover.center(), size * scale);
-                ui.painter().image(tex.id(), rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                ui.painter().add(
+                    egui::epaint::RectShape::filled(rect, radius, egui::Color32::WHITE)
+                        .with_texture(tex.id(), Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
+                );
             }
             None => {
-                ui.painter().rect_filled(cover, CornerRadius::same(3), t.card);
-                icons::paint(ui, cover, "file-text", 22.0, t.text_faint);
+                ui.painter().rect_filled(cover, radius, t.hover);
+                icons::paint(ui, cover, "file-text", 22.0, t.text_muted);
             }
         }
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             let width = ui.available_width();
             let title = info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
             let mut job = egui::text::LayoutJob::simple(title, theme::semibold(13.0), t.text, width);
@@ -99,22 +120,27 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             if let Some(author) = info.author.as_deref().filter(|a| !a.trim().is_empty()) {
                 ui.add(egui::Label::new(egui::RichText::new(author).font(theme::regular(12.0)).color(t.text_muted)).truncate());
             }
-            ui.add_space(4.0);
+            ui.add_space(GAP);
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
                 let percent = (view.current + 1).saturating_mul(100).checked_div(pages).unwrap_or(0);
-                ui.label(egui::RichText::new(format!("{percent}%")).font(theme::regular(11.0)).color(t.text_faint));
-                let bar_width = (ui.available_width() - 44.0).max(10.0);
+                let meta = |text: &str| egui::RichText::new(text).font(theme::regular(11.0)).color(t.text_muted);
+                ui.label(meta(&format!("{percent}%")));
+                let count = format!("{pages} pp");
+                let count_width = ui.fonts_mut(|f| f.layout_no_wrap(count.clone(), theme::regular(11.0), t.text_muted).size().x);
+                let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
                 let (bar, _) = ui.allocate_exact_size(vec2(bar_width, 3.0), Sense::hover());
-                ui.painter().rect_filled(bar, CornerRadius::same(2), t.border);
+                ui.painter().rect_filled(bar, CornerRadius::same(2), t.divider);
                 let fill = Rect::from_min_size(bar.min, vec2(bar.width() * percent as f32 / 100.0, bar.height()));
                 ui.painter().rect_filled(fill, CornerRadius::same(2), t.accent);
-                ui.label(egui::RichText::new(format!("{pages} pp")).font(theme::regular(11.0)).color(t.text_faint));
+                ui.label(meta(&count));
             });
         });
     });
-    ui.add_space(12.0);
+    ui.add_space(GAP_LARGE);
 }
 
+/// The tabs: the shown one gets the hover fill and an accent icon, like a selected row.
 fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let gap = 4.0;
     let count = SidebarTab::STRIP.len() as f32;
@@ -125,37 +151,30 @@ fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let on = app.margin_chrome.tab == tab;
             let (rect, resp) = ui.allocate_exact_size(vec2(width, TAB_HEIGHT), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tab.label()));
-            if on {
-                ui.painter().rect_filled(rect, CornerRadius::same(7), t.selected);
-            } else if resp.hovered() {
-                ui.painter().rect_filled(rect, CornerRadius::same(7), t.hover);
-            }
-            icons::paint(ui, rect, tab.icon(), 16.0, if on { t.text } else { t.text_muted });
-            if resp.on_hover_text(tab.label()).clicked() {
+            look::row_fill(ui, t, rect, resp.hovered(), on);
+            icons::paint(ui, rect, tab.icon(), 16.0, look::icon_tint(t, on, resp.hovered()));
+            // The keymap opens a tab with `view.sidebar.tab` and its key (Ctrl+1…4 by default).
+            let keys = tab.key().and_then(|key| look::shortcut_with(app, "view.sidebar.tab", &serde_json::json!({ "tab": key })));
+            if look::tooltip(resp, tab.label(), keys.as_deref()).clicked() {
                 open_tab(app, tab);
             }
         }
     });
 }
 
-/// A pane's small-caps title row.
+/// A pane's title: its small-caps section label, lined up with the rows' text.
 fn pane_title(ui: &mut egui::Ui, t: &Tokens, title: &str, count: Option<usize>) {
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title.to_uppercase()).font(theme::semibold(11.0)).color(t.text_faint));
-        if let Some(n) = count {
-            ui.label(egui::RichText::new(n.to_string()).font(theme::regular(11.0)).color(t.text_faint));
-        }
-    });
-    ui.add_space(4.0);
+    ui.add_space(GAP_LARGE);
+    ui.horizontal(|ui| look::section_label(ui, t, title, count));
+    ui.add_space(GAP);
 }
 
 /// The mockup's empty state: a muted message, centred.
 fn empty(ui: &mut egui::Ui, t: &Tokens, lines: &[&str]) {
-    ui.add_space(30.0);
+    ui.add_space(GAP_LARGE * 2.0);
     ui.vertical_centered(|ui| {
         for line in lines {
-            ui.label(egui::RichText::new(*line).font(theme::regular(12.5)).color(t.text_faint));
+            ui.label(egui::RichText::new(*line).font(theme::regular(12.5)).color(t.text_muted));
         }
     });
 }
@@ -173,9 +192,14 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             {
                 view.open_find();
             }
+            ui.add_space(GAP_LARGE);
             crate::panels::panel_body(app, ui);
         }
-        SidebarTab::Pages | SidebarTab::Bookmarks | SidebarTab::Other(_) => crate::panels::panel_body(app, ui),
+        SidebarTab::Pages | SidebarTab::Bookmarks | SidebarTab::Other(_) => {
+            // PdfCraft's panel, its title row a section label here (`look::RowLook::Ember`).
+            ui.add_space(GAP_LARGE);
+            crate::panels::panel_body(app, ui);
+        }
     }
 }
 
@@ -193,6 +217,7 @@ fn contents(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) 
     let mut toggled: HashSet<Vec<usize>> = ui.data(|d| d.get_temp(toggled_id)).unwrap_or_default();
     let mut cx = TocCtx { info, current: &current, toggled: &mut toggled, go: None, flip: None, drawn: 0 };
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = ROW_SPACING;
         for (i, item) in info.outline.iter().enumerate() {
             toc_row(ui, t, item, &mut vec![i], &mut cx);
         }
@@ -232,33 +257,28 @@ fn toc_row(ui: &mut egui::Ui, t: &Tokens, item: &OutlineItem, path: &mut Vec<usi
     let open = default_open != cx.toggled.contains(path.as_slice());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, is_current, &item.title));
-    if is_current || resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
-    }
-    if is_current {
-        let bar = Rect::from_min_size(rect.min + vec2(0.0, 6.0), vec2(2.0, rect.height() - 12.0));
-        ui.painter().rect_filled(bar, CornerRadius::same(1), t.accent);
-    }
-    let left = rect.left() + 4.0 + depth * INDENT;
+    look::row_fill(ui, t, rect, resp.hovered(), is_current);
+    let left = rect.left() + ROW_PAD / 2.0 + depth * INDENT;
     if !item.children.is_empty() {
-        let twisty = Rect::from_min_size(egui::pos2(left, rect.top() + 5.0), vec2(16.0, 16.0));
+        let twisty = Rect::from_center_size(egui::pos2(left + TWISTY / 2.0, rect.center().y), vec2(TWISTY, TWISTY));
         let click = ui.interact(twisty, ui.id().with(("toc-twisty", path.as_slice())), Sense::click());
-        icons::paint(ui, twisty, if open { "chevron-down" } else { "chevron-right" }, 12.0, t.text_faint);
+        icons::paint(ui, twisty, if open { "chevron-down" } else { "chevron-right" }, 12.0, t.text_muted);
         if click.on_hover_text(if open { "Collapse" } else { "Expand" }).clicked() {
             cx.flip = Some(path.clone());
         }
     }
+    // The page column stays muted, selected or not.
     let label = item.page.and_then(|p| cx.info.pages.get(p)).map(|p| p.label.clone()).unwrap_or_default();
-    let label_width = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(11.0), t.text_faint).size().x);
-    ui.painter().text(rect.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, &label, theme::regular(11.0), t.text_faint);
-    let text_left = left + 20.0;
-    let max_width = (rect.right() - 16.0 - label_width - text_left).max(0.0);
+    let label_width = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(11.0), t.text_muted).size().x);
+    ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, &label, theme::regular(11.0), t.text_muted);
+    let text_left = left + TWISTY + 4.0;
+    let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
     crate::widgets::row_text(
         ui,
         egui::pos2(text_left, rect.center().y),
         item.title.trim(),
         theme::regular(12.5),
-        if is_current { t.text } else { t.text_muted },
+        look::row_text(t, is_current, t.text),
         max_width,
     );
     if resp.clicked()
@@ -297,6 +317,7 @@ fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize
         }
     }
     let mut nav = None;
+    view.comments.rows = RowLook::Ember;
     // Read-only list: no "Add a comment" box (it would add a note, which this list hides).
     let edit = egui::ScrollArea::vertical()
         .auto_shrink([false, false])

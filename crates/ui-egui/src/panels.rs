@@ -420,6 +420,7 @@ pub(crate) fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
     // Prepare a form is open: the Fields panel orders tabs.
     let preparing = app.is_preparing();
+    let rows = crate::margin::look::RowLook::of(app.flavor);
     {
         let Some(doc) = app.session.get(id) else { return };
         let info = &doc.info;
@@ -444,9 +445,13 @@ pub(crate) fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
         };
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
-            if let Some(c) = count {
-                ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
+            if rows == crate::margin::look::RowLook::Ember {
+                crate::margin::look::section_label(ui, &t, tl!(title), count);
+            } else {
+                ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
+                if let Some(c) = count {
+                    ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
+                }
             }
             if panel == RightPanel::Pages && view.selected.len() > 1 {
                 let n = view.selected.len().to_string();
@@ -545,6 +550,12 @@ pub(crate) fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     expand: bm_expand,
                     matches: &bookmark_matches,
                     searching: !bookmark_query.is_empty(),
+                    rows,
+                    // Margin marks the section being read, as its Contents tab does.
+                    reading: match rows {
+                        crate::margin::look::RowLook::Ember => crate::margin::current_section(&info.outline, view.current),
+                        crate::margin::look::RowLook::PdfCraft => None,
+                    },
                 };
                 if ctx.searching && bookmark_matches.is_empty() && !info.outline.is_empty() {
                     ui.label(tl!("No matches."));
@@ -553,7 +564,7 @@ pub(crate) fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
                 }
             }
-            RightPanel::Pages => pages(ui, &t, info, view, modal, &mut nav),
+            RightPanel::Pages => pages(ui, &t, info, view, modal, rows, &mut nav),
             RightPanel::Fields => fields(ui, &t, info, &doc.form, preparing, &mut nav, &mut panel_edit),
             RightPanel::Layers => {
                 if info.layers.is_empty() {
@@ -751,6 +762,9 @@ struct OutlineCtx<'a> {
     expand: Option<usize>,
     matches: &'a std::collections::HashSet<Vec<usize>>,
     searching: bool,
+    rows: crate::margin::look::RowLook,
+    /// The entry shown as selected: the section being read (Margin only).
+    reading: Option<Vec<usize>>,
 }
 
 /// The destination page label gets its own right-aligned column in a bookmark row; drawing
@@ -821,22 +835,28 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         // The page label sits right-aligned in its own bounded column, and the title wraps to
         // what is really left of it — a long label painted over a long title was the overlap
         // of #124.
+        let ember = cx.rows == crate::margin::look::RowLook::Ember;
         let label_font = theme::regular(11.0);
+        let label_color = if ember { t.text_muted } else { t.text_faint };
         let label_galley = item.page.and_then(|p| info.pages.get(p)).map(|page| {
             ui.fonts_mut(|f| {
                 let text =
-                    ellipsized_prefix(&page.label, |s| f.layout_no_wrap(s.to_owned(), label_font.clone(), t.text_faint).size().x <= LABEL_COLUMN_MAX);
-                f.layout_no_wrap(text, label_font, t.text_faint)
+                    ellipsized_prefix(&page.label, |s| f.layout_no_wrap(s.to_owned(), label_font.clone(), label_color).size().x <= LABEL_COLUMN_MAX);
+                f.layout_no_wrap(text, label_font, label_color)
             })
         });
         let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
         let font = if depth == 0 { theme::medium(13.0) } else { theme::regular(13.0) };
+        let selected = cx.reading.as_deref() == Some(path);
+        let title_color = if ember { crate::margin::look::row_text(t, selected, t.text) } else { t.text };
         let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
-        let galley = ui.fonts_mut(|f| f.layout(item.title.clone(), font, t.text, wrap_w));
+        let galley = ui.fonts_mut(|f| f.layout(item.title.clone(), font, title_color, wrap_w));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &item.title));
-        if resp.hovered() {
+        if ember {
+            crate::margin::look::row_fill(ui, t, rect, resp.hovered(), selected);
+        } else if resp.hovered() {
             ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
         }
         let x0 = rect.left() + indent;
@@ -848,12 +868,12 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
                 ui.data_mut(|d| d.insert_temp(id, open));
             }
         }
-        ui.painter().galley(pos2(x0 + 20.0, rect.top() + 6.0), galley, t.text);
+        ui.painter().galley(pos2(x0 + 20.0, rect.top() + 6.0), galley, title_color);
         if let Some(g) = label_galley {
             // Right-aligned, vertically centred at the first line, inside the column the title
             // wrapped around.
             let pos = pos2(rect.right() - 6.0 - g.size().x, rect.top() + 14.0 - g.size().y / 2.0);
-            ui.painter().galley(pos, g, t.text_faint);
+            ui.painter().galley(pos, g, label_color);
         }
         if resp.clicked()
             && let Some(p) = item.page
@@ -898,7 +918,16 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
 
 /// The page thumbnails. A click goes to the page; ⌘/Ctrl-click and ⇧-click pick several pages
 /// (the selection page commands and Print act on) without moving the document.
-fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocView, modal: bool, nav: &mut Option<Nav>) {
+fn pages(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    info: &DocInfo,
+    view: &mut crate::DocView,
+    modal: bool,
+    rows: crate::margin::look::RowLook,
+    nav: &mut Option<Nav>,
+) {
+    let ember = rows == crate::margin::look::RowLook::Ember;
     // Escape drops the selection while the pointer is over the panel and nothing else wants the key.
     if !modal
         && !view.selected.is_empty()
@@ -916,25 +945,31 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
             let info = crate::i18n::fmt(tl!("Page {label}"), &[("label", &p.label)]);
             let picked = view.selected.contains(&i);
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, picked, info.clone()));
-            // The current page keeps its heavier border; picked pages share its fill.
+            // The current page keeps its heavier border; picked pages share its fill. In Margin
+            // both get the hover fill and a plain border, the label in the accent marking them.
             let selected = i == view.current;
-            if selected || picked {
-                ui.painter().rect_filled(rect, CornerRadius::same(8), t.accent_soft);
+            let radius = if ember { CornerRadius::same(t.radius) } else { CornerRadius::same(8) };
+            if ember {
+                crate::margin::look::row_fill(ui, t, rect, resp.hovered(), selected || picked);
+            } else if selected || picked {
+                ui.painter().rect_filled(rect, radius, t.accent_soft);
             } else if resp.hovered() {
-                ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
+                ui.painter().rect_filled(rect, radius, t.hover);
             }
             if picked {
-                ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+                let width = if ember { 1.0 } else { 1.5 };
+                ui.painter().rect_stroke(rect, radius, Stroke::new(width, t.accent), egui::StrokeKind::Inside);
             }
             let pr = rect.shrink(8.0);
             ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
             if let Some(tex) = view.thumb(i) {
                 ui.painter().image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
+            let heavy = selected && !ember;
             ui.painter().rect_stroke(
                 pr,
                 CornerRadius::ZERO,
-                Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { t.accent } else { t.border }),
+                Stroke::new(if heavy { 2.0 } else { 1.0 }, if heavy { t.accent } else { t.border }),
                 egui::StrokeKind::Outside,
             );
             ui.label(egui::RichText::new(&p.label).font(theme::medium(12.0)).color(if selected || picked { t.accent_text } else { t.text_muted }));

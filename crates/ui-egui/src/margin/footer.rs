@@ -3,11 +3,12 @@
 
 use egui::{Align, CornerRadius, Layout, Sense, Stroke, vec2};
 
+use crate::PdfCraftApp;
 use crate::canvas::Fit;
+use crate::margin::look::{self, GAP, GAP_LARGE};
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, icons};
 
-pub const HEIGHT: f32 = 40.0;
+pub const HEIGHT: f32 = 36.0;
 /// The zoom menu's fixed steps, in percent.
 const ZOOM_STEPS: [u16; 5] = [75, 100, 125, 150, 200];
 /// The id of the page box, shared with PdfCraft's `view.focus_page_input` (⇧⌘N).
@@ -15,8 +16,7 @@ const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
 const SCRUB_HEIGHT: f32 = 18.0;
 const ZOOM_BUTTON: f32 = 22.0;
-/// Space between the footer's three parts.
-const GAP: f32 = 16.0;
+const FIT_BUTTON: f32 = 24.0;
 
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -25,26 +25,31 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
     let sections: Vec<usize> = doc.info.outline.iter().filter_map(|o| o.page).collect();
     let dirty = doc.dirty;
+    let keys = ZoomKeys {
+        zoom_out: look::shortcut(app, "view.zoom.out"),
+        zoom_in: look::shortcut(app, "view.zoom.in"),
+        fit: look::shortcut(app, "view.fit.toggle_width"),
+    };
     let Some(view) = app.views.get_mut(index) else { return };
     let mut command = None;
+    // egui draws the panel's top divider line.
     egui::Panel::bottom("margin_footer")
         .exact_size(HEIGHT)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(18, 0)).stroke(Stroke::new(1.0, t.divider)))
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = GAP;
                 page_box(ui, &t, view, &labels);
-                ui.add_space(8.0);
-                command = zoom_group(ui, &t, view);
-                ui.add_space(GAP);
+                command = zoom_group(ui, &t, view, &keys);
+                ui.add_space(GAP_LARGE);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.allocate_ui(vec2(STATUS_WIDTH, HEIGHT), |ui| {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let (text, color) = if dirty { ("Unsaved changes", t.accent_text) } else { ("Saved", t.text_faint) };
+                            let (text, color) = if dirty { ("Unsaved changes", t.accent_text) } else { ("Saved", t.text_muted) };
                             ui.label(egui::RichText::new(text).font(theme::regular(11.5)).color(color));
                         });
                     });
-                    ui.add_space(GAP);
+                    ui.add_space(GAP_LARGE);
                     scrubber(ui, &t, view, labels.len(), &sections);
                 });
             });
@@ -65,7 +70,7 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
     let r = egui::Frame::NONE
         .fill(t.field)
         .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(5))
+        .corner_radius(CornerRadius::same(t.radius))
         .show(ui, |ui| ui.add(edit))
         .inner
         .on_hover_text("Go to page: type a number or label and press Enter");
@@ -75,21 +80,28 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
             view.page_input = (view.current + 1).to_string();
         }
     }
-    ui.label(egui::RichText::new(format!("/ {}", labels.len())).font(theme::regular(11.5)).color(t.text_faint));
+    ui.label(egui::RichText::new(format!("/ {}", labels.len())).font(theme::regular(11.5)).color(t.text_muted));
+}
+
+/// The keys of the zoom group's buttons, from Margin's keymap.
+struct ZoomKeys {
+    zoom_out: Option<String>,
+    zoom_in: Option<String>,
+    fit: Option<String>,
 }
 
 /// `− 100% +`, the percent opening the zoom menu, then the fit toggle. Returns a command to run.
-fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView) -> Option<&'static str> {
+fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, keys: &ZoomKeys) -> Option<&'static str> {
     let mut command = None;
-    egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(7)).show(ui, |ui| {
+    egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(t.radius)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        if icons::button(ui, "minus", ZOOM_BUTTON, false, "Zoom out  (Ctrl+−)").clicked() {
+        if look::icon_button(ui, "minus", ZOOM_BUTTON, false, "Zoom out", keys.zoom_out.as_deref()).clicked() {
             view.zoom_step(false);
         }
         let percent = format!("{:.0}%", view.zoom * 100.0);
         let menu =
             ui.add(egui::Button::new(egui::RichText::new(percent).font(theme::regular(11.5)).color(t.text)).frame(false).min_size(vec2(50.0, 0.0)));
-        let menu = menu.on_hover_text("Zoom and fit");
+        let menu = look::tooltip(menu, "Zoom and fit", None);
         egui::Popup::menu(&menu).show(|ui| {
             ui.set_min_width(170.0);
             for (fit, label) in [(Fit::Width, "Fit width"), (Fit::Page, "Fit page")] {
@@ -112,12 +124,12 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView) -> Optio
                 }
             }
         });
-        if icons::button(ui, "plus", ZOOM_BUTTON, false, "Zoom in  (Ctrl+=)").clicked() {
+        if look::icon_button(ui, "plus", ZOOM_BUTTON, false, "Zoom in", keys.zoom_in.as_deref()).clicked() {
             view.zoom_step(true);
         }
     });
     let (icon, tip) = if view.fit == Fit::Width { ("maximize-2", "Fit page") } else { ("maximize", "Fit width") };
-    if icons::button(ui, icon, 24.0, false, tip).clicked() {
+    if look::icon_button(ui, icon, FIT_BUTTON, false, tip, keys.fit.as_deref()).clicked() {
         view.set_fit(if view.fit == Fit::Width { Fit::Page } else { Fit::Width });
     }
     command

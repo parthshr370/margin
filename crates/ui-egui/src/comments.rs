@@ -408,6 +408,8 @@ pub struct CommentView {
     pub tool_done: bool,
     /// Margin's notes buttons (inactive in PdfCraft).
     pub notes: crate::margin::obsidian::NotesUi,
+    /// How the list marks the hovered and the selected card (Margin's sidebar sets `Ember`).
+    pub rows: crate::margin::look::RowLook,
 }
 
 /// Comments panel order (Acrobat: Sort by page, author, date, type, colour).

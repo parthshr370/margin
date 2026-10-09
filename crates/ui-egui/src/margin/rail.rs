@@ -6,8 +6,9 @@ use egui::{Color32, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::commands;
 
 use crate::comments::CommentTool;
+use crate::margin::look;
 use crate::theme::Tokens;
-use crate::{PdfCraftApp, QuickTool, icons};
+use crate::{PdfCraftApp, QuickTool};
 
 /// One rail entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,7 +35,9 @@ pub const RAIL: &[RailItem] = &[
     RailItem::Command("edit.redo"),
 ];
 
-const BUTTON: f32 = 34.0;
+const BUTTON: f32 = 32.0;
+/// The rail's padding around its buttons; its corners follow the buttons' plus this.
+const PADDING: u8 = 6;
 /// Distance from the page area's left edge.
 const INSET: f32 = 14.0;
 
@@ -48,23 +51,16 @@ impl RailItem {
         }
     }
 
-    /// Its tooltip: the command's name, and its key when it has one.
-    fn tooltip(self) -> String {
-        let mac = cfg!(target_os = "macos");
+    /// Its tooltip: the command's name, and the keys that run it in Margin.
+    fn tooltip(self, app: &PdfCraftApp) -> (String, Option<String>) {
         match self {
-            Self::Select => "Select  (V)".to_string(),
-            Self::Command("edit.snapshot") => "Area snapshot: copy a region of the page".to_string(),
+            Self::Select => ("Select".to_string(), look::shortcut(app, "reader.tool.select")),
+            Self::Command("edit.snapshot") => ("Area snapshot: copy a region of the page".to_string(), look::shortcut(app, "edit.snapshot")),
             Self::Command(id) => match commands::command(id) {
-                Some(spec) => {
-                    let label = crate::i18n::menu_label(spec.id, spec.label);
-                    match spec.shortcut {
-                        Some(s) => format!("{label}  ({})", s.label(mac)),
-                        None => label,
-                    }
-                }
-                None => id.to_string(),
+                Some(spec) => (crate::i18n::menu_label(spec.id, spec.label), look::shortcut(app, id)),
+                None => (id.to_string(), None),
             },
-            Self::Divider => String::new(),
+            Self::Divider => (String::new(), None),
         }
     }
 
@@ -104,9 +100,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
             egui::Frame::NONE
                 .fill(t.card)
                 .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(12))
+                .corner_radius(CornerRadius::same(t.radius + PADDING))
                 .shadow(egui::Shadow { offset: [0, 10], blur: 40, spread: 0, color: Color32::from_black_alpha(if t.dark() { 128 } else { 30 }) })
-                .inner_margin(egui::Margin::same(6))
+                .inner_margin(egui::Margin::same(PADDING as i8))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.vertical(|ui| {
@@ -120,9 +116,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                 RailItem::Command(id) => commands::command(id).is_some_and(|spec| app.command_enabled(spec)),
                                 _ => true,
                             };
-                            let r = ui
-                                .add_enabled_ui(enabled, |ui| icons::button(ui, item.icon(), BUTTON, item.active(app.quick_tool), &item.tooltip()))
-                                .inner;
+                            let (label, shortcut) = item.tooltip(app);
+                            let on = item.active(app.quick_tool);
+                            let r =
+                                ui.add_enabled_ui(enabled, |ui| look::rail_button(ui, item.icon(), BUTTON, on, &label, shortcut.as_deref())).inner;
                             if r.clicked() {
                                 clicked = Some(*item);
                             }
