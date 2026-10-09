@@ -499,8 +499,10 @@ pub(crate) fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 let label = ui.label(tl!("Search"));
                 let previous = bookmark_query.clone();
-                let response =
-                    ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(ui.available_width() - 32.0)).labelled_by(label.id);
+                // Leave room for the clear button and the gap before it: a row wider than the
+                // panel widens the panel, a little more every frame.
+                let field_width = ui.available_width() - 26.0 - ui.spacing().item_spacing.x;
+                let response = ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(field_width)).labelled_by(label.id);
                 response.widget_info(|| {
                     let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), &previous, &bookmark_query, "");
                     info.label = Some(tl!("Search").to_string());

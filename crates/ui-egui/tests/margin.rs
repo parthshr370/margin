@@ -179,3 +179,68 @@ fn margin_actions_run_by_id() {
     h.run_steps(3);
     assert!(h.query_by_label("Select  (V)").is_none(), "the rail hides when annotating is off");
 }
+
+/// `pages` letter-size pages of text, each with its own outline entry (so Bookmarks has rows and
+/// its search field). No xref: the parser rebuilds it, as for [`FIXTURE`].
+fn long_fixture(pages: usize) -> Vec<u8> {
+    // Objects: 1 catalog, 2 pages, 3 font, 4 outlines, then a page, its content and its outline
+    // entry for each page.
+    const FIRST_PAGE_OBJ: usize = 5;
+    let page_obj = |i: usize| FIRST_PAGE_OBJ + 3 * i;
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", page_obj(i))).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [{}] /Count {pages} >> endobj\n\
+         3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n\
+         4 0 obj << /Type /Outlines /First {} 0 R /Last {} 0 R /Count {pages} >> endobj\n",
+        kids.join(" "),
+        page_obj(0) + 2,
+        page_obj(pages - 1) + 2,
+    );
+    for i in 0..pages {
+        let (page, content, entry) = (page_obj(i), page_obj(i) + 1, page_obj(i) + 2);
+        let text = format!("BT /F1 18 Tf 72 700 Td (Chapter {} begins here) Tj ET", i + 1);
+        let prev = if i > 0 { format!(" /Prev {} 0 R", page_obj(i - 1) + 2) } else { String::new() };
+        let next = if i + 1 < pages { format!(" /Next {} 0 R", page_obj(i + 1) + 2) } else { String::new() };
+        pdf += &format!(
+            "{page} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {content} 0 R /Resources << /Font << /F1 3 0 R >> >> >> endobj\n\
+             {content} 0 obj << /Length {} >> stream\n{text}\nendstream endobj\n\
+             {entry} 0 obj << /Title (Chapter {}) /Parent 4 0 R{prev}{next} /Dest [{page} 0 R /XYZ 0 792 0] >> endobj\n",
+            text.len(),
+            i + 1,
+        );
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    pdf.into_bytes()
+}
+
+#[test]
+fn switching_sidebar_tabs_keeps_the_page_still() {
+    const PAGES: usize = 12;
+    const READING_PAGE: usize = 5;
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("long.pdf", None, long_fixture(PAGES)).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    // Read from the middle, so a scroll jump either way shows.
+    h.state_mut().views[0].go_to_page(READING_PAGE);
+    h.run_steps(4);
+    settle(&mut h);
+    let place = |h: &Harness<'static, PdfCraftApp>| {
+        let view = &h.state().views[0];
+        (view.viewport_rect(), view.page_screen_rect(READING_PAGE), view.zoom)
+    };
+    let before = place(&h);
+    assert!(before.1.is_some(), "page {READING_PAGE} is on screen");
+    for tab in SidebarTab::STRIP.into_iter().chain([SidebarTab::Contents]) {
+        // The header's Tools button shares its name with the Tools tab; the tab strip comes first.
+        h.get_all_by_label(tab.label()).next().expect("tab").click();
+        h.run_steps(6);
+        assert_eq!(h.state().margin_chrome.tab, tab);
+        assert_eq!(place(&h), before, "{} moved the document", tab.label());
+    }
+}
