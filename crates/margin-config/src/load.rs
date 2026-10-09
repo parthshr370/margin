@@ -56,7 +56,9 @@ impl Settings {
         match read_capped(&path, MAX_SETTINGS_BYTES) {
             Ok(Some(text)) => Self::from_user_text(&text, &shown),
             Ok(None) => LoadedSettings { settings: Self::default(), problems: Vec::new() },
-            Err(message) => LoadedSettings { settings: Self::default(), problems: vec![file_problem(&shown, 1, 1, format!("{message}; using the defaults"))] },
+            Err(message) => {
+                LoadedSettings { settings: Self::default(), problems: vec![file_problem(&shown, 1, 1, format!("{message}; using the defaults"))] }
+            }
         }
     }
 

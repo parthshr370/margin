@@ -35,8 +35,8 @@ mod vectors;
 pub use context::{ContextExpr, ContextNode, depth_of, holds, parse_stack};
 pub use error::{Error, Result};
 pub use keymap::{
-    BindingTarget, CompileOptions, Compiled, CompiledBinding, CompiledKeymap, KEYMAP_FILE, KeymapBlock, KeymapFile, KeymapSource,
-    MARGIN_KEYMAP, MARGIN_KEYMAP_FILE, MAX_KEYMAP_BYTES, compile, compile_shipped,
+    BindingTarget, CompileOptions, Compiled, CompiledBinding, CompiledKeymap, KEYMAP_FILE, KeymapBlock, KeymapFile, KeymapSource, MARGIN_KEYMAP,
+    MARGIN_KEYMAP_FILE, MAX_KEYMAP_BYTES, compile, compile_shipped,
 };
 pub use keystroke::{Os, canonical, canonical_chord, is_printable};
 pub use load::{CONFIG_DIR_ENV, LoadedSettings, MAX_SETTINGS_BYTES, SETTINGS_FILE, config_dir, read_capped};

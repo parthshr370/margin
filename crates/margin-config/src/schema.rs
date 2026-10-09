@@ -228,7 +228,11 @@ fn write_object_body(out: &mut String, root: &Value, schema: &Value, map: &Map<S
     let pad = " ".repeat(depth * INDENT);
     let no_order = KeyOrder::default();
     // Text order first; any key the order lacks follows in map order.
-    let ordered = order.0.iter().map(|(key, inner)| (key, inner)).chain(map.keys().filter(|key| !order.0.iter().any(|(k, _)| k == *key)).map(|key| (key, &no_order)));
+    let ordered = order
+        .0
+        .iter()
+        .map(|(key, inner)| (key, inner))
+        .chain(map.keys().filter(|key| !order.0.iter().any(|(k, _)| k == *key)).map(|key| (key, &no_order)));
     let keys: Vec<(&String, &KeyOrder)> = ordered.filter(|(key, _)| map.contains_key(*key)).collect();
     let count = keys.len();
     for (index, (key, inner_order)) in keys.into_iter().enumerate() {
@@ -352,12 +356,9 @@ mod tests {
     #[test]
     fn keymap_schema_rejects_what_the_compiler_drops() {
         let keymap = jsonschema_validator(&keymap_schema());
-        for bad in [
-            json!({ "bindings": {} }),
-            json!([{ "bindings": { "x": 3 } }]),
-            json!([{ "bindings": { "x": "Not.An.Id" } }]),
-            json!([{ "unknown": 1 }]),
-        ] {
+        for bad in
+            [json!({ "bindings": {} }), json!([{ "bindings": { "x": 3 } }]), json!([{ "bindings": { "x": "Not.An.Id" } }]), json!([{ "unknown": 1 }])]
+        {
             assert!(!keymap.is_valid(&bad), "{bad}");
         }
         assert!(keymap.is_valid(&json!([{ "context": "Reader", "bindings": { "n": null, "g g": ["view.zoom.set", { "percent": 100 }] } }])));
