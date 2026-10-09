@@ -1,0 +1,16 @@
+[package]
+name = "margin"
+description = "Margin: a reader-first PDF app built on PdfCraft's interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence", "links"] }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

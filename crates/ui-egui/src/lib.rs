@@ -131,6 +131,15 @@ impl Mode {
     }
 }
 
+/// Which app wears this UI: PdfCraft's workbench, or Margin's reader layout (the Margin fork,
+/// `apps/margin`). Every Margin difference branches on it; `PdfCraft` keeps upstream behaviour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Flavor {
+    #[default]
+    PdfCraft,
+    Margin,
+}
+
 /// What the left panel shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftPanel {
@@ -342,6 +351,8 @@ pub struct RecentFile {
 
 pub struct PdfCraftApp {
     pub session: Session,
+    /// PdfCraft or Margin (see [`Flavor`]).
+    pub flavor: Flavor,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
@@ -604,6 +615,7 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            flavor: Flavor::PdfCraft,
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
@@ -733,6 +745,11 @@ impl PdfCraftApp {
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
         }
+    }
+
+    /// A new app wearing `flavor`'s interface.
+    pub fn with_flavor(flavor: Flavor) -> Self {
+        Self { flavor, ..Self::new() }
     }
 
     /// Fields are being edited (Prepare a form is open or a field tool is picked), unless the
