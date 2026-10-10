@@ -77,13 +77,13 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
         .horizontal_align(Align::Center)
         .font(theme::regular(11.5))
         .margin(vec2(2.0, 2.0));
-    let r = egui::Frame::NONE
+    let field = egui::Frame::NONE
         .fill(t.field)
         .stroke(Stroke::new(1.0, t.border))
         .corner_radius(CornerRadius::same(t.radius))
         .show(ui, |ui| ui.add(edit))
-        .inner
-        .on_hover_text("Go to page: type a number or label and press Enter");
+        .inner;
+    let r = look::tooltip(field, "Go to page: type a number or label and press Enter", None);
     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         let typed = view.page_input.clone();
         if !view.go_to_typed(&typed, labels) {

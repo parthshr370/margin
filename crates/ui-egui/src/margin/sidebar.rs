@@ -87,8 +87,9 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             top_buttons(app, ui);
             document_card(app, ui, t, summary);
         });
+    // The tabs' pills sit the small step in from the panel's edges, as the panes' rows do.
     egui::Panel::bottom("margin_sidebar_tabs")
-        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: GAP as i8, bottom: edge }))
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP as i8, right: GAP as i8, top: GAP as i8, bottom: edge }))
         .show(ui, |ui| tab_strip(app, ui, t));
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP as i8, right: GAP as i8, top: 0, bottom: GAP as i8 }))
@@ -306,8 +307,8 @@ fn toc_row(ui: &mut egui::Ui, t: &Tokens, item: &OutlineItem, path: &mut Vec<usi
     if !item.children.is_empty() {
         let twisty = Rect::from_center_size(egui::pos2(left + TWISTY / 2.0, rect.center().y), vec2(TWISTY, TWISTY));
         let click = ui.interact(twisty, ui.id().with(("toc-twisty", path.as_slice())), Sense::click());
-        icons::paint(ui, twisty, if open { "chevron-down" } else { "chevron-right" }, 12.0, t.text_muted);
-        if click.on_hover_text(if open { "Collapse" } else { "Expand" }).clicked() {
+        icons::paint(ui, twisty, if open { "chevron-down" } else { "chevron-right" }, 12.0, look::icon_tint(t, false, click.hovered()));
+        if look::tooltip(click, if open { "Collapse" } else { "Expand" }, None).clicked() {
             cx.flip = Some(path.clone());
         }
     }
@@ -440,8 +441,8 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
                     let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
                     let label_width = if resp.hovered() || ui.rect_contains_pointer(side) {
                         let x = ui.interact(side, ui.id().with(("remove-page-bookmark", *page)), Sense::click());
-                        icons::paint(ui, side, "x", 12.0, if x.hovered() { t.text } else { t.text_muted });
-                        if x.on_hover_text("Remove bookmark").clicked() {
+                        icons::paint(ui, side, "x", 12.0, look::icon_tint(t, false, x.hovered()));
+                        if look::tooltip(x, "Remove bookmark", None).clicked() {
                             remove = Some(*page);
                         }
                         ROW_BUTTON

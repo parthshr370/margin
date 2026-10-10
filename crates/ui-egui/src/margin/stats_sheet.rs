@@ -219,7 +219,7 @@ fn calendar(ui: &mut egui::Ui, t: &Tokens, data: &Data) {
                 painter.rect_stroke(cell.expand(1.0), CornerRadius::same(3), Stroke::new(1.0, t.text), egui::StrokeKind::Outside);
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &label));
             }
-            resp.on_hover_text(label);
+            super::look::tooltip(resp, &label, None);
         }
     }
 }

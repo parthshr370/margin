@@ -1,7 +1,11 @@
 //! Margin's shared look, the owner's Obsidian "Ember Night": list rows, icon buttons, section
-//! labels and tooltips. A selected row gets the hover fill and accent text, with no accent bar;
-//! hovering only fills; secondary columns (page numbers) stay muted. Colours and the corner radius
-//! are the theme's [`Tokens`], so the palette lives in one place (`theme.rs`).
+//! labels and tooltips. Hovered and selected rows and icon buttons share one pill (the theme's
+//! `hover`, #1b1b1b, opaque, at the theme's 6-point radius), with no accent bar; a selected one
+//! has accent text and icon, a hovered one bright text and an accent icon; secondary columns
+//! (page numbers) stay muted; a disabled control stays muted and gets no pill. Colours and the
+//! corner radius are the theme's [`Tokens`], so the palette lives in one place (`theme.rs`);
+//! the two Ember colours that are not tokens, the tooltip card and the accent button's hover,
+//! are named here.
 //!
 //! PdfCraft's panels that Margin's sidebar hosts (Bookmarks, Pages, the Highlights list) paint
 //! their rows here when their [`RowLook`] is [`RowLook::Ember`].
@@ -43,10 +47,17 @@ pub const BUTTON_HEIGHT: f32 = 28.0;
 const BUTTON_TEXT: f32 = 12.5;
 /// An icon's size on a text button.
 const BUTTON_ICON: f32 = 14.0;
-/// The accent button lightens by this share of white when hovered, and keeps this share of its
-/// colour while pressed.
-const ACCENT_HOVER_LIGHTEN: f32 = 0.08;
+/// The accent button keeps this share of its colour while pressed.
 const ACCENT_PRESSED_SHADE: f32 = 0.85;
+/// An accent-filled button's hover colour: Ember's `--interactive-accent-hover` (`--magenta`).
+const ACCENT_HOVER: Color32 = Color32::from_rgb(0xEE, 0x79, 0x48);
+/// The tooltip card's fill, measured on the owner's Obsidian tooltip (#1a1a1a, opaque).
+const TOOLTIP_FILL: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
+/// The tooltip's padding, its distance from its control (room for the arrow) and the arrow's
+/// half-width and height.
+const TOOLTIP_PAD: egui::Margin = egui::Margin::symmetric(8, 5);
+const TOOLTIP_GAP: f32 = 8.0;
+const TOOLTIP_ARROW: f32 = 5.0;
 /// A colour row's cells (the mockup's `.cdot`: 30 px, 14 px dots), the gap between them, and
 /// the ring around the current colour (its width and its gap from the dot).
 const COLOR_CELL: f32 = 30.0;
@@ -137,9 +148,10 @@ pub(crate) fn shortcut_with(app: &PdfCraftApp, command: &str, args: &Value) -> O
     spec.shortcut.filter(|_| app.margin_keys.falls_back(spec)).map(|keys| keys.label(mac))
 }
 
-/// A tooltip naming the control, with its shortcut after it in muted text.
+/// A tooltip naming the control, with its shortcut after it in muted text. A disabled control
+/// shows it too, so its label can say why it is off.
 pub(crate) fn tooltip(resp: Response, label: &str, shortcut: Option<&str>) -> Response {
-    resp.on_hover_ui(|ui| {
+    tooltip_ui(&resp, |ui| {
         let t = Tokens::get(ui.ctx());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
@@ -148,11 +160,57 @@ pub(crate) fn tooltip(resp: Response, label: &str, shortcut: Option<&str>) -> Re
                 ui.label(egui::RichText::new(keys).color(t.text_muted));
             }
         });
-    })
+    });
+    resp
 }
 
-/// An icon button with Margin's states: the hover fill when hovered, the hover fill and an accent
-/// icon when `on`. Screen readers and tests get `label`; the tooltip adds `shortcut`.
+/// Any tooltip contents on Margin's tooltip card: egui's own tooltip (its delay, placement inside
+/// the window and clear of the control), drawn as a dark rounded card with an arrow pointing at
+/// the control.
+pub(crate) fn tooltip_ui(resp: &Response, contents: impl FnOnce(&mut egui::Ui)) {
+    let mut tip = if resp.enabled() { egui::Tooltip::for_enabled(resp) } else { egui::Tooltip::for_disabled(resp) };
+    let t = Tokens::get(&resp.ctx);
+    let card = egui::Frame::popup(&resp.ctx.global_style()).fill(TOOLTIP_FILL).corner_radius(CornerRadius::same(t.radius)).inner_margin(TOOLTIP_PAD);
+    tip.popup = tip.popup.gap(TOOLTIP_GAP).frame(card);
+    if let Some(shown) = tip.show(contents) {
+        tooltip_arrow(&resp.ctx, &t, shown.response.layer_id, resp.rect, shown.response.rect);
+    }
+}
+
+/// The tooltip card's arrow: on the side of `card` that faces `control`, as close to the
+/// control's middle as the card's rounded corners allow.
+fn tooltip_arrow(ctx: &egui::Context, t: &Tokens, layer: egui::LayerId, control: Rect, card: Rect) {
+    let reach = TOOLTIP_ARROW;
+    let inset = f32::from(t.radius) + reach;
+    let along =
+        |middle: f32, low: f32, high: f32| if low + inset <= high - inset { middle.clamp(low + inset, high - inset) } else { (low + high) / 2.0 };
+    // The base sits one point inside the card, over its border.
+    let (tip, base) = if card.top() >= control.bottom() {
+        let x = along(control.center().x, card.left(), card.right());
+        (egui::pos2(x, card.top() - reach), [egui::pos2(x - reach, card.top() + 1.0), egui::pos2(x + reach, card.top() + 1.0)])
+    } else if card.bottom() <= control.top() {
+        let x = along(control.center().x, card.left(), card.right());
+        (egui::pos2(x, card.bottom() + reach), [egui::pos2(x - reach, card.bottom() - 1.0), egui::pos2(x + reach, card.bottom() - 1.0)])
+    } else if card.left() >= control.right() {
+        let y = along(control.center().y, card.top(), card.bottom());
+        (egui::pos2(card.left() - reach, y), [egui::pos2(card.left() + 1.0, y - reach), egui::pos2(card.left() + 1.0, y + reach)])
+    } else if card.right() <= control.left() {
+        let y = along(control.center().y, card.top(), card.bottom());
+        (egui::pos2(card.right() + reach, y), [egui::pos2(card.right() - 1.0, y - reach), egui::pos2(card.right() - 1.0, y + reach)])
+    } else {
+        // Overlapping (a tooltip at the pointer): no side faces the control.
+        return;
+    };
+    let painter = ctx.layer_painter(layer);
+    painter.add(egui::Shape::convex_polygon(vec![base[0], tip, base[1]], TOOLTIP_FILL, Stroke::NONE));
+    let edge = Stroke::new(1.0, t.border);
+    painter.line_segment([base[0], tip], edge);
+    painter.line_segment([tip, base[1]], edge);
+}
+
+/// An icon button with Margin's states: the pill when hovered (the icon in the accent), the pill
+/// and an accent icon when `on`, muted with no pill when disabled. Screen readers and tests get
+/// `label`; the tooltip adds `shortcut`.
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str, shortcut: Option<&str>) -> Response {
     paint_button(ui, icon, size, on, label, shortcut, None)
 }
@@ -165,11 +223,13 @@ pub(crate) fn rail_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, la
 
 fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str, shortcut: Option<&str>, border: Option<Color32>) -> Response {
     let t = Tokens::get(ui.ctx());
+    let enabled = ui.is_enabled();
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
     let stroke = border.map_or(Stroke::NONE, |c| Stroke::new(1.0, c));
-    ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on), stroke, egui::StrokeKind::Inside);
-    icons::paint(ui, rect, icon, (size * ICON_SHARE).round(), icon_tint(&t, on, resp.hovered()));
+    ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on && enabled), stroke, egui::StrokeKind::Inside);
+    let tint = if enabled { icon_tint(&t, on, resp.hovered()) } else { t.text_faint };
+    icons::paint(ui, rect, icon, (size * ICON_SHARE).round(), tint);
     tooltip(resp, label, shortcut)
 }
 
@@ -237,11 +297,12 @@ pub(crate) fn slider_style(ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// An icon and a word ("Tools") with [`icon_button`]'s states; `tip` is its tooltip.
+/// An icon and a word ("Tools") with [`icon_button`]'s states (the word in the accent too when
+/// `on`); `tip` is its tooltip.
 pub(crate) fn text_button(ui: &mut egui::Ui, icon: &str, label: &str, height: f32, on: bool, tip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let icon_size = (height * ICON_SHARE).round();
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(13.0), t.text);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(13.0), Color32::PLACEHOLDER);
     let width = GAP + icon_size + GAP / 2.0 + galley.size().x + GAP;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label));
@@ -250,7 +311,7 @@ pub(crate) fn text_button(ui: &mut egui::Ui, icon: &str, label: &str, height: f3
     let icon_rect = Rect::from_center_size(egui::pos2(rect.left() + GAP + icon_size / 2.0, rect.center().y), Vec2::splat(icon_size));
     icons::paint(ui, icon_rect, icon, icon_size, tint);
     let text_pos = egui::pos2(icon_rect.right() + GAP / 2.0, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(text_pos, galley, t.text);
+    ui.painter().galley(text_pos, galley, row_text(&t, on, t.text));
     tooltip(resp, tip, None)
 }
 
@@ -261,15 +322,10 @@ fn button_fill(ctx: &egui::Context, t: &Tokens, resp: &Response, on: bool) -> Co
     if resp.is_pointer_button_down_on() { t.pressed } else { t.hover.gamma_multiply(shown) }
 }
 
-/// An icon's colour on a button or tab: the accent when on, full text when hovered.
+/// An icon's colour on a button or tab: the accent when on or hovered (Ember's
+/// `--icon-color-hover`), the muted icon colour otherwise.
 pub(crate) fn icon_tint(t: &Tokens, on: bool, hovered: bool) -> Color32 {
-    if on {
-        t.accent
-    } else if hovered {
-        t.text
-    } else {
-        t.icon
-    }
+    if on || hovered { t.accent } else { t.icon }
 }
 
 /// An on/off switch, the mockup's `.sw-t`: an accent track with a white knob on the right when
@@ -296,11 +352,8 @@ pub(crate) fn accent_button(ui: &mut egui::Ui, label: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 2.0 * GAP_LARGE, BUTTON_HEIGHT), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     let lift = motion::hover(ui.ctx(), resp.id, resp.hovered());
-    let fill = if resp.is_pointer_button_down_on() {
-        t.accent.gamma_multiply(ACCENT_PRESSED_SHADE)
-    } else {
-        t.accent.lerp_to_gamma(Color32::WHITE, ACCENT_HOVER_LIGHTEN * lift)
-    };
+    let fill =
+        if resp.is_pointer_button_down_on() { t.accent.gamma_multiply(ACCENT_PRESSED_SHADE) } else { t.accent.lerp_to_gamma(ACCENT_HOVER, lift) };
     ui.painter().rect_filled(rect, CornerRadius::same(t.radius), fill);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
     resp
@@ -351,8 +404,9 @@ pub(crate) struct Segment<'a> {
     pub tip: Option<&'a str>,
 }
 
-/// The mockup's segmented control (`.seg`): choices in a hairline-bordered well, the chosen one a
-/// raised chip in full text, the others muted. Lays out left to right; returns the clicked index.
+/// The mockup's segmented control (`.seg`): choices in a hairline-bordered well, the chosen one
+/// on the pill in the accent, the others muted (bright and on the pill when hovered). Lays out
+/// left to right; returns the clicked index.
 pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let font = theme::regular(SEGMENT_TEXT);
@@ -373,10 +427,10 @@ pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<u
         let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
         let fill = if segment.selected { t.selected } else { t.hover.gamma_multiply(shown) };
         ui.painter().rect_filled(rect, CornerRadius::same(t.radius.saturating_sub(1)), fill);
-        let color = if segment.selected { t.text } else { t.text_muted.lerp_to_gamma(t.text, shown) };
+        let color = if segment.selected { t.accent } else { t.text_muted.lerp_to_gamma(t.text, shown) };
         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
         let resp = match segment.tip {
-            Some(tip) => resp.on_hover_text(tip),
+            Some(tip) => tooltip(resp, tip, None),
             None => resp,
         };
         if resp.clicked() {

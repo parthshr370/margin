@@ -266,10 +266,8 @@ fn section_header(ui: &mut egui::Ui, t: &Tokens, title: &str) -> bool {
             ui.label(look::section_caps(t, i18n::t(title), None));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = egui::RichText::new(i18n::t("Set as default")).font(theme::regular(BODY_TEXT)).color(t.accent_text);
-                ui.add(egui::Label::new(label).sense(Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(i18n::t("Use this for documents opened for the first time (settings.jsonc)"))
-                    .clicked()
+                let link = ui.add(egui::Label::new(label).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
+                look::tooltip(link, i18n::t("Use this for documents opened for the first time (settings.jsonc)"), None).clicked()
             })
             .inner
         })
@@ -552,7 +550,7 @@ fn slider_row(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut u16, range
         ui.spacing_mut().slider_width = POPOVER_WIDTH - LABEL_WIDTH - VALUE_WIDTH - 2.0 * GAP_LARGE;
         look::slider_style(ui, t);
         // A slider senses drags, not clicks, so its response never reports a double-click.
-        let resp = ui.add(egui::Slider::new(value, range).show_value(false)).on_hover_text(i18n::t("Double-click to reset"));
+        let resp = look::tooltip(ui.add(egui::Slider::new(value, range).show_value(false)), i18n::t("Double-click to reset"), None);
         let on_slider = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| resp.rect.contains(p));
         // A third quick click counts as a triple, not a double: either resets.
         let repeated = ui.input(|i| {

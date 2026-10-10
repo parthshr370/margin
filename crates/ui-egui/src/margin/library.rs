@@ -729,7 +729,7 @@ fn shelf_picker(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &
                 for folder in folders {
                     let folder = folder.to_string_lossy().into_owned();
                     let on = app.margin_library.folder.as_deref() == Some(folder.as_str());
-                    let resp = segment(ui, t, &crate::folders_ui::folder_name(&folder), on).on_hover_text(&folder);
+                    let resp = look::tooltip(segment(ui, t, &crate::folders_ui::folder_name(&folder), on), &folder, None);
                     if resp.clicked() {
                         app.margin_library.folder = Some(folder);
                     }

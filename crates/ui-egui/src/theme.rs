@@ -143,9 +143,11 @@ impl Tokens {
                 text_muted: Color32::from_rgb(0x80, 0x80, 0x80),
                 text_faint: Color32::from_rgb(0x60, 0x60, 0x60),
                 icon: Color32::from_rgb(0x80, 0x80, 0x80),
-                hover: Color32::from_rgb(0x14, 0x14, 0x14),
+                // The owner's measured Obsidian row and icon pill (hovered and selected rows
+                // alike): #1b1b1b, opaque. Not `accent_soft`, which marks text.
+                hover: Color32::from_rgb(0x1B, 0x1B, 0x1B),
                 pressed: Color32::from_rgb(0x1E, 0x1E, 0x1E),
-                selected: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                selected: Color32::from_rgb(0x1B, 0x1B, 0x1B),
                 accent: Color32::from_rgb(0xEC, 0x5B, 0x2B),
                 accent_text: Color32::from_rgb(0xEC, 0x5B, 0x2B),
                 // The accent at 25 % (Ember's text-highlight "mark" colour).
@@ -153,7 +155,8 @@ impl Tokens {
                 field: Color32::from_rgb(0x0A, 0x0A, 0x0A),
                 badge_new: Color32::from_rgb(0xEC, 0x5B, 0x2B),
                 page_shadow: Color32::from_black_alpha(120),
-                radius: 4,
+                // The pill's corner radius (the owner's rows and icon buttons).
+                radius: 6,
             },
         }
     }

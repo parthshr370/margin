@@ -656,12 +656,12 @@ pub(crate) fn menu_items(ui: &mut egui::Ui, notes: &mut NotesUi, a: &Annotation)
         return;
     }
     let copy = ui.button("Copy callout");
-    let copy = if notes.external { copy.on_hover_text(EXTERNAL_TIP) } else { copy.on_hover_text("Copy as a PDF++ callout") };
-    if copy.clicked() {
+    if look::tooltip(copy, if notes.external { EXTERNAL_TIP } else { "Copy as a PDF++ callout" }, None).clicked() {
         notes.ask(ui.ctx(), Request::CopyCallout(a.page, a.index));
         ui.close();
     }
-    if ui.button("Open in Obsidian").on_hover_text("Add this highlight to the reading note and open it in Obsidian").clicked() {
+    let open = ui.button("Open in Obsidian");
+    if look::tooltip(open, "Add this highlight to the reading note and open it in Obsidian", None).clicked() {
         notes.ask(ui.ctx(), Request::Open(Some((a.page, a.index))));
         ui.close();
     }
@@ -770,17 +770,20 @@ fn autoadd_row(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
 
 /// "Copy all" and "Write to note", sharing the row's width equally.
 fn action_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
-    let has_note = notes.note.is_ok();
     let width = ((ui.available_width() - look::GAP) / 2.0).max(0.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = look::GAP;
         let copy = look::chip_button(ui, "copy", "Copy all", width);
-        let copy = if notes.external { copy.on_hover_text(EXTERNAL_TIP) } else { copy.on_hover_text("Copy every highlight as PDF++ callouts") };
-        if copy.clicked() {
+        let copy_tip = if notes.external { EXTERNAL_TIP } else { "Copy every highlight as PDF++ callouts" };
+        if look::tooltip(copy, copy_tip, None).clicked() {
             notes.ask(ui.ctx(), Request::CopyAll);
         }
-        let write = ui.add_enabled_ui(has_note, |ui| look::chip_button(ui, "file-pen-line", "Write to note", width)).inner;
-        if write.on_hover_text("Append highlights the note doesn't have yet").clicked() {
+        let write = ui.add_enabled_ui(notes.note.is_ok(), |ui| look::chip_button(ui, "file-pen-line", "Write to note", width)).inner;
+        let write_tip = match &notes.note {
+            Ok(_) => "Append highlights the note doesn't have yet".to_owned(),
+            Err(why) => format!("Write to note: {why}"),
+        };
+        if look::tooltip(write, &write_tip, None).clicked() {
             notes.ask(ui.ctx(), Request::Write);
         }
     });

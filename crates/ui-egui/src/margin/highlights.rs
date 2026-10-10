@@ -158,6 +158,8 @@ struct CardInput<'a> {
     notes_on: bool,
     /// The PDF isn't in the vault, so callouts link to its file.
     external: bool,
+    /// Why there is no reading note to open (no vault, a bad template), if there is none.
+    no_note: Option<&'a str>,
 }
 
 impl CardInput<'_> {
@@ -176,6 +178,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     let info = &doc.info;
     view.margin.quotes.refresh(doc.edit_generation(), info, &view.texts);
     let mut out = Outcome::default();
+    let no_note = view.comments.notes.note.clone().err();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         obsidian::panel_block(ui, t, &mut view.comments.notes);
         ui.spacing_mut().item_spacing.y = CARD_SPACING;
@@ -192,6 +195,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
                 allowed: doc.allows_annotation(),
                 notes_on: view.comments.notes.enabled,
                 external: view.comments.notes.external,
+                no_note: no_note.as_deref(),
             };
             card(ui, &input, view, &mut out);
         }
@@ -323,7 +327,7 @@ fn meta_row(ui: &mut egui::Ui, input: &CardInput<'_>, actions_shown: f32) -> Opt
         swatch.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Colour: {colour}")));
         let edge = Stroke::new(1.0, Color32::from_black_alpha(SWATCH_EDGE_ALPHA));
         ui.painter().circle(rect.center(), SWATCH / 2.0, shown_color(input.notes, a.color), edge);
-        ui.add(icons::image(subtype_icon(&a.subtype), KIND_ICON, t.text_muted)).on_hover_text(kind_label(a));
+        look::tooltip(ui.add(icons::image(subtype_icon(&a.subtype), KIND_ICON, t.text_muted)), kind_label(a), None);
         let page = egui::RichText::new(format!("p. {}", input.page_label)).font(theme::regular(META_TEXT)).color(t.text_muted);
         ui.add(egui::Label::new(page).selectable(false));
         let actions_width = ACTION_COUNT * ACTION + (ACTION_COUNT - 1.0) * ACTION_GAP;
@@ -354,7 +358,11 @@ fn actions(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
         if look::icon_button(ui, "copy", ACTION, false, copy_tip, None).clicked() {
             action = Some(Action::CopyCallout);
         }
-        if look::icon_button(ui, "external-link", ACTION, false, "Open in Obsidian", None).clicked() {
+        let (open_tip, can_open) = match input.no_note {
+            Some(why) => (format!("Open in Obsidian: {why}"), false),
+            None => ("Open in Obsidian".to_owned(), true),
+        };
+        if ui.add_enabled_ui(can_open, |ui| look::icon_button(ui, "external-link", ACTION, false, &open_tip, None)).inner.clicked() {
             action = Some(Action::OpenInObsidian);
         }
     });
@@ -408,11 +416,13 @@ fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     ui.separator();
     if input.notes_on {
         let copy = ui.button("Copy callout");
-        let copy = if input.external { copy.on_hover_text(obsidian::EXTERNAL_TIP) } else { copy };
+        let copy = if input.external { look::tooltip(copy, obsidian::EXTERNAL_TIP, None) } else { copy };
         if copy.clicked() {
             action = Some(Action::CopyCallout);
         }
-        if ui.button("Open in Obsidian").on_hover_text("Add this highlight to the reading note and open it in Obsidian").clicked() {
+        let open = ui.add_enabled(input.no_note.is_none(), egui::Button::new("Open in Obsidian"));
+        let tip = input.no_note.map_or_else(|| "Add this highlight to the reading note and open it in Obsidian".to_owned(), str::to_owned);
+        if look::tooltip(open, &tip, None).clicked() {
             action = Some(Action::OpenInObsidian);
         }
     }
