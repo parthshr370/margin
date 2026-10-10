@@ -16,9 +16,9 @@ mod logging;
 /// Freedesktop app id (the Wayland app id).
 const APP_ID: &str = "margin";
 
-/// The app icon: PdfCraft's own (assets/app-icon, contributor-original, see ATTRIBUTION.toml)
-/// until Margin has one.
-const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png");
+/// The app icon: Margin's logo (contributor-original, see ATTRIBUTION.toml), decoded as
+/// PdfCraft decodes its own (`eframe::icon_data`).
+const APP_ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
 /// The settings key inside `app.ron` (PdfCraftApp saves under it); `app.ron` itself is in
 /// Margin's own folder.

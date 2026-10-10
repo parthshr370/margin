@@ -2816,8 +2816,19 @@ source = "Contributor-original (see assets/app-icon/README.md)"
 licence = "MIT OR Apache-2.0"
 licence_file = "assets/app-icon/LICENSE.txt"
 kind = "icon"
-usage = "Linux hicolor theme icon (packaging/linux/ai.storyteller.pdfcraft.desktop); runtime window icon on Windows and Linux (apps/pdfcraft/src/main.rs, and Margin's apps/margin/src/main.rs until it has its own)"
+usage = "Linux hicolor theme icon (packaging/linux/ai.storyteller.pdfcraft.desktop); runtime window icon on Windows and Linux (apps/pdfcraft/src/main.rs)"
 sha256 = "cde7ee8c5ee38f9fc40a429fd9e6d99a035bcd321701fce331bb13bac126614d"
+
+[[asset]]
+path = "apps/margin/assets/icon.png"
+title = "Margin app icon, 512 px"
+author = "Margin contributors (made for Margin under the project owner's direction, approved by the owner)"
+source = "Contributor-original (see apps/margin/assets/LICENSE.txt)"
+licence = "MIT OR Apache-2.0"
+licence_file = "apps/margin/assets/LICENSE.txt"
+kind = "icon"
+usage = "Margin's runtime window icon (apps/margin/src/main.rs)"
+sha256 = "90a8d921de4f26b84faddf0cee424188a9a8c1f4e9c61f8b0bf74faafe365b78"
 
 [[asset]]
 path = "assets/app-icon/hicolor/512x512/apps/ai.storyteller.pdfcraft.png"
