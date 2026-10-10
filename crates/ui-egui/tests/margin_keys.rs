@@ -10,12 +10,17 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
 fn fixture() -> Vec<u8> {
-    let objs = [
+    pdf(2)
+}
+
+/// `pages` blank 200×300 pages.
+fn pdf(pages: usize) -> Vec<u8> {
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();
+    let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
-        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] >>".to_owned(),
-        "<< /Type /Page /Parent 2 0 R >>".to_owned(),
-        "<< /Type /Page /Parent 2 0 R >>".to_owned(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 200 300] >>", kids.join(" ")),
     ];
+    objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_owned()));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -39,13 +44,17 @@ fn config_dir(name: &str) -> PathBuf {
 }
 
 fn harness(dir: &Path) -> Harness<'static, PdfCraftApp> {
+    harness_with(dir, fixture())
+}
+
+fn harness_with(dir: &Path, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let dir = dir.to_path_buf();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
         app.set_option("language", "en").unwrap();
         app.margin_keys.set_config_dir(dir.clone());
         app.margin_keys.set_data_dir(dir.join("data"));
-        app.open_bytes("doc.pdf", None, fixture()).unwrap();
+        app.open_bytes("doc.pdf", None, bytes.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -144,5 +153,82 @@ fn view_keys_run_through_the_keymap() {
     h.key_press(Key::Home);
     h.run_steps(3);
     assert_eq!(h.state().views[0].current, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn press(h: &mut Harness<'static, PdfCraftApp>, key: Key) {
+    h.key_press(key);
+    h.run_steps(3);
+}
+
+fn current(h: &Harness<'static, PdfCraftApp>) -> usize {
+    h.state().views[0].current
+}
+
+/// Types `text` the way a keyboard does: each key, then the character it types.
+fn type_keys(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    for ch in text.chars() {
+        let key = Key::from_name(&ch.to_string()).expect("a letter key");
+        h.key_press(key);
+        h.event(egui::Event::Text(ch.to_string()));
+        h.run_steps(2);
+    }
+}
+
+/// R8 QoL 13: the same keys in each layout. Scroll: j moves a line and never a page, Right
+/// turns one; Single: j/k turn the page; Two-up: Right/Left turn a spread, with and without a
+/// cover page; Home/End everywhere. Typing j, k, g in Find or the page field moves nothing.
+#[test]
+fn page_keys_follow_the_layout() {
+    const PAGES: usize = 6;
+    let dir = config_dir("layout-keys");
+    let mut h = harness_with(&dir, pdf(PAGES));
+    press(&mut h, Key::J);
+    assert_eq!(current(&h), 0, "Scroll: j scrolls a line");
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(current(&h), 1);
+    press(&mut h, Key::End);
+    assert_eq!(current(&h), PAGES - 1);
+    press(&mut h, Key::Home);
+    assert_eq!(current(&h), 0);
+
+    assert!(h.state_mut().execute("view.layout.single"));
+    h.run_steps(3);
+    press(&mut h, Key::J);
+    assert_eq!(current(&h), 1, "Single: j turns the page");
+    press(&mut h, Key::J);
+    press(&mut h, Key::K);
+    assert_eq!(current(&h), 1, "and k turns it back");
+
+    assert!(h.state_mut().execute("view.layout.two_up"));
+    h.state_mut().views[0].set_cover(false);
+    press(&mut h, Key::Home);
+    let turns = |h: &mut Harness<'static, PdfCraftApp>, keys: &[Key]| {
+        keys.iter().map(|key| {
+            press(h, *key);
+            current(h)
+        })
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(turns(&mut h, &[Key::ArrowRight, Key::ArrowRight, Key::ArrowLeft]), [2, 4, 2], "Two-up: spreads [0 1] [2 3] [4 5]");
+    h.state_mut().views[0].set_cover(true);
+    press(&mut h, Key::Home);
+    assert_eq!(
+        turns(&mut h, &[Key::ArrowRight, Key::ArrowRight, Key::ArrowLeft, Key::ArrowLeft]),
+        [1, 3, 1, 0],
+        "with a cover: [0] [1 2] [3 4] [5]"
+    );
+    let place = current(&h);
+
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(3);
+    type_keys(&mut h, "jkg");
+    assert_eq!(h.state().views[0].find.as_ref().map(|f| f.query.as_str()), Some("jkg"), "Find took the letters");
+    assert_eq!(current(&h), place, "typing in Find moves nothing");
+    press(&mut h, Key::Escape);
+    assert!(h.state_mut().execute("view.focus_page_input"));
+    h.run_steps(2);
+    type_keys(&mut h, "jk");
+    assert_eq!(current(&h), place, "typing in the page field moves nothing");
     std::fs::remove_dir_all(&dir).ok();
 }

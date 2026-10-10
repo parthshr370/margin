@@ -32,6 +32,9 @@
       "space": "reader.screen.down", "pagedown": "reader.screen.down", "shift-space": "reader.screen.up", "pageup": "reader.screen.up",
       "right": "reader.page.next", "left": "reader.page.prev", "secondary-pagedown": "reader.page.next", "secondary-pageup": "reader.page.prev",
       "home": "reader.page.first", "end": "reader.page.last" } },
+  // Single shows one page at a time: j/k turn it (Up/Down still pan an enlarged page). Two-up's
+  // Left/Right already turn a spread, by the cover rule.
+  { "context": "Reader && layout == single", "bindings": { "j": "reader.page.next", "k": "reader.page.prev" } },
   { "context": "Find > TextInput", "bindings": {
       "enter": "reader.find.next", "shift-enter": "reader.find.prev", "down": "reader.find.next", "up": "reader.find.prev" } },
   { "context": "Selection", "bindings": {
