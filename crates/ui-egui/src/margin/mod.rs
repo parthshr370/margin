@@ -12,6 +12,7 @@ pub mod display;
 pub mod focus;
 pub mod footer;
 pub mod header;
+pub mod highlights;
 pub mod keys;
 pub mod keysheet;
 #[cfg(not(target_arch = "wasm32"))]

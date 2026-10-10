@@ -22,8 +22,9 @@ use pdfcraft_engine::{DocId, Document};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 
 use crate::comments::CommentTool;
-use crate::theme::Tokens;
-use crate::{Flavor, PdfCraftApp, icons, widgets};
+use crate::margin::look;
+use crate::theme::{self, Tokens};
+use crate::{Flavor, PdfCraftApp, icons};
 
 /// The PDF++ colour set, in palette order (PDF++ defaults; the owner's `pdf-plus/data.json`).
 pub const PDF_PLUS_COLORS: [(&str, [u8; 3]); 4] =
@@ -54,7 +55,7 @@ pub struct NoteColor {
 }
 
 impl NoteColor {
-    fn rgb_f64(&self) -> [f64; 3] {
+    pub(crate) fn rgb_f64(&self) -> [f64; 3] {
         self.rgb.map(|c| f64::from(c) / 255.0)
     }
 }
@@ -148,12 +149,25 @@ impl Notes {
     /// [`Self::colors`]. No colour means the default (first) colour.
     pub fn color_label(&self, rgb: Option<[f32; 3]>) -> String {
         let Some(rgb) = rgb else { return self.colors.first().map(|c| c.name.to_lowercase()).unwrap_or_default() };
-        let bytes = rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-        match self.colors.iter().find(|c| c.rgb.iter().zip(bytes).all(|(a, b)| a.abs_diff(b) <= COLOR_MATCH_STEPS)) {
+        match self.color_named(rgb) {
             Some(c) => c.name.to_lowercase(),
-            None => format!("{},{},{}", bytes[0], bytes[1], bytes[2]),
+            None => {
+                let bytes = rgb_bytes(rgb);
+                format!("{},{},{}", bytes[0], bytes[1], bytes[2])
+            }
         }
     }
+
+    /// The palette colour `rgb` is (within [`COLOR_MATCH_STEPS`] per channel), if any.
+    pub fn color_named(&self, rgb: [f32; 3]) -> Option<&NoteColor> {
+        let bytes = rgb_bytes(rgb);
+        self.colors.iter().find(|c| c.rgb.iter().zip(bytes).all(|(a, b)| a.abs_diff(b) <= COLOR_MATCH_STEPS))
+    }
+}
+
+/// A 0–1 colour as 8-bit channels (out-of-range values clamp).
+fn rgb_bytes(rgb: [f32; 3]) -> [u8; 3] {
+    rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
 /// A file-name slug: lowercase letters and digits, everything else folded into single dashes.
@@ -451,7 +465,7 @@ pub fn entry_key(a: &Annotation) -> String {
 }
 
 /// The text-markup comments of a document in reading order (page, then top to bottom).
-fn markup_comments(info: &DocInfo) -> Vec<&Annotation> {
+pub(crate) fn markup_comments(info: &DocInfo) -> Vec<&Annotation> {
     let mut list: Vec<&Annotation> = info.annotations.iter().filter(|a| is_markup(a)).collect();
     list.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])).then(a.rect[0].total_cmp(&b.rect[0])));
     list
@@ -621,7 +635,7 @@ pub struct NotesUi {
 }
 
 impl NotesUi {
-    fn ask(&mut self, ctx: &egui::Context, request: Request) {
+    pub(crate) fn ask(&mut self, ctx: &egui::Context, request: Request) {
         self.request = Some(request);
         ctx.request_repaint();
     }
@@ -672,40 +686,104 @@ pub(crate) fn card_buttons(ui: &mut egui::Ui, notes: &mut NotesUi, a: &Annotatio
 /// Side of a card's icon buttons (the comment card's own buttons are this size).
 const CARD_BUTTON: f32 = 22.0;
 
-/// The reading-note block at the top of the highlights list (the mockup's Highlights pane).
+/// The reading-note box at the top of the highlights list (the mockup's `.note-link`), on the
+/// spacing scale: padded by the large step, rows the small step apart. The note's path with an
+/// "Open note" button, the "Add highlights to this note" switch, then "Copy all" and "Write to
+/// note" sharing one row equally. Without a reading note (no vault) the path row says why and
+/// the switch and "Write to note" are off.
 pub(crate) fn panel_block(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
     if !notes.enabled {
         return;
     }
-    egui::Frame::NONE.fill(t.card).corner_radius(6).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+    egui::Frame::NONE.fill(t.card).stroke(egui::Stroke::new(1.0, t.border)).corner_radius(t.radius).inner_margin(look::GAP_LARGE).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.add(icons::image("file-text", 15.0, t.icon));
-            match &notes.note {
-                Ok(note) => ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_muted)).truncate()),
-                Err(why) => ui.add(egui::Label::new(egui::RichText::new(why).color(t.text_faint)).wrap()),
-            };
-        });
-        let mut on = notes.autoadd;
-        let toggle = ui.checkbox(&mut on, "Add highlights to this note").on_hover_text("Each new highlight becomes a PDF++ callout in the note");
-        if toggle.changed() {
-            notes.ask(ui.ctx(), Request::ToggleAutoadd);
-        }
-        ui.horizontal_wrapped(|ui| {
-            if widgets::ghost_button(ui, "external-link", "Open note").clicked() {
-                notes.ask(ui.ctx(), Request::Open(None));
-            }
-            let copy = widgets::ghost_button(ui, "copy", "Copy all");
-            let copy = if notes.external { copy.on_hover_text(EXTERNAL_TIP) } else { copy.on_hover_text("Copy every highlight as PDF++ callouts") };
-            if copy.clicked() {
-                notes.ask(ui.ctx(), Request::CopyAll);
-            }
-            if widgets::ghost_button(ui, "file-pen-line", "Write to note").on_hover_text("Append highlights the note doesn't have yet").clicked() {
-                notes.ask(ui.ctx(), Request::Write);
-            }
-        });
+        ui.spacing_mut().item_spacing = egui::vec2(look::GAP, look::GAP);
+        note_row(ui, t, notes);
+        autoadd_row(ui, t, notes);
+        action_row(ui, notes);
     });
-    ui.add_space(8.0);
+    ui.add_space(look::GAP);
+}
+
+/// Icon and button sizes and text sizes of the notes box.
+const NOTE_ICON: f32 = 14.0;
+const NOTE_BUTTON: f32 = 24.0;
+const NOTE_PATH_TEXT: f32 = 12.0;
+const NOTE_TITLE_TEXT: f32 = 12.5;
+const NOTE_SUB_TEXT: f32 = 11.5;
+/// Space between the switch's label and the line under it.
+const NOTE_SUB_GAP: f32 = 2.0;
+const AUTOADD_TITLE: &str = "Add highlights to this note";
+const AUTOADD_SUB: &str = "Each new highlight becomes a PDF++ callout";
+
+/// The reading note's path, truncated, and "Open note"; or why there is no note, wrapped.
+fn note_row(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
+    let width = ui.available_width();
+    let path = match &notes.note {
+        Ok(path) => path.clone(),
+        Err(why) => {
+            ui.horizontal_top(|ui| {
+                ui.add(icons::image("file-text", NOTE_ICON, t.icon));
+                let text = egui::RichText::new(why).font(theme::regular(NOTE_PATH_TEXT)).color(t.text_faint);
+                ui.add(egui::Label::new(text).wrap().selectable(false));
+            });
+            return;
+        }
+    };
+    ui.allocate_ui_with_layout(egui::vec2(width, NOTE_BUTTON), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.add(icons::image("file-text", NOTE_ICON, t.icon));
+        let label_width = (ui.available_width() - NOTE_BUTTON - look::GAP).max(0.0);
+        ui.allocate_ui_with_layout(egui::vec2(label_width, NOTE_BUTTON), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(label_width);
+            let text = egui::RichText::new(&path).font(theme::regular(NOTE_PATH_TEXT)).color(t.text_muted);
+            ui.add(egui::Label::new(text).truncate().selectable(false));
+        });
+        if look::icon_button(ui, "external-link", NOTE_BUTTON, false, "Open note in Obsidian", None).clicked() {
+            notes.ask(ui.ctx(), Request::Open(None));
+        }
+    });
+}
+
+/// "Add highlights to this note" and its explanation, with the switch against the right edge,
+/// centred on the text.
+fn autoadd_row(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
+    let has_note = notes.note.is_ok();
+    let width = ui.available_width();
+    let text_width = (width - look::SWITCH_SIZE.x - look::GAP_LARGE).max(0.0);
+    let (title_color, sub_color) = if has_note { (t.text, t.text_faint) } else { (t.text_faint, t.text_faint) };
+    let title = ui.painter().layout(AUTOADD_TITLE.to_owned(), theme::regular(NOTE_TITLE_TEXT), title_color, text_width);
+    let sub = ui.painter().layout(AUTOADD_SUB.to_owned(), theme::regular(NOTE_SUB_TEXT), sub_color, text_width);
+    let text_height = title.size().y + NOTE_SUB_GAP + sub.size().y;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, text_height.max(look::SWITCH_SIZE.y)), egui::Sense::hover());
+    let top = rect.center().y - text_height / 2.0;
+    let sub_top = top + title.size().y + NOTE_SUB_GAP;
+    ui.painter().galley(egui::pos2(rect.left(), top), title, title_color);
+    ui.painter().galley(egui::pos2(rect.left(), sub_top), sub, sub_color);
+    let switch_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - look::SWITCH_SIZE.x / 2.0, rect.center().y), look::SWITCH_SIZE);
+    // A child placed on the row, not allocated: allocating would move the cursor back up to the
+    // switch's bottom edge, and the next row would overlap this one.
+    let mut place = ui.new_child(egui::UiBuilder::new().max_rect(switch_rect));
+    if place.add_enabled_ui(has_note, |ui| look::switch(ui, notes.autoadd, AUTOADD_TITLE)).inner.clicked() {
+        notes.ask(ui.ctx(), Request::ToggleAutoadd);
+    }
+}
+
+/// "Copy all" and "Write to note", sharing the row's width equally.
+fn action_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
+    let has_note = notes.note.is_ok();
+    let width = ((ui.available_width() - look::GAP) / 2.0).max(0.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = look::GAP;
+        let copy = look::chip_button(ui, "copy", "Copy all", width);
+        let copy = if notes.external { copy.on_hover_text(EXTERNAL_TIP) } else { copy.on_hover_text("Copy every highlight as PDF++ callouts") };
+        if copy.clicked() {
+            notes.ask(ui.ctx(), Request::CopyAll);
+        }
+        let write = ui.add_enabled_ui(has_note, |ui| look::chip_button(ui, "file-pen-line", "Write to note", width)).inner;
+        if write.on_hover_text("Append highlights the note doesn't have yet").clicked() {
+            notes.ask(ui.ctx(), Request::Write);
+        }
+    });
 }
 
 /// The palette the colour swatches show in Margin (PdfCraft's own swatches otherwise).

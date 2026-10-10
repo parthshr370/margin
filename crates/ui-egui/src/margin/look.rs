@@ -38,6 +38,15 @@ const SEGMENT_HEIGHT: f32 = 28.0;
 const SEGMENT_INSET: f32 = 2.0;
 const SEGMENT_PAD_X: f32 = 10.0;
 const SEGMENT_TEXT: f32 = 12.0;
+/// A text button's height (Save, Cancel, the notes box's buttons) and its text size.
+pub const BUTTON_HEIGHT: f32 = 28.0;
+const BUTTON_TEXT: f32 = 12.5;
+/// An icon's size on a text button.
+const BUTTON_ICON: f32 = 14.0;
+/// The accent button lightens by this share of white when hovered, and keeps this share of its
+/// colour while pressed.
+const ACCENT_HOVER_LIGHTEN: f32 = 0.08;
+const ACCENT_PRESSED_SHADE: f32 = 0.85;
 
 /// How a list marks the row under the pointer and its selected row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -200,6 +209,62 @@ pub(crate) fn switch(ui: &mut egui::Ui, on: bool, label: &str) -> Response {
     let knob_x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
     let knob = t.text_muted.lerp_to_gamma(Color32::WHITE, how_on);
     ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), radius - SWITCH_KNOB_INSET, knob);
+    resp
+}
+
+/// The primary action of a group ("Save"): the accent fill and white text, [`BUTTON_HEIGHT`]
+/// tall, padded by the large step on each side.
+pub(crate) fn accent_button(ui: &mut egui::Ui, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(BUTTON_TEXT), Color32::WHITE);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 2.0 * GAP_LARGE, BUTTON_HEIGHT), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    let lift = motion::hover(ui.ctx(), resp.id, resp.hovered());
+    let fill = if resp.is_pointer_button_down_on() {
+        t.accent.gamma_multiply(ACCENT_PRESSED_SHADE)
+    } else {
+        t.accent.lerp_to_gamma(Color32::WHITE, ACCENT_HOVER_LIGHTEN * lift)
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(t.radius), fill);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+    resp
+}
+
+/// A secondary action as plain text ("Cancel"): muted, full text and the hover fill when
+/// hovered; the same size as an [`accent_button`].
+pub(crate) fn plain_button(ui: &mut egui::Ui, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(BUTTON_TEXT), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 2.0 * GAP_LARGE, BUTTON_HEIGHT), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
+    ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.text_muted.lerp_to_gamma(t.text, shown));
+    resp
+}
+
+/// A bordered button `width` wide with an icon and a word, both centred ("Copy all"): the
+/// hover fill when hovered, muted when disabled. Rows of them share the width equally.
+pub(crate) fn chip_button(ui: &mut egui::Ui, icon: &str, label: &str, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let enabled = ui.is_enabled();
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, BUTTON_HEIGHT), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(t.radius),
+        button_fill(ui.ctx(), &t, &resp, false),
+        Stroke::new(1.0, t.border),
+        egui::StrokeKind::Inside,
+    );
+    let color = if enabled { t.text } else { t.text_faint };
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::regular(BUTTON_TEXT), color);
+    let content = BUTTON_ICON + GAP / 2.0 + galley.size().x;
+    let left = rect.center().x - content.min(rect.width()) / 2.0;
+    let icon_rect = Rect::from_center_size(egui::pos2(left + BUTTON_ICON / 2.0, rect.center().y), Vec2::splat(BUTTON_ICON));
+    icons::paint(ui, icon_rect, icon, BUTTON_ICON, if enabled { icon_tint(&t, false, resp.hovered()) } else { t.text_faint });
+    let text_pos = egui::pos2(icon_rect.right() + GAP / 2.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(text_pos, galley, color);
     resp
 }
 

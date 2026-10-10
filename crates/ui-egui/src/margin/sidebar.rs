@@ -30,8 +30,6 @@ const INDENT: f32 = 12.0;
 /// The expand/collapse chevron's box.
 const TWISTY: f32 = 16.0;
 const COVER: egui::Vec2 = vec2(52.0, 67.0);
-/// Annotation subtypes the Highlights tab lists.
-const MARKUP: [&str; 4] = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
 /// The page bookmark list scrolls past this height, leaving room for the PDF's bookmarks.
 const PAGE_BOOKMARKS_MAX_HEIGHT: f32 = 220.0;
 const ROW_BUTTON: f32 = 22.0;
@@ -238,7 +236,11 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             crate::panels::panel_body(app, ui);
         }
         SidebarTab::Pages | SidebarTab::Other(_) => {
-            // PdfCraft's panel, its title row a section label here (`look::RowLook::Ember`).
+            // PdfCraft's panel, its title row a section label here (`look::RowLook::Ember`), the
+            // Comments panel's cards too.
+            if let Some(view) = app.views.get_mut(index) {
+                view.comments.rows = RowLook::Ember;
+            }
             ui.add_space(GAP_LARGE);
             crate::panels::panel_body(app, ui);
         }
@@ -337,38 +339,17 @@ fn toc_row(ui: &mut egui::Ui, t: &Tokens, item: &OutlineItem, path: &mut Vec<usi
     }
 }
 
-/// The Comments list showing only highlights, underlines, strikethroughs and squiggles.
+/// Highlights, underlines, strikethroughs and squiggles as cards (`margin::highlights`).
 fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
     let Some((_, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
-    let info = &doc.info;
-    let is_markup = |a: &pdfcraft_render::Annotation| MARKUP.contains(&a.subtype.as_str());
-    let count = info.annotations.iter().filter(|a| a.in_reply_to.is_none() && is_markup(a)).count();
+    let count = doc.info.annotations.iter().filter(|a| super::obsidian::is_markup(a)).count();
     pane_title(ui, t, "Highlights", Some(count));
     if count == 0 {
         empty(ui, t, &["No highlights yet.", "Pick Highlight in the rail, then select text."]);
         return;
     }
-    let Some(view) = app.views.get_mut(index) else { return };
-    // Hide every other kind for this draw only; the Comments panel's own filters stay as they were.
-    let kept = view.comments.hidden_types.clone();
-    for a in info.annotations.iter().filter(|a| !is_markup(a)) {
-        let kind = crate::comments_panel::kind_label(a).to_string();
-        if !view.comments.hidden_types.contains(&kind) {
-            view.comments.hidden_types.push(kind);
-        }
-    }
-    let mut nav = None;
-    view.comments.rows = RowLook::Ember;
-    // Read-only list: no "Add a comment" box (it would add a note, which this list hides).
-    let edit = egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| crate::comments_panel::show(ui, t, info, view, &app.comment_prefs, false, &mut nav))
-        .inner;
-    view.comments.hidden_types = kept;
-    if let Some(edit) = edit {
-        app.apply_edit(edit);
-    }
+    let nav = super::highlights::show(app, ui, t, index);
     navigate(app.views.get_mut(index), nav);
 }
 

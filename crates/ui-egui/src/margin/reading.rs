@@ -54,6 +54,8 @@ pub struct DocReading {
     pub display: DisplayState,
     /// Margin's page bookmarks (not the PDF's outline), in page order.
     pub bookmarks: Vec<Bookmark>,
+    /// The page text the Highlights tab's cards quote.
+    pub(crate) quotes: super::highlights::Quotes,
     /// Fit "read": the widest page `reading_width_px` wide, narrower windows permitting. Ends
     /// when the reader zooms or picks another fit.
     read_fit: Option<ReadFit>,

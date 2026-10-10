@@ -2014,6 +2014,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let rest: Vec<usize> = (0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
         text_pages.extend(rest);
     }
+    crate::margin::highlights::want_text(view, &mut text_pages);
     queue.extend(text_pages.into_iter().map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: TEXT_TAG }));
     if want_thumbs {
         let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);

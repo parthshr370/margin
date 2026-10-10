@@ -71,8 +71,39 @@ fn main() -> Result<(), String> {
         app
     });
     // Let fonts install, layout settle and background renders arrive.
-    let start = Instant::now();
     harness.run_steps(4);
+    settle(&mut harness);
+    for id in &margin_runs {
+        if !pdfcraft_ui_egui::margin::run(harness.state_mut(), id, &serde_json::Value::Null) {
+            eprintln!("shot: --margin-run {id}: not a Margin id");
+        }
+        harness.run_steps(6);
+        settle(&mut harness);
+    }
+    for (click, label) in &pointer {
+        let Some(node) = harness.query_by_label(label) else { return Err(format!("--click/--hover {label}: no such widget")) };
+        if *click {
+            node.click();
+        } else {
+            node.hover();
+        }
+        harness.run_steps(6);
+        // What the click showed may ask for renders (page text for the Highlights tab's quotes).
+        settle(&mut harness);
+    }
+    let mut image = harness.render()?;
+    if let Some(w) = width.filter(|w| *w < image.width()) {
+        let h = (image.height() as f64 * w as f64 / image.width() as f64).round() as u32;
+        image = image::imageops::resize(&image, w, h, image::imageops::FilterType::Lanczos3);
+    }
+    image.save(&out).map_err(|e| e.to_string())?;
+    eprintln!("shot: wrote {out} ({}×{})", image.width(), image.height());
+    Ok(())
+}
+
+/// Run frames until no render is pending (at most 20 s).
+fn settle(harness: &mut Harness<'_, PdfCraftApp>) {
+    let start = Instant::now();
     while start.elapsed() < Duration::from_secs(20) {
         harness.run_steps(2);
         if !harness.state().render_pending() {
@@ -83,27 +114,4 @@ fn main() -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(30));
     }
-    for id in &margin_runs {
-        if !pdfcraft_ui_egui::margin::run(harness.state_mut(), id, &serde_json::Value::Null) {
-            eprintln!("shot: --margin-run {id}: not a Margin id");
-        }
-        harness.run_steps(6);
-    }
-    for (click, label) in &pointer {
-        let Some(node) = harness.query_by_label(label) else { return Err(format!("--click/--hover {label}: no such widget")) };
-        if *click {
-            node.click();
-        } else {
-            node.hover();
-        }
-        harness.run_steps(6);
-    }
-    let mut image = harness.render()?;
-    if let Some(w) = width.filter(|w| *w < image.width()) {
-        let h = (image.height() as f64 * w as f64 / image.width() as f64).round() as u32;
-        image = image::imageops::resize(&image, w, h, image::imageops::FilterType::Lanczos3);
-    }
-    image.save(&out).map_err(|e| e.to_string())?;
-    eprintln!("shot: wrote {out} ({}×{})", image.width(), image.height());
-    Ok(())
 }
