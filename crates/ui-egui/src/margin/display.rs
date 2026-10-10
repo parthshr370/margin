@@ -216,10 +216,9 @@ const SWATCH_NAME_HEIGHT: f32 = 34.0;
 /// The label column of slider and choice rows (the mockup's `.ctl` grid: 92 px).
 const LABEL_WIDTH: f32 = 92.0;
 const VALUE_WIDTH: f32 = 36.0;
-/// A row holding only a text link ("Reset brightness & contrast"): shorter than a control row.
-const LINK_ROW: f32 = 24.0;
-/// The section header row (small caps label and "Set as default").
-const SECTION_HEADER: f32 = 16.0;
+/// A row holding a compact action (Reset under the sliders, a section header with "Set as
+/// default"): §6's 40-point control slot.
+const ACTION_ROW: f32 = 40.0;
 /// The mode description keeps room for this many lines, so the rows under it stay put when the
 /// mode (and its description's length) changes.
 const DESCRIPTION_LINES: f32 = 2.0;
@@ -324,16 +323,17 @@ fn body(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// A section header (small caps title, "Set as default" on the right) and the small step under
-/// it. True when "Set as default" was clicked.
+/// A section header (small caps title, a compact secondary "Set as default" on the right) and
+/// the small step under it. True when "Set as default" was clicked.
 fn section_header(ui: &mut egui::Ui, t: &Tokens, title: &str) -> bool {
     let clicked = ui
-        .allocate_ui_with_layout(vec2(POPOVER_WIDTH, SECTION_HEADER), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        .allocate_ui_with_layout(vec2(POPOVER_WIDTH, ACTION_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.label(look::section_caps(t, i18n::t(title), None));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = egui::RichText::new(i18n::t("Set as default")).font(theme::regular(BODY_TEXT)).color(t.accent_text);
-                let link = ui.add(egui::Label::new(label).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
-                look::tooltip(link, i18n::t("Use this for documents opened for the first time (settings.jsonc)"), None).clicked()
+                look::Button::secondary(look::ButtonSize::Compact, i18n::t("Set as default"))
+                    .tip(i18n::t("Use this for documents opened for the first time (settings.jsonc)"))
+                    .show(ui)
+                    .clicked()
             })
             .inner
         })
@@ -383,9 +383,13 @@ fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
     let (label, low, high) = (if mono { i18n::t("Cut-off") } else { i18n::t("Contrast") }, *CONTRAST_RANGE.start(), *CONTRAST_RANGE.end());
     let show = move |v: u16| if mono { format!("{}%", u32::from(v.saturating_sub(low)) * 100 / u32::from(high - low)) } else { v.to_string() };
     slider_row(ui, t, label, &mut state.color.contrast, CONTRAST_RANGE, show);
-    ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, LINK_ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let reset = egui::RichText::new(i18n::t("Reset brightness & contrast")).font(theme::regular(BODY_TEXT)).color(t.accent_text);
-        if ui.add(egui::Label::new(reset).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+    ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, ACTION_ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let reset = look::Button::secondary(look::ButtonSize::Compact, i18n::t("Reset"))
+            .icon("rotate-ccw")
+            .name(i18n::t("Reset brightness & contrast"))
+            .tip(i18n::t("Reset brightness & contrast"))
+            .show(ui);
+        if reset.clicked() {
             state.color.brightness = NEUTRAL_PERCENT;
             state.color.contrast = NEUTRAL_PERCENT;
         }

@@ -98,7 +98,7 @@ fn left_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let tools = if compact {
         look::icon_button(ui, "wrench", BUTTON, tools_open, "Tools", None)
     } else {
-        look::text_button(ui, "wrench", "Tools", BUTTON, tools_open, "All tools")
+        look::Button::ghost(look::ButtonSize::Compact, "Tools").icon("wrench").selected(tools_open).tip("All tools").show(ui)
     };
     if tools.clicked() {
         if tools_open {

@@ -651,8 +651,8 @@ fn editor(ui: &mut egui::Ui, t: &Tokens, key: (usize, usize), view: &mut DocView
     let (save, cancel) = ui
         .allocate_ui_with_layout(vec2(ui.available_width(), BUTTON_HEIGHT), Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = GAP;
-            let save = look::accent_button(ui, "Save").clicked();
-            (save, look::plain_button(ui, "Cancel").clicked())
+            let save = look::button_primary(ui, look::ButtonSize::Compact, "Save").clicked();
+            (save, look::button_secondary(ui, look::ButtonSize::Compact, "Cancel").clicked())
         })
         .inner;
     if save && let Some((page, index, text)) = view.comments.editing.take() {

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use egui::{Align, Align2, Rect, Sense, vec2};
 use pdfcraft_render::{DocInfo, OutlineItem};
 
-use super::look::{self, GAP_LARGE, ROW_PAD};
+use super::look::{self, ButtonSize, ROW_PAD};
 use super::sidebar::{ROW_HEIGHT, ROW_SPACING, empty, pane_title};
 use super::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, current_section};
 use crate::canvas::ViewPlace;
@@ -25,10 +25,11 @@ use crate::{PdfCraftApp, icons};
 const INDENT: f32 = 12.0;
 /// The expand/collapse chevron's box.
 const TWISTY: f32 = 16.0;
-/// Text sizes: entry titles, their page labels, the pane's links.
+/// Text sizes: entry titles and their page labels.
 const TITLE_TEXT: f32 = 12.5;
 const LABEL_TEXT: f32 = 11.0;
-const LINK_TEXT: f32 = 12.0;
+/// The action toolbar under the title (§6: 40 high, inset by the small step).
+const TOOLBAR_HEIGHT: f32 = 40.0;
 
 /// One document's Contents list between frames.
 #[derive(Clone, Default)]
@@ -45,7 +46,7 @@ struct Tree {
     marked_in_view: bool,
 }
 
-/// The pane's links under its title.
+/// The pane's actions under its title.
 #[derive(Default)]
 struct Links {
     reveal: bool,
@@ -67,7 +68,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     let current = current_section(&info.outline, view.current).unwrap_or_default();
     let pass = ui.ctx().cumulative_pass_nr();
     let history = (view.back.len(), view.back.last().copied());
-    let links = links(ui, t);
+    let expandable = info.outline.iter().any(|item| !item.children.is_empty());
+    let links = links(ui, !current.is_empty(), expandable);
     if let Some(open) = links.all {
         set_all(&info.outline, &mut tree.open, open);
     }
@@ -110,24 +112,27 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     }
 }
 
-/// "Reveal current", "Expand all" and "Collapse all", as text links.
-fn links(ui: &mut egui::Ui, t: &Tokens) -> Links {
+/// The toolbar: a compact secondary "Reveal current", then Expand all and Collapse all as
+/// labelled icon buttons, each off when it has nothing to do (no current entry, no entry with
+/// children).
+fn links(ui: &mut egui::Ui, has_current: bool, expandable: bool) -> Links {
     let mut links = Links::default();
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = GAP_LARGE;
-        let link = |ui: &mut egui::Ui, text: &str| {
-            let label = egui::RichText::new(text).font(theme::regular(LINK_TEXT)).color(t.accent_text);
-            ui.add(egui::Label::new(label).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
-        };
-        links.reveal = link(ui, "Reveal current");
-        if link(ui, "Expand all") {
-            links.all = Some(true);
-        }
-        if link(ui, "Collapse all") {
-            links.all = Some(false);
-        }
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), TOOLBAR_HEIGHT), egui::Layout::left_to_right(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = look::GAP;
+        ui.add_space(look::GAP);
+        let reveal = ui.add_enabled_ui(has_current, |ui| {
+            look::Button::secondary(ButtonSize::Compact, "Reveal current").tip("Scroll to the section you are reading").show(ui)
+        });
+        links.reveal = reveal.inner.clicked();
+        ui.add_enabled_ui(expandable, |ui| {
+            if look::button_icon(ui, ButtonSize::Compact, "chevron-down", "Expand all", None).clicked() {
+                links.all = Some(true);
+            }
+            if look::button_icon(ui, ButtonSize::Compact, "chevron-up", "Collapse all", None).clicked() {
+                links.all = Some(false);
+            }
+        });
     });
-    ui.add_space(look::GAP);
     links
 }
 

@@ -16,7 +16,7 @@ use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, Ve
 use margin_config::library::{self as store, Book, Collection, Cover, LibraryDb, Opened, ScanJob, ScanRequest};
 use margin_config::{LibrarySort, LibraryView};
 
-use super::look::{self, GAP, GAP_LARGE};
+use super::look::{self, ButtonSize, GAP, GAP_LARGE};
 use crate::theme::{self, Tokens};
 use crate::{Flavor, PdfCraftApp, icons};
 
@@ -44,6 +44,8 @@ const HERO_PAD: i8 = 16;
 const COVER_RADIUS: u8 = 4;
 const COVER_EDGE: Color32 = Color32::from_rgba_premultiplied(26, 26, 26, 26);
 const SEARCH_WIDTH: f32 = 300.0;
+/// The collection name field's text width: the spec's 192 point well less its side padding.
+const COLLECTION_FIELD_WIDTH: f32 = 176.0;
 const BUTTON: f32 = 32.0;
 const BAR_WIDTH: f32 = 70.0;
 /// Covers decoded per frame, and most kept as textures (far ones are dropped first).
@@ -645,7 +647,7 @@ fn hero_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize,
                 ui.add_space(GAP);
                 ui.label(egui::RichText::new(meta).font(theme::regular(12.5)).color(t.text_muted));
                 ui.add_space(GAP * 2.0);
-                if accent_button(ui, t, "Continue", "chevron-right", None).clicked() {
+                if look::Button::primary(ButtonSize::Prominent, "Continue").trailing("chevron-right").show(ui).clicked() {
                     actions.push(Action::Open(book.path.clone()));
                 }
             });
@@ -653,50 +655,25 @@ fn hero_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize,
     });
 }
 
-/// The mockup's accent button: label, then an icon.
-fn accent_button(ui: &mut egui::Ui, t: &Tokens, label: &str, icon: &str, shortcut: Option<&str>) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::semibold(13.0), t.titlebar);
-    let size = vec2(14.0 + galley.size().x + GAP + 16.0 + 14.0, BUTTON);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    let fill = if resp.hovered() { t.accent.gamma_multiply(0.9) } else { t.accent };
-    ui.painter().rect_filled(rect, CornerRadius::same(t.radius.saturating_add(2)), fill);
-    let ink = t.titlebar;
-    ui.painter().galley(pos2(rect.left() + 14.0, rect.center().y - galley.size().y / 2.0), galley, ink);
-    let icon_rect = Rect::from_center_size(pos2(rect.right() - 14.0 - 8.0, rect.center().y), Vec2::splat(16.0));
-    icons::paint(ui, icon_rect, icon, 15.0, ink);
-    look::tooltip(resp, label, shortcut)
-}
-
+/// The shelf's name and count, then Sort and the shelves as a segmented group on the right.
 fn shelf_header(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, count: usize) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
         look::section_label(ui, t, app.margin_library.shelf.label(), Some(count));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            for shelf in Shelf::ALL.into_iter().rev() {
-                let on = app.margin_library.shelf == shelf;
-                if segment(ui, t, shelf.label(), on).clicked() {
-                    app.margin_library.shelf = shelf;
-                }
+            let current = app.margin_library.shelf;
+            let segments = Shelf::ALL.map(|shelf| look::Segment { label: shelf.label(), selected: shelf == current, tip: None });
+            if let Some(shelf) = look::segmented(ui, &segments).and_then(|i| Shelf::ALL.get(i)) {
+                app.margin_library.shelf = *shelf;
             }
             ui.add_space(GAP_LARGE);
-            sort_menu(app, ui, t);
+            sort_menu(app, ui);
         });
     });
 }
 
-/// One button of a segmented control.
-fn segment(ui: &mut egui::Ui, t: &Tokens, label: &str, on: bool) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(12.5), if on { t.text } else { t.text_muted });
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 20.0, 28.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
-    look::row_fill(ui, t, rect, &resp, on);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.text);
-    resp
-}
-
-fn sort_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+/// Sort: a compact secondary button with a chevron, opening the sort orders as a menu.
+fn sort_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let label = |sort: LibrarySort| match sort {
         LibrarySort::Recent => "Recent",
         LibrarySort::Title => "Title",
@@ -704,46 +681,54 @@ fn sort_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         LibrarySort::Progress => "Progress",
         LibrarySort::Added => "Added",
     };
-    let current = app.margin_library.sort;
-    egui::ComboBox::from_id_salt("margin-library-sort")
-        .selected_text(egui::RichText::new(format!("Sort: {}", label(current))).font(theme::regular(12.5)).color(t.text_muted))
-        .show_ui(ui, |ui| {
-            for sort in [LibrarySort::Recent, LibrarySort::Title, LibrarySort::Author, LibrarySort::Progress, LibrarySort::Added] {
-                ui.selectable_value(&mut app.margin_library.sort, sort, label(sort));
+    let text = format!("Sort: {}", label(app.margin_library.sort));
+    let button = look::Button::secondary(ButtonSize::Compact, &text).trailing("chevron-down").show(ui);
+    egui::Popup::menu(&button).show(|ui| {
+        for sort in [LibrarySort::Recent, LibrarySort::Title, LibrarySort::Author, LibrarySort::Progress, LibrarySort::Added] {
+            if ui.selectable_label(app.margin_library.sort == sort, label(sort)).clicked() {
+                app.margin_library.sort = sort;
+                ui.close();
             }
-        });
+        }
+    });
 }
 
-/// The Folders shelf's folder chips, or the Collections shelf's collections and "New".
+/// A filter chip: a standard secondary button, the chosen one selected (check, accent edge).
+fn chip(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    look::Button::secondary(ButtonSize::Standard, label).selected(on).show(ui)
+}
+
+/// The Folders shelf's folder chips, or the Collections shelf's collection chips and, under
+/// them, the row that creates one.
 fn shelf_picker(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(GAP / 2.0, GAP / 2.0);
+        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
         match app.margin_library.shelf {
             Shelf::Folders => {
                 let folders: Vec<PathBuf> = folder_paths(&app.margin_keys.settings().library.folders);
                 if folders.is_empty() {
                     ui.label(egui::RichText::new("No watched folders. Add paths to \"library.folders\" in settings.jsonc.").color(t.text_muted));
                 }
-                if segment(ui, t, "All", app.margin_library.folder.is_none()).clicked() {
+                if chip(ui, "All", app.margin_library.folder.is_none()).clicked() {
                     app.margin_library.folder = None;
                 }
                 for folder in folders {
                     let folder = folder.to_string_lossy().into_owned();
                     let on = app.margin_library.folder.as_deref() == Some(folder.as_str());
-                    let resp = look::tooltip(segment(ui, t, &crate::folders_ui::folder_name(&folder), on), &folder, None);
-                    if resp.clicked() {
+                    let name = crate::folders_ui::folder_name(&folder);
+                    if look::Button::secondary(ButtonSize::Standard, &name).selected(on).tip(&folder).show(ui).clicked() {
                         app.margin_library.folder = Some(folder);
                     }
                 }
             }
             Shelf::Collections => {
-                if segment(ui, t, "All", app.margin_library.collection.is_none()).clicked() {
+                if chip(ui, "All", app.margin_library.collection.is_none()).clicked() {
                     app.margin_library.collection = None;
                 }
                 let collections = app.margin_library.collections.clone();
                 for collection in collections {
                     let on = app.margin_library.collection == Some(collection.id);
-                    let resp = segment(ui, t, &format!("{}  {}", collection.name, collection.count), on);
+                    let resp = chip(ui, &format!("{}  {}", collection.name, collection.count), on);
                     if resp.clicked() {
                         app.margin_library.collection = Some(collection.id);
                     }
@@ -753,15 +738,36 @@ fn shelf_picker(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &
                         }
                     });
                 }
-                ui.add_space(GAP);
-                let field = egui::TextEdit::singleline(&mut app.margin_library.new_collection).hint_text("New collection").desired_width(160.0);
-                let resp = ui.add(field);
-                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (enter || ui.button("Add").clicked()) && !app.margin_library.new_collection.trim().is_empty() {
-                    actions.push(Action::CreateCollection);
-                }
             }
             _ => {}
+        }
+    });
+    if app.margin_library.shelf == Shelf::Collections {
+        ui.add_space(GAP);
+        new_collection_row(app, ui, t, actions);
+    }
+}
+
+/// The outlined "Collection name" field and its primary Add, off while the name is blank.
+fn new_collection_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        let id = egui::Id::new("margin-new-collection");
+        let field = look::input_frame(t, look::input_focused(ui, id)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+            let edit = egui::TextEdit::singleline(&mut app.margin_library.new_collection)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .hint_text("New collection")
+                .desired_width(COLLECTION_FIELD_WIDTH);
+            ui.add(edit)
+        });
+        let resp = field.inner;
+        ui.ctx().accesskit_node_builder(resp.id, |node| node.set_label("Collection name"));
+        let named = !app.margin_library.new_collection.trim().is_empty();
+        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let add = ui.add_enabled_ui(named, |ui| look::button_primary(ui, ButtonSize::Standard, "Add")).inner.clicked();
+        if named && (enter || add) {
+            actions.push(Action::CreateCollection);
         }
     });
 }

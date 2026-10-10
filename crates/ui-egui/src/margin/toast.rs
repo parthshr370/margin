@@ -178,7 +178,7 @@ enum Pressed {
 fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, action: Option<&str>, dismissable: bool) -> Option<Pressed> {
     let pad = egui::Margin::symmetric(GAP_LARGE as i8, (GAP / 2.0) as i8);
     let close = if dismissable { BUTTON_HEIGHT + GAP } else { 0.0 };
-    let reserved = action.map_or(0.0, |label| look::plain_button_width(ui, label) + GAP) + close + pad.sum().x;
+    let reserved = action.map_or(0.0, |label| look::Button::secondary(look::ButtonSize::Compact, label).width(ui) + GAP) + close + pad.sum().x;
     let wrap = (max_width - reserved).max(BUTTON_HEIGHT);
     let galley = ui.painter().layout(text.to_owned(), theme::regular(TEXT_SIZE), t.text, wrap);
     let mut pressed = None;
@@ -188,7 +188,7 @@ fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, action: Optio
             ui.set_min_height(BUTTON_HEIGHT);
             ui.add(egui::Label::new(galley).selectable(false));
             if let Some(label) = action
-                && look::plain_button(ui, label).clicked()
+                && look::button_secondary(ui, look::ButtonSize::Compact, label).clicked()
             {
                 pressed = Some(Pressed::Action);
             }

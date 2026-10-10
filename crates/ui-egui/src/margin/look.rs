@@ -42,11 +42,8 @@ const SEGMENT_HEIGHT: f32 = 28.0;
 const SEGMENT_INSET: f32 = 2.0;
 const SEGMENT_PAD_X: f32 = 10.0;
 const SEGMENT_TEXT: f32 = 12.0;
-/// A text button's height (Save, Cancel, the notes box's buttons) and its text size.
-pub const BUTTON_HEIGHT: f32 = 28.0;
-const BUTTON_TEXT: f32 = 12.5;
-/// An icon's size on a text button.
-const BUTTON_ICON: f32 = 14.0;
+/// A compact button's height ([`ButtonSize::Compact`]), for rows laid out around one.
+pub const BUTTON_HEIGHT: f32 = COMPACT.height;
 /// Outside Margin's palette, the accent keeps this share of its colour while pressed.
 const ACCENT_PRESSED_SHADE: f32 = 0.85;
 /// The tooltip's padding, its distance from its control (room for the arrow) and the arrow's
@@ -419,9 +416,10 @@ fn tooltip_arrow(ctx: &egui::Context, t: &Tokens, layer: egui::LayerId, control:
     painter.line_segment([tip, base[1]], edge);
 }
 
-/// An icon button with Margin's states: the pill when hovered (the icon in the accent), the pill
-/// and an accent icon when `on`, muted with no pill when disabled. Screen readers and tests get
-/// `label`; the tooltip adds `shortcut`.
+/// A ghost icon button (§6): transparent at rest, the hover fill and a lighter edge when
+/// hovered (the icon brightens), the selected fill, an accent edge and an accent icon when `on`,
+/// faint with no state when disabled. Screen readers and tests get `label`; the tooltip adds
+/// `shortcut`.
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str, shortcut: Option<&str>) -> Response {
     paint_button(ui, icon, size, on, label, shortcut, None)
 }
@@ -437,8 +435,12 @@ fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str,
     let enabled = ui.is_enabled();
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
-    let stroke = border.map_or(Stroke::NONE, |c| Stroke::new(1.0, c));
-    ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on && enabled), stroke, egui::StrokeKind::Inside);
+    if let Some(border) = border {
+        ui.painter().rect_stroke(rect, CornerRadius::same(t.radius), Stroke::new(EDGE, border), egui::StrokeKind::Inside);
+    }
+    if enabled {
+        state_fill(ui, &t, rect, &resp, on, t.radius);
+    }
     focus_ring(ui, &t, rect, &resp, t.radius);
     let tint = if enabled { icon_tint(&t, on, resp.hovered()) } else { t.text_faint };
     icons::paint(ui, rect, icon, (size * ICON_SHARE).round(), tint);
@@ -512,25 +514,6 @@ pub(crate) fn slider_style(ui: &mut egui::Ui, t: &Tokens) {
     widgets.active.fg_stroke = Stroke::new(FOCUS_RING, t.accent);
 }
 
-/// An icon and a word ("Tools") with [`icon_button`]'s states (the word in the accent too when
-/// `on`); `tip` is its tooltip.
-pub(crate) fn text_button(ui: &mut egui::Ui, icon: &str, label: &str, height: f32, on: bool, tip: &str) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let icon_size = (height * ICON_SHARE).round();
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(13.0), Color32::PLACEHOLDER);
-    let width = GAP + icon_size + GAP / 2.0 + galley.size().x + GAP;
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label));
-    ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on));
-    focus_ring(ui, &t, rect, &resp, t.radius);
-    let tint = icon_tint(&t, on, resp.hovered());
-    let icon_rect = Rect::from_center_size(egui::pos2(rect.left() + GAP + icon_size / 2.0, rect.center().y), Vec2::splat(icon_size));
-    icons::paint(ui, icon_rect, icon, icon_size, tint);
-    let text_pos = egui::pos2(icon_rect.right() + GAP / 2.0, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(text_pos, galley, row_text(&t, on, t.text));
-    tooltip(resp, tip, None)
-}
-
 /// A button's background: pressed, then the hover fill (fading over [`motion::HOVER`]) when on
 /// or hovered.
 fn button_fill(ctx: &egui::Context, t: &Tokens, resp: &Response, on: bool) -> Color32 {
@@ -538,10 +521,16 @@ fn button_fill(ctx: &egui::Context, t: &Tokens, resp: &Response, on: bool) -> Co
     if resp.is_pointer_button_down_on() { t.pressed } else { t.hover.gamma_multiply(shown) }
 }
 
-/// An icon's colour on a button or tab: the accent when on or hovered (Ember's
-/// `--icon-color-hover`), the muted icon colour otherwise.
+/// An icon's colour on a button or tab: the accent when on, full text when hovered (the icon
+/// brightens), the muted icon colour otherwise.
 pub(crate) fn icon_tint(t: &Tokens, on: bool, hovered: bool) -> Color32 {
-    if on || hovered { t.accent } else { t.icon }
+    if on {
+        t.accent
+    } else if hovered {
+        t.text
+    } else {
+        t.icon
+    }
 }
 
 /// An on/off switch, the mockup's `.sw-t`: an accent track with a white knob on the right when
@@ -561,68 +550,242 @@ pub(crate) fn switch(ui: &mut egui::Ui, on: bool, label: &str) -> Response {
     resp
 }
 
-/// The primary action of a group ("Save"): the accent fill and white text, [`BUTTON_HEIGHT`]
-/// tall, padded by the large step on each side.
-pub(crate) fn accent_button(ui: &mut egui::Ui, label: &str) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(BUTTON_TEXT), Color32::WHITE);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 2.0 * GAP_LARGE, BUTTON_HEIGHT), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
-    let lift = motion::hover(ui.ctx(), resp.id, resp.hovered());
-    let surfaces = Surfaces::of(&t);
-    let fill = if resp.is_pointer_button_down_on() { surfaces.accent_pressed } else { t.accent.lerp_to_gamma(surfaces.accent_hover, lift) };
-    ui.painter().rect_filled(rect, CornerRadius::same(t.radius), fill);
-    // On the accent fill the ring is the text colour.
-    if resp.has_focus() {
-        ui.painter().rect_stroke(rect, CornerRadius::same(t.radius), Stroke::new(FOCUS_RING, t.text), egui::StrokeKind::Inside);
+/// What a [`Button`] does in its group (§6): the one leading action, an ordinary named action
+/// (outlined), or a quiet toolbar or navigation action (no surface until hovered).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ButtonKind {
+    Primary,
+    Secondary,
+    Ghost,
+}
+
+/// A button's size (§6): compact for sidebar strips and small resets, standard for popovers and
+/// creation rows, prominent for Continue reading and an empty state's action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ButtonSize {
+    Compact,
+    Standard,
+    Prominent,
+}
+
+/// One size's height, side padding, text size and icon size.
+struct SizeSpec {
+    height: f32,
+    pad_x: f32,
+    text: f32,
+    icon: f32,
+}
+
+const COMPACT: SizeSpec = SizeSpec { height: 28.0, pad_x: 8.0, text: 12.0, icon: 14.0 };
+const STANDARD: SizeSpec = SizeSpec { height: 32.0, pad_x: 12.0, text: 13.0, icon: 16.0 };
+const PROMINENT: SizeSpec = SizeSpec { height: 36.0, pad_x: 16.0, text: 14.0, icon: 18.0 };
+
+impl ButtonSize {
+    fn spec(self) -> &'static SizeSpec {
+        match self {
+            Self::Compact => &COMPACT,
+            Self::Standard => &STANDARD,
+            Self::Prominent => &PROMINENT,
+        }
     }
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, surfaces.on_accent);
-    resp
 }
 
-/// A secondary action as plain text ("Cancel"): muted, full text and the hover fill when
-/// hovered; the same size as an [`accent_button`].
-pub(crate) fn plain_button(ui: &mut egui::Ui, label: &str) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(BUTTON_TEXT), Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 2.0 * GAP_LARGE, BUTTON_HEIGHT), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
-    let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
-    ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
-    focus_ring(ui, &t, rect, &resp, t.radius);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.text_muted.lerp_to_gamma(t.text, shown));
-    resp
+/// Margin's one button (§6), built then shown: a kind, a size, a visible label (empty for an
+/// icon-only square), optional leading and trailing icons, an accessible name when the label
+/// is shorter than what the control does, a tooltip, and a selected state for filters.
+pub(crate) struct Button<'a> {
+    kind: ButtonKind,
+    size: ButtonSize,
+    label: &'a str,
+    icon: Option<&'a str>,
+    trailing: Option<&'a str>,
+    name: Option<&'a str>,
+    tip: Option<&'a str>,
+    shortcut: Option<&'a str>,
+    selected: bool,
+    fixed_width: Option<f32>,
 }
 
-/// How wide a [`plain_button`] showing `label` is, for laying out what sits beside it.
-pub(crate) fn plain_button_width(ui: &egui::Ui, label: &str) -> f32 {
-    ui.painter().layout_no_wrap(label.to_owned(), theme::medium(BUTTON_TEXT), Color32::PLACEHOLDER).size().x + 2.0 * GAP_LARGE
+impl<'a> Button<'a> {
+    pub(crate) fn new(kind: ButtonKind, size: ButtonSize, label: &'a str) -> Self {
+        Self { kind, size, label, icon: None, trailing: None, name: None, tip: None, shortcut: None, selected: false, fixed_width: None }
+    }
+
+    pub(crate) fn primary(size: ButtonSize, label: &'a str) -> Self {
+        Self::new(ButtonKind::Primary, size, label)
+    }
+
+    pub(crate) fn secondary(size: ButtonSize, label: &'a str) -> Self {
+        Self::new(ButtonKind::Secondary, size, label)
+    }
+
+    pub(crate) fn ghost(size: ButtonSize, label: &'a str) -> Self {
+        Self::new(ButtonKind::Ghost, size, label)
+    }
+
+    pub(crate) fn icon(self, icon: &'a str) -> Self {
+        Self { icon: Some(icon), ..self }
+    }
+
+    pub(crate) fn trailing(self, icon: &'a str) -> Self {
+        Self { trailing: Some(icon), ..self }
+    }
+
+    /// What screen readers and tests call it, when the label says less ("Reset").
+    pub(crate) fn name(self, name: &'a str) -> Self {
+        Self { name: Some(name), ..self }
+    }
+
+    pub(crate) fn tip(self, tip: &'a str) -> Self {
+        Self { tip: Some(tip), ..self }
+    }
+
+    pub(crate) fn shortcut(self, shortcut: Option<&'a str>) -> Self {
+        Self { shortcut, ..self }
+    }
+
+    /// A filter or toggle that is on: the selected fill, an accent edge, an accent check (or
+    /// icon).
+    pub(crate) fn selected(self, selected: bool) -> Self {
+        Self { selected, ..self }
+    }
+
+    /// Exactly `width` wide, its content centred and clipped (buttons sharing a row equally).
+    pub(crate) fn fixed_width(self, width: f32) -> Self {
+        Self { fixed_width: Some(width), ..self }
+    }
+
+    /// The leading icon: the given one, or a check on a selected secondary filter.
+    fn leading(&self) -> Option<&'a str> {
+        self.icon.or((self.selected && self.kind == ButtonKind::Secondary).then_some("check"))
+    }
+
+    fn label_galley(&self, ui: &egui::Ui) -> Option<std::sync::Arc<egui::Galley>> {
+        let font = theme::medium(self.size.spec().text);
+        (!self.label.is_empty()).then(|| ui.painter().layout_no_wrap(self.label.to_owned(), font, Color32::PLACEHOLDER))
+    }
+
+    /// The width of the icons, label and the gaps between them.
+    fn content_width(&self, galley: Option<&egui::Galley>) -> f32 {
+        let spec = self.size.spec();
+        let parts = [self.leading().map(|_| spec.icon), galley.map(|g| g.size().x), self.trailing.map(|_| spec.icon)];
+        let present: Vec<f32> = parts.into_iter().flatten().collect();
+        present.iter().sum::<f32>() + GAP * present.len().saturating_sub(1) as f32
+    }
+
+    /// How wide the button will be, for laying out what sits beside it.
+    pub(crate) fn width(&self, ui: &egui::Ui) -> f32 {
+        let galley = self.label_galley(ui);
+        self.width_for(galley.as_deref())
+    }
+
+    fn width_for(&self, galley: Option<&egui::Galley>) -> f32 {
+        let spec = self.size.spec();
+        let natural = || if galley.is_none() && self.trailing.is_none() { spec.height } else { self.content_width(galley) + 2.0 * spec.pad_x };
+        self.fixed_width.unwrap_or_else(natural)
+    }
+
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> Response {
+        let t = Tokens::get(ui.ctx());
+        let surfaces = Surfaces::of(&t);
+        let spec = self.size.spec();
+        let enabled = ui.is_enabled();
+        let galley = self.label_galley(ui);
+        let (rect, resp) = ui.allocate_exact_size(vec2(self.width_for(galley.as_deref()), spec.height), Sense::click());
+        let name = self.name.unwrap_or(self.label);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, self.selected, name));
+        let lift = motion::hover(ui.ctx(), resp.id, enabled && resp.hovered());
+        let pressed = enabled && resp.is_pointer_button_down_on();
+        let radius = CornerRadius::same(t.radius);
+        let visual = self.visual(&t, &surfaces, enabled, lift, pressed);
+        ui.painter().rect(rect, radius, visual.fill, visual.edge, egui::StrokeKind::Inside);
+        if self.kind == ButtonKind::Primary && resp.has_focus() {
+            // The dark inner ring, then the parent-coloured gap and the accent ring outside.
+            ui.painter().rect_stroke(rect, radius, Stroke::new(FOCUS_RING, surfaces.on_accent), egui::StrokeKind::Inside);
+        }
+        focus_ring(ui, &t, rect, &resp, t.radius);
+        let mut x = rect.center().x - self.content_width(galley.as_deref()).min(rect.width() - 2.0 * spec.pad_x) / 2.0;
+        let icon_at = |ui: &egui::Ui, icon: &str, x: &mut f32| {
+            let icon_rect = Rect::from_min_size(egui::pos2(*x, rect.center().y - spec.icon / 2.0), Vec2::splat(spec.icon));
+            icons::paint(ui, icon_rect, icon, spec.icon, visual.icon);
+            *x += spec.icon + GAP;
+        };
+        if let Some(icon) = self.leading() {
+            icon_at(ui, icon, &mut x);
+        }
+        if let Some(galley) = galley {
+            let width = galley.size().x;
+            let pos = egui::pos2(x, rect.center().y - galley.size().y / 2.0);
+            ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(pos, galley, visual.ink);
+            x += width + GAP;
+        }
+        if let Some(icon) = self.trailing {
+            icon_at(ui, icon, &mut x);
+        }
+        // An icon-only button always names itself; a labelled one only when it has more to say.
+        match (self.tip, self.label.is_empty() || self.shortcut.is_some()) {
+            (Some(tip), _) => tooltip(resp, tip, self.shortcut),
+            (None, true) => tooltip(resp, name, self.shortcut),
+            (None, false) => resp,
+        }
+    }
+
+    /// Fill, edge, label ink and icon colour for this frame's state (§6's table).
+    fn visual(&self, t: &Tokens, surfaces: &Surfaces, enabled: bool, lift: f32, pressed: bool) -> ButtonVisual {
+        let edge = |color: Color32| Stroke::new(EDGE, color);
+        match self.kind {
+            ButtonKind::Primary | ButtonKind::Secondary if !enabled => {
+                ButtonVisual { fill: t.panel, edge: edge(t.border), ink: t.text_faint, icon: t.text_faint }
+            }
+            ButtonKind::Ghost if !enabled => ButtonVisual { fill: Color32::TRANSPARENT, edge: Stroke::NONE, ink: t.text_faint, icon: t.text_faint },
+            ButtonKind::Primary => {
+                let fill = if pressed { surfaces.accent_pressed } else { t.accent.lerp_to_gamma(surfaces.accent_hover, lift) };
+                ButtonVisual { fill, edge: Stroke::NONE, ink: surfaces.on_accent, icon: surfaces.on_accent }
+            }
+            ButtonKind::Secondary => {
+                let rest = if self.selected { t.selected } else { t.card };
+                let fill = if pressed { t.pressed } else { rest.lerp_to_gamma(t.hover, lift) };
+                let outline = if self.selected { t.accent } else { surfaces.control_edge };
+                let icon = if self.selected { t.accent } else { t.icon.lerp_to_gamma(t.text, lift) };
+                ButtonVisual { fill, edge: edge(outline), ink: t.text, icon }
+            }
+            ButtonKind::Ghost => {
+                let (fill, outline) =
+                    if self.selected { (t.selected, t.accent) } else { (t.hover.gamma_multiply(lift), surfaces.edge_hover.gamma_multiply(lift)) };
+                let fill = if pressed { t.pressed } else { fill };
+                let icon = if self.selected { t.accent } else { t.icon.lerp_to_gamma(t.text, lift) };
+                ButtonVisual { fill, edge: edge(outline), ink: t.text, icon }
+            }
+        }
+    }
 }
 
-/// A bordered button `width` wide with an icon and a word, both centred ("Copy all"): the
-/// hover fill when hovered, muted when disabled. Rows of them share the width equally.
-pub(crate) fn chip_button(ui: &mut egui::Ui, icon: &str, label: &str, width: f32) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let enabled = ui.is_enabled();
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, BUTTON_HEIGHT), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(t.radius),
-        button_fill(ui.ctx(), &t, &resp, false),
-        Stroke::new(1.0, t.border),
-        egui::StrokeKind::Inside,
-    );
-    focus_ring(ui, &t, rect, &resp, t.radius);
-    let color = if enabled { t.text } else { t.text_faint };
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::regular(BUTTON_TEXT), color);
-    let content = BUTTON_ICON + GAP / 2.0 + galley.size().x;
-    let left = rect.center().x - content.min(rect.width()) / 2.0;
-    let icon_rect = Rect::from_center_size(egui::pos2(left + BUTTON_ICON / 2.0, rect.center().y), Vec2::splat(BUTTON_ICON));
-    icons::paint(ui, icon_rect, icon, BUTTON_ICON, if enabled { icon_tint(&t, false, resp.hovered()) } else { t.text_faint });
-    let text_pos = egui::pos2(icon_rect.right() + GAP / 2.0, rect.center().y - galley.size().y / 2.0);
-    ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(text_pos, galley, color);
-    resp
+/// A button's colours in one state.
+struct ButtonVisual {
+    fill: Color32,
+    edge: Stroke,
+    ink: Color32,
+    icon: Color32,
+}
+
+/// The group's leading action ("Save", "Add", "Continue").
+pub(crate) fn button_primary(ui: &mut egui::Ui, size: ButtonSize, label: &str) -> Response {
+    Button::primary(size, label).show(ui)
+}
+
+/// An ordinary named action ("Cancel", "Export", "Set as default").
+pub(crate) fn button_secondary(ui: &mut egui::Ui, size: ButtonSize, label: &str) -> Response {
+    Button::secondary(size, label).show(ui)
+}
+
+/// A quiet text action in a toolbar or menu-like strip.
+pub(crate) fn button_ghost(ui: &mut egui::Ui, size: ButtonSize, label: &str) -> Response {
+    Button::ghost(size, label).show(ui)
+}
+
+/// A square ghost button showing `icon`, named `name` for screen readers and its tooltip.
+pub(crate) fn button_icon(ui: &mut egui::Ui, size: ButtonSize, icon: &str, name: &str, shortcut: Option<&str>) -> Response {
+    Button::ghost(size, "").icon(icon).name(name).shortcut(shortcut).show(ui)
 }
 
 /// One choice of a [`segmented`] control.

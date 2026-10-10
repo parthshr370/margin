@@ -88,29 +88,29 @@ fn unsaved_reason(why: &Context<'_>) -> String {
     }
 }
 
-/// Draw `line` right to left (the buttons, then the words). Returns the command clicked.
+/// Draw `line` right to left (the buttons, then the words): every action is a compact secondary
+/// button, plain status ("Saved") stays text. Returns the command clicked.
 pub(crate) fn show(ui: &mut egui::Ui, t: &Tokens, line: &SaveLine) -> Option<&'static str> {
     let mut clicked = None;
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         for (label, command) in line.buttons.iter().rev() {
-            let button = egui::Button::new(egui::RichText::new(*label).font(theme::medium(TEXT_SIZE)).color(t.text)).frame(false);
-            if look::tooltip(ui.add(button), label, None).clicked() {
+            if look::Button::secondary(look::ButtonSize::Compact, label).tip(label).show(ui).clicked() {
                 clicked = Some(*command);
             }
         }
-        let color = if line.alert { t.accent_text } else { t.text_muted };
-        let words = egui::RichText::new(&line.text).font(theme::regular(TEXT_SIZE)).color(color);
-        let resp = match line.click {
+        match line.click {
             Some(command) => {
-                let resp = ui.add(egui::Button::new(words).frame(false));
+                let resp = look::Button::secondary(look::ButtonSize::Compact, &line.text).tip(&line.tip).show(ui);
                 if resp.clicked() {
                     clicked = Some(command);
                 }
-                resp
             }
-            None => ui.label(words),
-        };
-        look::tooltip(resp, &line.tip, None);
+            None => {
+                let color = if line.alert { t.accent_text } else { t.text_muted };
+                let words = egui::RichText::new(&line.text).font(theme::regular(TEXT_SIZE)).color(color);
+                look::tooltip(ui.label(words), &line.tip, None);
+            }
+        }
     });
     clicked
 }

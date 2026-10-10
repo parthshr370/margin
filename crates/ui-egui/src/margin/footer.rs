@@ -226,8 +226,7 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32
             command = Some(("view.zoom.out", Value::Null));
         }
         let percent = format!("{:.0}%", view.zoom * 100.0);
-        let menu =
-            ui.add(egui::Button::new(egui::RichText::new(percent).font(theme::regular(11.5)).color(t.text)).frame(false).min_size(vec2(50.0, 0.0)));
+        let menu = look::button_ghost(ui, look::ButtonSize::Compact, &percent);
         let menu = look::tooltip(menu, "Zoom and fit", None);
         look::popover(&menu, egui::Id::new("margin-zoom-menu")).show(|ui| {
             ui.set_min_width(170.0);

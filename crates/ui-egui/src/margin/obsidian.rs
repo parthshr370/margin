@@ -773,12 +773,16 @@ fn action_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
     let width = ((ui.available_width() - look::GAP) / 2.0).max(0.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = look::GAP;
-        let copy = look::chip_button(ui, "copy", "Copy all", width);
+        let copy = look::Button::secondary(look::ButtonSize::Compact, "Copy all").icon("copy").fixed_width(width).show(ui);
         let copy_tip = if notes.external { EXTERNAL_TIP } else { "Copy every highlight as PDF++ callouts" };
         if look::tooltip(copy, copy_tip, None).clicked() {
             notes.ask(ui.ctx(), Request::CopyAll);
         }
-        let write = ui.add_enabled_ui(notes.note.is_ok(), |ui| look::chip_button(ui, "file-pen-line", "Write to note", width)).inner;
+        let write = ui
+            .add_enabled_ui(notes.note.is_ok(), |ui| {
+                look::Button::secondary(look::ButtonSize::Compact, "Write to note").icon("file-pen-line").fixed_width(width).show(ui)
+            })
+            .inner;
         let write_tip = match &notes.note {
             Ok(_) => "Append highlights the note doesn't have yet".to_owned(),
             Err(why) => format!("Write to note: {why}"),

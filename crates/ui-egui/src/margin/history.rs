@@ -8,7 +8,7 @@
 
 use egui::{Align2, PointerButton, pos2};
 
-use super::look::{self, BUTTON_HEIGHT, GAP};
+use super::look::{self, GAP};
 use super::motion;
 use super::reading::{self, Spot};
 use crate::PdfCraftApp;
@@ -147,7 +147,11 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> O
         look::floating_frame(&t, look::RADIUS_MENU).inner_margin(egui::Margin::symmetric(PILL_PAD as i8, PILL_PAD as i8)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = GAP / 2.0;
-                back = look::text_button(ui, "chevron-left", &text, BUTTON_HEIGHT, false, "Return to where you were before the jump").clicked();
+                back = look::Button::ghost(look::ButtonSize::Compact, &text)
+                    .icon("chevron-left")
+                    .tip("Return to where you were before the jump")
+                    .show(ui)
+                    .clicked();
                 if let Some(key) = &key {
                     ui.label(egui::RichText::new(key).font(theme::regular(SHORTCUT_TEXT)).color(t.text_faint));
                     ui.add_space(GAP / 2.0);
