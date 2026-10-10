@@ -73,6 +73,18 @@ fn margin_shows_the_reader_chrome_instead_of_the_workbench() {
     assert_eq!(h.state().window_title, "reader.pdf — Margin");
 }
 
+/// The document card's cover is page 1's thumbnail even when no thumbnail surface (Pages,
+/// Organize, Print) has been open, and only that thumbnail is rendered for it.
+#[test]
+fn the_document_card_has_its_cover_without_visiting_pages() {
+    let h = harness(Flavor::Margin);
+    assert_eq!(h.state().margin_chrome.tab, SidebarTab::Contents);
+    assert_ne!(h.state().right, Some(RightPanel::Pages));
+    let view = &h.state().views[0];
+    assert!(view.thumb(0).is_some(), "page 1's thumbnail is the cover");
+    assert!(view.thumb(1).is_none(), "no other page's thumbnail is rendered for it");
+}
+
 #[test]
 fn pdfcraft_keeps_its_workbench() {
     let h = harness(Flavor::PdfCraft);

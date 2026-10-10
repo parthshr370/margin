@@ -1289,6 +1289,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         return;
     }
     let want_thumbs = app.right == Some(RightPanel::Pages) || app.views[index].organize || app.dialog == Some(crate::Dialog::Print);
+    // Margin's document card shows page 1's thumbnail as the cover, whatever the sidebar shows
+    // (R8 QoL 11): only that one is asked for.
+    let thumb_pages = if want_thumbs { info.pages.len() } else { crate::margin::sidebar::cover_pages(app.flavor, info.pages.len()) };
     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
     let preparing = app.is_preparing();
     // Edit a PDF: added text and images can be selected, moved and edited.
@@ -2065,9 +2068,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     crate::margin::highlights::want_text(view, &mut text_pages);
     queue.extend(text_pages.into_iter().map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: TEXT_TAG }));
-    if want_thumbs {
+    if thumb_pages > 0 {
         let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
-        for page in 0..info.pages.len() {
+        for page in 0..thumb_pages {
             if (!view.thumbs.contains_key(&page) || view.stale_thumbs.contains(&page)) && !view.errors.contains_key(&page) {
                 queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG });
             }

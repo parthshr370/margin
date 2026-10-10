@@ -180,20 +180,21 @@ pub fn summary(app: &mut PdfCraftApp, book: &str) -> Option<BookSummary> {
     Some(summary)
 }
 
-/// The document card's stats line for the document shown, if it has reading recorded.
-pub(crate) fn active_summary_line(app: &mut PdfCraftApp) -> Option<String> {
+/// The document card's stats for the document shown, if it has reading recorded: whole units
+/// (`summary_parts`), so the card can wrap between them.
+pub(crate) fn active_summary_parts(app: &mut PdfCraftApp) -> Option<Vec<String>> {
     let (index, doc) = app.active_ids()?;
     let book = app.margin_stats.book(doc)?.to_owned();
     let summary = summary(app, &book).filter(|summary| summary.seconds > 0)?;
     let view = app.views.get(index)?;
     let pages = app.session.get(doc)?.info.pages.len();
     let left = u32::try_from(pages.saturating_sub(view.current.saturating_add(1))).ok();
-    Some(summary_line(&summary, left))
+    Some(summary_parts(&summary, left))
 }
 
-/// "2h 14m read · 37 pages · 1.8 min/page · ~34 min left": a book's summary in a line.
-/// `pages_left` is `None` when unknown.
-pub fn summary_line(summary: &BookSummary, pages_left: Option<u32>) -> String {
+/// A book's summary as whole units: "2h 14m read", "37 pages", "1.8 min/page", "~34 min left"
+/// (pace and time left only once the stats can tell them). `pages_left` is `None` when unknown.
+pub fn summary_parts(summary: &BookSummary, pages_left: Option<u32>) -> Vec<String> {
     use margin_config::stats::format_duration;
     let mut parts = vec![format!("{} read", format_duration(summary.seconds as f64))];
     parts.push(if summary.pages == 1 { "1 page".to_owned() } else { format!("{} pages", summary.pages) });
@@ -203,7 +204,7 @@ pub fn summary_line(summary: &BookSummary, pages_left: Option<u32>) -> String {
     if let Some(left) = pages_left.and_then(|pages| summary.seconds_left(pages)) {
         parts.push(format!("~{} left", format_duration(left)));
     }
-    parts.join(" · ")
+    parts
 }
 
 /// Writes every page visit as CSV to `path`.

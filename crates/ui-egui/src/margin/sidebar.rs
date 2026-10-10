@@ -17,7 +17,7 @@ use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
 use crate::margin::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, SidebarTab, current_section, motion, open_tab, outline_at, reading};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
-use crate::{DocView, LeftPanel, PdfCraftApp, icons};
+use crate::{DocView, Flavor, LeftPanel, PdfCraftApp, icons};
 
 const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
@@ -31,6 +31,13 @@ const INDENT: f32 = 12.0;
 /// The expand/collapse chevron's box.
 const TWISTY: f32 = 16.0;
 const COVER: egui::Vec2 = vec2(52.0, 67.0);
+/// The card lines up with the panes' headings: the pane's edge plus a row's padding, less the
+/// top section's own edge.
+const CARD_INDENT: f32 = GAP + ROW_PAD - GAP_LARGE;
+/// The card's stats: at most this many lines, the units joined by [`STATS_SEPARATOR`].
+const STATS_LINES: usize = 2;
+const STATS_SEPARATOR: &str = " · ";
+const META_TEXT: f32 = 11.0;
 /// The page bookmark list scrolls past this height, leaving room for the PDF's bookmarks.
 const PAGE_BOOKMARKS_MAX_HEIGHT: f32 = 220.0;
 const ROW_BUTTON: f32 = 22.0;
@@ -79,7 +86,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let edge = GAP_LARGE as i8;
     #[cfg(not(target_arch = "wasm32"))]
-    let summary = super::stats::active_summary_line(app);
+    let summary = super::stats::active_summary_parts(app);
     #[cfg(target_arch = "wasm32")]
     let summary = None;
     egui::Panel::top("margin_sidebar_top")
@@ -116,65 +123,106 @@ fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// How many leading pages the canvas renders a thumbnail for when no thumbnail surface shows:
+/// page 1 in Margin, the document card's cover; none in PdfCraft.
+pub(crate) fn cover_pages(flavor: Flavor, pages: usize) -> usize {
+    if flavor == Flavor::Margin { pages.min(1) } else { 0 }
+}
+
 /// Cover, title, author and how far in the reader is: the title in full text, everything else
-/// muted, the progress bar's fill the only accent. Below, the book's reading stats when it has
-/// some (time read, pages, pace, time left).
-fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Option<String>) {
+/// muted, the progress bar's fill the only accent. Under that row, across the card, the book's
+/// reading stats when it has some (`stats_lines`).
+fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Option<Vec<String>>) {
     let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
     let info = &doc.info;
     let pages = info.pages.len();
     let radius = CornerRadius::same(t.radius);
     ui.add_space(GAP);
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = GAP_LARGE;
-        let (cover, _) = ui.allocate_exact_size(COVER, Sense::hover());
-        match view.thumb(0) {
-            Some(tex) => {
-                let size = tex.size_vec2();
-                let scale = (COVER.x / size.x.max(1.0)).min(COVER.y / size.y.max(1.0));
-                let rect = Rect::from_center_size(cover.center(), size * scale);
-                ui.painter().add(
-                    egui::epaint::RectShape::filled(rect, radius, egui::Color32::WHITE)
-                        .with_texture(tex.id(), Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
-                );
+    let meta = |text: &str| egui::RichText::new(text).font(theme::regular(META_TEXT)).color(t.text_muted);
+    egui::Frame::NONE.inner_margin(egui::Margin { left: CARD_INDENT as i8, ..Default::default() }).show(ui, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP_LARGE;
+            let (cover, _) = ui.allocate_exact_size(COVER, Sense::hover());
+            match view.thumb(0) {
+                Some(tex) => {
+                    let size = tex.size_vec2();
+                    let scale = (COVER.x / size.x.max(1.0)).min(COVER.y / size.y.max(1.0));
+                    let rect = Rect::from_center_size(cover.center(), size * scale);
+                    ui.painter().add(
+                        egui::epaint::RectShape::filled(rect, radius, egui::Color32::WHITE)
+                            .with_texture(tex.id(), Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
+                    );
+                }
+                None => {
+                    ui.painter().rect_filled(cover, radius, t.hover);
+                    icons::paint(ui, cover, "file-text", 22.0, t.text_muted);
+                }
             }
-            None => {
-                ui.painter().rect_filled(cover, radius, t.hover);
-                icons::paint(ui, cover, "file-text", 22.0, t.text_muted);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let width = ui.available_width();
+                let title = info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
+                let mut job = egui::text::LayoutJob::simple(title, theme::semibold(13.0), t.text, width);
+                job.wrap.max_rows = 2;
+                ui.label(job);
+                if let Some(author) = info.author.as_deref().filter(|a| !a.trim().is_empty()) {
+                    ui.add(egui::Label::new(egui::RichText::new(author).font(theme::regular(12.0)).color(t.text_muted)).truncate());
+                }
+                ui.add_space(GAP);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    let percent = (view.current + 1).saturating_mul(100).checked_div(pages).unwrap_or(0);
+                    ui.label(meta(&format!("{percent}%")));
+                    let count = format!("{pages} pp");
+                    let count_width = ui.fonts_mut(|f| f.layout_no_wrap(count.clone(), theme::regular(META_TEXT), t.text_muted).size().x);
+                    let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
+                    let (bar, _) = ui.allocate_exact_size(vec2(bar_width, 3.0), Sense::hover());
+                    ui.painter().rect_filled(bar, CornerRadius::same(2), t.divider);
+                    let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
+                    let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
+                    ui.painter().rect_filled(fill, CornerRadius::same(2), t.accent);
+                    ui.label(meta(&count));
+                });
+            });
+        });
+        if let Some(parts) = summary.filter(|parts| !parts.is_empty()) {
+            ui.add_space(GAP);
+            let width = ui.available_width();
+            let measure = |text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), theme::regular(META_TEXT), t.text_muted).size().x);
+            let lines = stats_lines(&parts, width, measure);
+            let shown = ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for line in &lines {
+                    ui.add(egui::Label::new(meta(line)).truncate());
+                }
+            });
+            // The whole summary when a unit had no room.
+            if lines.iter().map(|line| line.split(STATS_SEPARATOR).count()).sum::<usize>() < parts.len() {
+                look::tooltip(shown.response, &parts.join(STATS_SEPARATOR), None);
             }
         }
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            let width = ui.available_width();
-            let title = info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
-            let mut job = egui::text::LayoutJob::simple(title, theme::semibold(13.0), t.text, width);
-            job.wrap.max_rows = 2;
-            ui.label(job);
-            if let Some(author) = info.author.as_deref().filter(|a| !a.trim().is_empty()) {
-                ui.add(egui::Label::new(egui::RichText::new(author).font(theme::regular(12.0)).color(t.text_muted)).truncate());
-            }
-            ui.add_space(GAP);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                let percent = (view.current + 1).saturating_mul(100).checked_div(pages).unwrap_or(0);
-                let meta = |text: &str| egui::RichText::new(text).font(theme::regular(11.0)).color(t.text_muted);
-                ui.label(meta(&format!("{percent}%")));
-                let count = format!("{pages} pp");
-                let count_width = ui.fonts_mut(|f| f.layout_no_wrap(count.clone(), theme::regular(11.0), t.text_muted).size().x);
-                let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
-                let (bar, _) = ui.allocate_exact_size(vec2(bar_width, 3.0), Sense::hover());
-                ui.painter().rect_filled(bar, CornerRadius::same(2), t.divider);
-                let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
-                let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
-                ui.painter().rect_filled(fill, CornerRadius::same(2), t.accent);
-                ui.label(meta(&count));
-            });
-            if let Some(line) = summary {
-                ui.add(egui::Label::new(egui::RichText::new(line).font(theme::regular(11.0)).color(t.text_muted)).wrap());
-            }
-        });
     });
     ui.add_space(GAP_LARGE);
+}
+
+/// Pack the stats' units into at most [`STATS_LINES`] lines `width` wide, in order, a line
+/// breaking only between units: never inside one or next to a lone separator. Units that don't
+/// fit are left out (the tooltip has them).
+fn stats_lines(parts: &[String], width: f32, measure: impl Fn(&str) -> f32) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for part in parts {
+        let joined = lines.last().map(|line| format!("{line}{STATS_SEPARATOR}{part}"));
+        match joined {
+            Some(joined) if measure(&joined) <= width => {
+                if let Some(line) = lines.last_mut() {
+                    *line = joined;
+                }
+            }
+            _ if lines.len() < STATS_LINES => lines.push(part.clone()),
+            _ => break,
+        }
+    }
+    lines
 }
 
 /// The tabs: the shown one gets the hover fill and an accent icon, like a selected row.
@@ -466,5 +514,30 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
     }
     if let Some(page) = go {
         view.go_to_page(page);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stats_lines;
+
+    /// Six points a character, about Margin's 11-point UI font.
+    fn measure(text: &str) -> f32 {
+        text.chars().count() as f32 * 6.0
+    }
+
+    fn parts() -> Vec<String> {
+        ["2h 14m read", "37 pages", "1.8 min/page", "~34 min left"].map(str::to_owned).to_vec()
+    }
+
+    #[test]
+    fn stats_wrap_between_whole_units_on_at_most_two_lines() {
+        // The card's text width at the sidebar's widest, default and narrowest settings.
+        assert_eq!(stats_lines(&parts(), 416.0, measure), ["2h 14m read · 37 pages · 1.8 min/page · ~34 min left"]);
+        assert_eq!(stats_lines(&parts(), 272.0, measure), ["2h 14m read · 37 pages · 1.8 min/page", "~34 min left"]);
+        assert_eq!(stats_lines(&parts(), 170.0, measure), ["2h 14m read · 37 pages", "1.8 min/page · ~34 min left"]);
+        // Too narrow for all: the units that fit, never a split unit or a lone separator.
+        assert_eq!(stats_lines(&parts(), 80.0, measure), ["2h 14m read", "37 pages"]);
+        assert!(stats_lines(&[], 272.0, measure).is_empty());
     }
 }
