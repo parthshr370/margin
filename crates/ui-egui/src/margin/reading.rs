@@ -218,6 +218,13 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     if let Some(notice) = notice {
         app.notify(notice);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    super::library::opened(app, index);
+}
+
+/// Whether the document's sidecar had a reading position to restore.
+pub(crate) fn has_saved_place(view: &DocView) -> bool {
+    view.margin.sidecar.as_ref().is_some_and(|file| file.file.progress.is_some())
 }
 
 /// Whether fit "read" holds the zoom.
@@ -464,6 +471,11 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if let Some(at) = wake {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).max(0.0)));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        super::stats::tick(app, ctx);
+        super::library::tick(app, ctx);
+    }
 }
 
 /// Whether autosave may write this document: it has a file, may be edited and isn't signed
@@ -604,6 +616,32 @@ pub(crate) fn closing(app: &mut PdfCraftApp, index: usize) {
     if let Step::Failed(message) = sidecar_step(view, doc, auto_add, 0.0, true) {
         app.notify(message);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    super::library::closing(app, index);
+}
+
+/// Marks the document open in view `index` finished (or not) in its sidecar, written now.
+pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) -> Result<(), String> {
+    let Some(view) = app.views.get_mut(index) else { return Ok(()) };
+    let Some(doc) = app.session.get(view.id) else { return Ok(()) };
+    let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
+    let snap = snapshot(view, auto_add);
+    let Some(file) = view.margin.sidecar.as_mut() else { return Ok(()) };
+    if let Some(reason) = &file.locked {
+        return Err(reason.clone());
+    }
+    let progress = file.file.progress.get_or_insert_with(|| Progress {
+        locator: Locator::Pdf { page: 0, quads: Vec::new(), at: None },
+        fraction: 0.0,
+        finished,
+        updated: store::now_rfc3339(),
+        extra: Map::new(),
+    });
+    progress.finished = finished;
+    write_sidecar(file, &snap, doc)?;
+    file.saved = Some(snap);
+    file.pending = None;
+    Ok(())
 }
 
 /// Write every open document's pending reading state now (tests, embedders shutting down).

@@ -39,6 +39,7 @@ fn margin_app(name: &str) -> PdfCraftApp {
     let config = std::env::temp_dir().join(format!("margin-display-{name}-{}", std::process::id()));
     std::fs::remove_dir_all(&config).ok();
     app.margin_keys.set_config_dir(config);
+    app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-display-data-{}", std::process::id())));
     app.open_bytes("doc.pdf", None, fixture()).unwrap();
     app
 }

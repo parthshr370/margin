@@ -53,6 +53,7 @@ fn harness(vault: &Path) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
         app.set_option("language", "en").unwrap();
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-obsidian-data-{}", std::process::id())));
         let pdf = vault.join("papers/text.pdf");
         app.open_bytes("text.pdf", Some(pdf.to_string_lossy().into_owned()), TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();

@@ -60,11 +60,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// The sidebar's three parts: buttons and the document card, the pane, the tab strip.
 fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let edge = GAP_LARGE as i8;
+    #[cfg(not(target_arch = "wasm32"))]
+    let summary = super::stats::active_summary_line(app);
+    #[cfg(target_arch = "wasm32")]
+    let summary = None;
     egui::Panel::top("margin_sidebar_top")
         .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: edge, bottom: 0 }))
         .show(ui, |ui| {
             top_buttons(app, ui);
-            document_card(app, ui, t);
+            document_card(app, ui, t, summary);
         });
     egui::Panel::bottom("margin_sidebar_tabs")
         .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: GAP as i8, bottom: edge }))
@@ -77,8 +81,14 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if look::icon_button(ui, "book-open", TOP_BUTTON, false, "Library", None).clicked() {
-            app.active = None;
+        let library = look::shortcut(app, "library.open");
+        if look::icon_button(ui, "book-open", TOP_BUTTON, false, "Library", library.as_deref()).clicked() {
+            #[cfg(not(target_arch = "wasm32"))]
+            super::library::run(app, "library.open");
+            #[cfg(target_arch = "wasm32")]
+            {
+                app.active = None;
+            }
         }
         let palette = look::shortcut(app, "view.palette");
         if look::icon_button(ui, "square-terminal", TOP_BUTTON, app.palette_open, "Command palette", palette.as_deref()).clicked() {
@@ -88,8 +98,9 @@ fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 }
 
 /// Cover, title, author and how far in the reader is: the title in full text, everything else
-/// muted, the progress bar's fill the only accent.
-fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+/// muted, the progress bar's fill the only accent. Below, the book's reading stats when it has
+/// some (time read, pages, pace, time left).
+fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Option<String>) {
     let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
     let info = &doc.info;
     let pages = info.pages.len();
@@ -138,6 +149,9 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 ui.painter().rect_filled(fill, CornerRadius::same(2), t.accent);
                 ui.label(meta(&count));
             });
+            if let Some(line) = summary {
+                ui.add(egui::Label::new(egui::RichText::new(line).font(theme::regular(11.0)).color(t.text_muted)).wrap());
+            }
         });
     });
     ui.add_space(GAP_LARGE);

@@ -466,7 +466,11 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
             stack.push(node("TextInput", &[]));
         }
     };
-    if app.margin_keys.sheet.is_some() || app.dialog.is_some() || app.password_prompt.is_some() {
+    #[cfg(not(target_arch = "wasm32"))]
+    let stats_sheet = app.margin_stats.sheet_open();
+    #[cfg(target_arch = "wasm32")]
+    let stats_sheet = false;
+    if app.margin_keys.sheet.is_some() || stats_sheet || app.dialog.is_some() || app.password_prompt.is_some() {
         stack.push(node("Dialog", &[]));
         text_input(&mut stack);
         return stack;
@@ -477,6 +481,8 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         return stack;
     }
     let Some(view) = app.active.and_then(|index| app.views.get(index)) else {
+        // Home: Margin's library.
+        stack.push(node("Library", &[]));
         text_input(&mut stack);
         return stack;
     };
@@ -722,9 +728,17 @@ mod tests {
         }
     }
 
-    /// The ids `margin::run` (the reader chrome and reading state) handles.
-    const CHROME_COMMANDS: [&str; 5] =
-        ["view.sidebar.toggle", "view.sidebar.tab", "reader.annotate.toggle", "reader.bookmark.toggle", "view.trim.toggle"];
+    /// The ids `margin::run` (the reader chrome, reading state and library) handles.
+    const CHROME_COMMANDS: [&str; 8] = [
+        "view.sidebar.toggle",
+        "view.sidebar.tab",
+        "reader.annotate.toggle",
+        "reader.bookmark.toggle",
+        "view.trim.toggle",
+        "library.open",
+        "library.search",
+        "app.stats",
+    ];
 
     /// Every id the built-in keymap binds is one the app runs.
     #[test]

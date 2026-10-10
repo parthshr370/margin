@@ -13,6 +13,8 @@ pub mod footer;
 pub mod header;
 pub mod keys;
 pub mod keysheet;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod library;
 pub mod look;
 pub mod obsidian;
 pub mod pagecolor;
@@ -20,6 +22,10 @@ pub mod rail;
 pub mod reading;
 pub mod settings_watch;
 pub mod sidebar;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod stats;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod stats_sheet;
 pub mod trim;
 
 use crate::{PdfCraftApp, RightPanel};
@@ -130,7 +136,8 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
 /// Run a Margin-only action (the keymap's ids): `view.sidebar.toggle`, `view.sidebar.tab` with
 /// `{"tab": "contents" | "highlights" | "pages" | "bookmarks" | "find" | "tools"}`,
 /// `reader.annotate.toggle` (the rail), `reader.bookmark.toggle` (a page bookmark on the current
-/// page) and `view.trim.toggle`. Returns `false` for an unknown id or tab.
+/// page), `view.trim.toggle`, and the library's `library.open`, `library.search` and `app.stats`.
+/// Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
         "view.sidebar.toggle" => app.margin_chrome.sidebar_open = !app.margin_chrome.sidebar_open,
@@ -154,6 +161,8 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
             let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
             reading::toggle_trim(view);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        "library.open" | "library.search" | "app.stats" => return library::run(app, id),
         _ => return false,
     }
     true
@@ -227,13 +236,24 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| match app.active {
         None if app.combine_showing() => crate::combine_ui::page(app, ui),
+        #[cfg(not(target_arch = "wasm32"))]
+        None => library::show(app, ui),
+        #[cfg(target_arch = "wasm32")]
         None => crate::home::show(app, ui),
-        Some(i) => crate::canvas::document_area(app, i, ui),
+        Some(i) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            library::hidden(app);
+            crate::canvas::document_area(app, i, ui)
+        }
     });
     app.process_pending_edits();
     crate::palette::show(app, ctx);
     crate::dialogs::show(app, ctx);
     keys::show(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.margin_stats.sheet_open() {
+        stats_sheet::show(app, ctx);
+    }
     app.show_progress(ctx);
     crate::widgets::toast(app, ctx);
 }

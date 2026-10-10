@@ -14,7 +14,9 @@
       "secondary-shift-f": "edit.advanced_search", "secondary-l": "view.full_screen", "ctrl-secondary-h": "view.read_mode",
       "secondary-shift-n": "view.focus_page_input", "secondary-b": "bookmark.add",
       "secondary-j": "tools.js_console", "secondary-shift-k": "app.key_context",
+      "secondary-shift-o": "library.open", "secondary-shift-t": "app.stats",
       "escape": "app.close_layer", "?": "help.shortcuts" } },
+  { "context": "Library", "bindings": { "/": "library.search", "secondary-f": "library.search" } },
   { "context": "Reader", "bindings": {
       "/": "edit.find", "f3": "reader.find.next", "shift-f3": "reader.find.prev",
       "secondary-g": "reader.find.next", "secondary-shift-g": "reader.find.prev",

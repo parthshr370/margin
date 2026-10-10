@@ -4,7 +4,8 @@
 //! cargo run -p pdfcraft-ui-egui --example shot -- out.png [file.pdf] [--size 1440x900] [--scale 2] [--page 3 --panel pages …]
 //! ```
 //! `--width N` downscales the image to N pixels wide (README screenshots). `--flavor margin`
-//! shows Margin's reader layout (dark theme, like `apps/margin`). Any other
+//! shows Margin's reader layout (dark theme, like `apps/margin`); `--margin-run ID` then runs a
+//! Margin id (`app.stats`, `library.open`…) before the shot. Any other
 //! `--key value` pair is passed to `PdfCraftApp::set_option`
 //! (the same verbs as the desktop app's command-line flags and the future control channel).
 
@@ -20,6 +21,7 @@ fn main() -> Result<(), String> {
     let (mut size, mut scale) = (egui::vec2(1440.0, 900.0), 2.0f32);
     let mut width: Option<u32> = None;
     let mut flavor = Flavor::PdfCraft;
+    let mut margin_runs = Vec::new();
     while let Some(a) = args.next() {
         match a.strip_prefix("--") {
             Some("size") => {
@@ -36,6 +38,7 @@ fn main() -> Result<(), String> {
                     _ => return Err("--flavor pdfcraft|margin".into()),
                 }
             }
+            Some("margin-run") => margin_runs.push(args.next().ok_or("--margin-run ID")?),
             Some(k) => opts.push((k.to_string(), args.next().unwrap_or_default())),
             None => file = Some(a),
         }
@@ -71,6 +74,12 @@ fn main() -> Result<(), String> {
             }
         }
         std::thread::sleep(Duration::from_millis(30));
+    }
+    for id in &margin_runs {
+        if !pdfcraft_ui_egui::margin::run(harness.state_mut(), id, &serde_json::Value::Null) {
+            eprintln!("shot: --margin-run {id}: not a Margin id");
+        }
+        harness.run_steps(6);
     }
     let mut image = harness.render()?;
     if let Some(w) = width.filter(|w| *w < image.width()) {

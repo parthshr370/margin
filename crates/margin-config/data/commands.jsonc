@@ -8,6 +8,9 @@
 [
   { "id": "app.close_layer", "title": "Close", "group": "App", "in_text": true },
   { "id": "app.key_context", "title": "Show key context", "icon": "keyboard", "group": "Help", "in_text": true },
+  { "id": "app.stats", "title": "Reading stats", "icon": "clock", "group": "View", "aliases": ["statistics", "calendar", "time read"] },
+  { "id": "library.open", "title": "Library", "icon": "book-open", "group": "Go", "aliases": ["home", "books", "shelf"] },
+  { "id": "library.search", "title": "Search library", "icon": "search", "group": "Find", "when": "Library" },
 
   { "id": "view.zoom.in", "title": "Zoom in", "icon": "zoom-in", "group": "View", "when": "Reader", "aliases": ["bigger", "magnify"] },
   { "id": "view.zoom.out", "title": "Zoom out", "icon": "zoom-out", "group": "View", "when": "Reader", "aliases": ["smaller"] },

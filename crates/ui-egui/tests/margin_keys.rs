@@ -44,6 +44,7 @@ fn harness(dir: &Path) -> Harness<'static, PdfCraftApp> {
         let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
         app.set_option("language", "en").unwrap();
         app.margin_keys.set_config_dir(dir.clone());
+        app.margin_keys.set_data_dir(dir.join("data"));
         app.open_bytes("doc.pdf", None, fixture()).unwrap();
         app
     });

@@ -40,8 +40,10 @@ const MAX_DEPTH: usize = 16;
 const MAX_ENTRIES: usize = 500_000;
 /// Files larger than this are listed from their name only (never read into memory by a scan).
 const MAX_READ_BYTES: u64 = 1 << 30;
-/// New and changed books are committed this many at a time.
+/// New and changed books are committed this many at a time, or once the oldest uncommitted one
+/// has waited [`BATCH_WAIT`], so books show up while slow files are still being read.
 const BATCH: usize = 32;
+const BATCH_WAIT: Duration = Duration::from_millis(250);
 /// Most threads a scan reads PDFs on.
 const MAX_THREADS: usize = 4;
 /// How long a connection waits for another's write to finish.
@@ -783,9 +785,19 @@ fn read_files(scan: &Scan<'_>, conn: &Connection, files: Vec<(Found, Option<Stri
         }
         drop(send);
         let mut batch = Vec::with_capacity(BATCH);
-        for probed in receive.iter() {
-            batch.push(probed);
-            if batch.len() >= BATCH {
+        let mut since = std::time::Instant::now();
+        loop {
+            match receive.recv_timeout(BATCH_WAIT) {
+                Ok(probed) => {
+                    if batch.is_empty() {
+                        since = std::time::Instant::now();
+                    }
+                    batch.push(probed);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if result.is_ok() && !batch.is_empty() && (batch.len() >= BATCH || since.elapsed() >= BATCH_WAIT) {
                 result = commit_batch(conn, &mut batch, scan.progress, report);
                 (scan.wake)();
                 if result.is_err() {

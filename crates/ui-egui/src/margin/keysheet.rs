@@ -337,12 +337,15 @@ mod tests {
         let (keymap, registry) = table("[]");
         let sections = sections(&keymap, &registry, false);
         let contexts: Vec<&str> = sections.iter().map(|s| s.context.as_str()).collect();
-        assert_eq!(contexts, [EVERYWHERE, "Reader", "Find > TextInput", "Selection", "AnnotateMode"]);
+        assert_eq!(contexts, [EVERYWHERE, "Library", "Reader", "Find > TextInput", "Selection", "AnnotateMode"]);
         let rows: usize = sections.iter().map(|s| s.rows.len()).sum();
         assert_eq!(rows, keymap.bindings.len());
         let everywhere = &sections[0].rows;
         assert_eq!(everywhere[0], Row { keys: "Ctrl+K".to_owned(), title: "Find tools and commands".to_owned() });
-        let zoom = sections[1].rows.iter().find(|row| row.keys == "Ctrl+0").unwrap();
+        let reader = sections.iter().find(|section| section.context == "Reader").unwrap();
+        let zoom = reader.rows.iter().find(|row| row.keys == "Ctrl+0").unwrap();
+        let library = sections.iter().find(|section| section.context == "Library").unwrap();
+        assert_eq!(library.rows[0], Row { keys: "/".to_owned(), title: "Search library".to_owned() });
         assert_eq!(zoom.title, "Zoom (100)");
     }
 

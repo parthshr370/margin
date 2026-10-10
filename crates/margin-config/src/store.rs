@@ -56,6 +56,30 @@ pub fn fingerprint(bytes: &[u8]) -> String {
     hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// [`fingerprint`] of the file at `path`, reading only the samples (a few KiB, not the file).
+pub fn fingerprint_file(path: &Path) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = Md5::new();
+    let mut sample = [0u8; FINGERPRINT_SAMPLE];
+    let offsets = std::iter::once(0u64).chain((0..=FINGERPRINT_STEPS).map(|i| (FINGERPRINT_SAMPLE as u64) << (2 * i)));
+    for offset in offsets {
+        file.seek(SeekFrom::Start(offset))?;
+        let mut filled = 0;
+        while filled < sample.len() {
+            match file.read(&mut sample[filled..])? {
+                0 => break,
+                n => filled += n,
+            }
+        }
+        if filled == 0 {
+            break;
+        }
+        hash.update(&sample[..filled]);
+    }
+    Ok(hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 /// `<file>.margin.json` next to `document`.
 pub fn beside_path(document: &Path) -> Option<PathBuf> {
     let name = document.file_name()?;
@@ -270,6 +294,18 @@ mod tests {
         let hex: String = expected.finalize().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(fingerprint(&bytes), hex);
         assert_eq!(fingerprint(b"").len(), 32);
+    }
+
+    #[test]
+    fn file_fingerprint_matches_the_bytes_fingerprint() {
+        let dir = temp_dir("fingerprint-file");
+        for len in [0usize, 10, 1024, 5000, 70_000] {
+            let bytes: Vec<u8> = (0..len).map(|i| (i % 249) as u8).collect();
+            let path = dir.join(format!("{len}.bin"));
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(fingerprint_file(&path).unwrap(), fingerprint(&bytes), "{len} bytes");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

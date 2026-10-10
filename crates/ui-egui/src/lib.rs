@@ -370,6 +370,12 @@ pub struct PdfCraftApp {
     pub margin_chrome: margin::ReaderChrome,
     /// Margin flavor: settings, keymap and the keyboard sheet (empty in the PdfCraft flavor).
     pub margin_keys: margin::keys::MarginKeys,
+    /// Margin flavor: the library (Home) and its database; untouched in the PdfCraft flavor.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub margin_library: margin::library::LibraryState,
+    /// Margin flavor: reading statistics; untouched in the PdfCraft flavor.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub margin_stats: margin::stats::StatsState,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
@@ -636,6 +642,10 @@ impl PdfCraftApp {
             notes: Default::default(),
             margin_chrome: Default::default(),
             margin_keys: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            margin_library: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            margin_stats: Default::default(),
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,

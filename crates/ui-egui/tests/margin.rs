@@ -30,6 +30,8 @@ fn harness(flavor: Flavor) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_flavor(flavor);
         app.set_option("language", "en").unwrap();
+        // Library and stats databases in a temporary folder, not the user's.
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-test-data-{}", std::process::id())));
         app.open_bytes("reader.pdf", None, FIXTURE.to_vec()).expect("opens");
         app
     });
@@ -221,6 +223,7 @@ fn switching_sidebar_tabs_keeps_the_page_still() {
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
         app.set_option("language", "en").unwrap();
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-test-data-{}", std::process::id())));
         app.open_bytes("long.pdf", None, long_fixture(PAGES)).expect("opens");
         app
     });
