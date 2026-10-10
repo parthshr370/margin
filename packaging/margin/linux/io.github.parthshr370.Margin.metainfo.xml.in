@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (software centres). Template: package.sh substitutes @VERSION@ (from
+     apps/margin/Cargo.toml) and @DATE@ (the build date). -->
+<component type="desktop-application">
+  <id>io.github.parthshr370.Margin</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>Margin</name>
+  <summary>A calm, reader-first PDF app</summary>
+  <developer id="io.github.parthshr370">
+    <name>Parth Sharma</name>
+  </developer>
+  <description>
+    <p>
+      Margin is a PDF reader built for long reading sessions. It keeps the page in front and the
+      tools out of the way: highlights and notes, a contents sidebar, a library of your books,
+      reading statistics and a focus mode.
+    </p>
+    <p>
+      Margin is built on the PdfCraft engine and interface (Rust, egui). It runs locally and
+      never uploads your documents.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.parthshr370.Margin.desktop</launchable>
+  <icon type="stock">io.github.parthshr370.Margin</icon>
+  <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
+  <url type="homepage">https://github.com/parthshr370/margin</url>
+  <url type="bugtracker">https://github.com/parthshr370/margin/issues</url>
+  <categories>
+    <category>Office</category>
+    <category>Viewer</category>
+  </categories>
+  <keywords>
+    <keyword>pdf</keyword>
+    <keyword>reader</keyword>
+    <keyword>viewer</keyword>
+    <keyword>highlight</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#ffd9c7</color>
+    <color type="primary" scheme_preference="dark">#ff5f1f</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">760</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <provides>
+    <binary>margin</binary>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

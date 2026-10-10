@@ -36,6 +36,7 @@ env:
 
 jobs:
   version:
+    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin runs margin-*.yml
     name: version
     runs-on: ubuntu-latest
     outputs:

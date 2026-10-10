@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The type Margin opens (the desktop file's MimeType). shared-mime-info defines it as well;
+     declaring it here keeps *.pdf mapped to it on systems that ship a trimmed database. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/pdf">
+    <comment>PDF document</comment>
+    <glob pattern="*.pdf"/>
+    <magic priority="50">
+      <match type="string" value="%PDF-" offset="0:1024"/>
+    </magic>
+  </mime-type>
+</mime-info>

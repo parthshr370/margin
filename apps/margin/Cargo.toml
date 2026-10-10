@@ -1,7 +1,9 @@
 [package]
 name = "margin"
 description = "Margin: a reader-first PDF app built on PdfCraft's interface"
-version.workspace = true
+# Margin's own release version (tags v<version>, packaging/margin/); the PdfCraft crates it
+# builds on keep the workspace version.
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
@@ -14,3 +16,8 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Finder double-click, Open With and Dock drops arrive as Apple events; PdfCraft's handler
+# (apps/pdfcraft/src/apple_events.rs, used as is) needs it. Same pin as apps/pdfcraft.
+fmv-macos-events = "=0.1.0"

@@ -3009,10 +3009,11 @@ dependencies = [
 
 [[package]]
 name = "margin"
-version = "0.4.0"
+version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "fmv-macos-events",
  "log",
  "pdfcraft-ui-egui",
  "serde_json",

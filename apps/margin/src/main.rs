@@ -9,12 +9,20 @@
 use pdfcraft_ui_egui::theme::ThemePreference;
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
+/// PdfCraft's macOS open-documents and quit Apple events, used as is: Finder, Open With and the
+/// Dock hand files over this way, not as arguments (packaging/margin/macos/Info.plist.in declares
+/// PDF as a document type).
+#[cfg(target_os = "macos")]
+#[path = "../../pdfcraft/src/apple_events.rs"]
+mod apple_events;
+
 /// PdfCraft's logger, used as is: standard error plus a rotated log file in the settings folder.
 #[path = "../../pdfcraft/src/logging.rs"]
 mod logging;
 
-/// Freedesktop app id (the Wayland app id).
-const APP_ID: &str = "margin";
+/// Freedesktop app id (the Wayland app id and X11 WM_CLASS): the name of the desktop file and icon
+/// in packaging/margin/linux, so desktops match the window to them.
+const APP_ID: &str = "io.github.parthshr370.Margin";
 
 /// The app icon: Margin's logo (contributor-original, see ATTRIBUTION.toml), decoded as
 /// PdfCraft decodes its own (`eframe::icon_data`).
@@ -90,6 +98,11 @@ fn main() -> eframe::Result {
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
     let mut native = eframe::NativeOptions { viewport, persistence_path, ..Default::default() };
     configure_gpu(&mut native);
+    // Catch the event that launched us as well as later ones; lives until the event loop returns.
+    #[cfg(target_os = "macos")]
+    let apple_events = apple_events::AppleEvents::install();
+    #[cfg(target_os = "macos")]
+    let apple_events = &apple_events;
     eframe::run_native(
         "Margin",
         native,
@@ -99,6 +112,10 @@ fn main() -> eframe::Result {
             app.set_theme_preference(ThemePreference::Dark);
             if let Some(json) = cc.storage.and_then(|s| s.get_string(STORAGE_KEY)) {
                 app.restore(&json);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                app.os_events = Some(apple_events.connect(&cc.egui_ctx));
             }
             if let Some(file) = &control_file {
                 let client = app.attach_control(&cc.egui_ctx);

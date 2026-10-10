@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Margin
+GenericName=PDF Reader
+Comment=Read PDFs calmly, with highlights, notes and a library
+Exec=margin %U
+TryExec=margin
+Icon=io.github.parthshr370.Margin
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.parthshr370.Margin
+Categories=Office;Viewer;
+Keywords=pdf;reader;viewer;ebook;highlight;notes;
+MimeType=application/pdf;

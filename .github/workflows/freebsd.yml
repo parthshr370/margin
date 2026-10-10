@@ -23,6 +23,7 @@ permissions:
 
 jobs:
   freebsd:
+    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin runs margin-*.yml
     name: FreeBSD 14 (build + test)
     runs-on: ubuntu-latest
     timeout-minutes: 300

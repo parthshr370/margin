@@ -1,5 +1,6 @@
-Margin app icon (icon.png, a 512 px render of the Margin logo, margin-logo.svg in the Margin
-project's plan/logo).
+The Margin logo and app icons in this folder: margin.svg (the master vector), icon.png (the
+512 px runtime window icon), hicolor/ (Linux theme icons) and margin-macos-1024.png (the macOS
+icon source). packaging/margin/icons.sh renders hicolor/ and margin-macos-1024.png from margin.svg.
 
 Original artwork made for Margin under the project owner's direction and approved by the owner
 (no third-party material). Licensed like the rest of PdfCraft, under either of

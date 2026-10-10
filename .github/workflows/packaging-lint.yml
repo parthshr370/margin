@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   lint:
+    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin runs margin-*.yml
     runs-on: ubuntu-latest
     env:
       ACTIONLINT_VERSION: 1.7.12

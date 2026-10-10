@@ -1,0 +1,200 @@
+# Margin's release pipeline: a pushed tag v<version> (or a manual run) builds the Linux packages
+# (x86_64 and aarch64) and the macOS universal DMG with packaging/margin/, then creates or updates
+# the DRAFT GitHub Release "Margin v<version>" with every artifact and SHA256SUMS. Publishing the
+# draft stays a manual step. <version> is `version` in apps/margin/Cargo.toml; a tag must match it.
+#
+# macOS builds are signed ad-hoc and not notarized (no Apple Developer account).
+name: Margin release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: margin-release-${{ github.ref }}
+  # Never cancel a run mid-upload; a newer push waits its turn.
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  PDFCRAFT_BUILD_SHA: ${{ github.sha }}
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      date: ${{ steps.v.outputs.date }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Resolve version
+        run: |
+          . packaging/margin/env.sh
+          if ! printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "::error::'$VERSION' in apps/margin/Cargo.toml is not a version like 1.2.3 or 1.2.3-rc.1"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match apps/margin/Cargo.toml version $VERSION (expected v$VERSION)"
+            exit 1
+          fi
+          case "$VERSION" in *-*) pre=true ;; *) pre=false ;; esac
+          {
+            echo "version=$VERSION"
+            echo "date=$(date -u +%Y-%m-%d)"
+            echo "prerelease=$pre"
+          } >>"$GITHUB_OUTPUT"
+          echo "### Margin v$VERSION (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: version
+    # The oldest GitHub-hosted image, so the binary only needs glibc >= 2.35 (Ubuntu 22.04+,
+    # Debian 12+, Fedora 36+).
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04, deb: amd64 }
+          - { arch: aarch64, runner: ubuntu-22.04-arm, deb: arm64 }
+    env:
+      MARGIN_VERSION: ${{ needs.version.outputs.version }}
+      PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      NFPM_VERSION: 2.47.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            desktop-file-utils appstream zsync
+          curl -fsSL -o "$RUNNER_TEMP/nfpm.deb" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${{ matrix.deb }}.deb"
+          sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: margin-release-linux-${{ matrix.arch }}
+      - name: Build and package (AppImage, deb, rpm, tar.gz)
+        run: packaging/margin/linux/package.sh
+      - name: Check the packages
+        run: |
+          dpkg-deb --info dist/release/*.deb
+          dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/margin$|metainfo|applications|hicolor/512x512'
+          ldd target/release/margin
+          for appimage in dist/release/*.AppImage; do
+            chmod +x "$appimage"
+            APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version | grep -Fx "margin $MARGIN_VERSION"
+            "$appimage" --appimage-updateinformation | grep -F 'gh-releases-zsync|'
+            test -s "$appimage.zsync"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: margin-linux-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    needs: version
+    runs-on: macos-15
+    env:
+      MARGIN_VERSION: ${{ needs.version.outputs.version }}
+      PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: margin-release-macos-universal
+      - name: Build, sign ad-hoc, make the DMG
+        run: packaging/margin/macos/package.sh --arch universal
+      - name: Check the DMG
+        run: |
+          dmg="dist/release/margin-$MARGIN_VERSION-macos-universal.dmg"
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          plutil -extract CFBundleIdentifier raw "$mnt/Margin.app/Contents/Info.plist" | grep -Fx io.github.parthshr370.Margin
+          lipo -archs "$mnt/Margin.app/Contents/MacOS/Margin"
+          "$mnt/Margin.app/Contents/MacOS/Margin" --version | grep -Fx "margin $MARGIN_VERSION"
+          codesign --verify --strict --deep --verbose=2 "$mnt/Margin.app"
+          hdiutil detach "$mnt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: margin-macos-universal
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: Draft GitHub Release
+    needs: [version, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: margin-*
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        working-directory: artifacts
+        run: |
+          sha256sum -- * | tee SHA256SUMS
+      - name: Release notes
+        run: |
+          cat >notes.md <<EOF
+          Margin $VERSION, a calm, reader-first PDF app built on the PdfCraft engine.
+
+          ## Downloads
+
+          - Linux (x86_64 and aarch64): \`.AppImage\` (any distro, glibc 2.35 or newer), \`.deb\` (Debian, Ubuntu), \`.rpm\` (Fedora, openSUSE), \`.tar.gz\` (plain tree).
+          - macOS 11 or newer (Apple silicon and Intel): \`margin-$VERSION-macos-universal.dmg\`. The app is signed ad-hoc and not notarized. On first launch, right-click Margin.app and choose Open, or allow it in System Settings > Privacy & Security.
+
+          Check downloads against \`SHA256SUMS\`.
+          EOF
+      - name: Create or update the draft release
+        working-directory: artifacts
+        run: |
+          tag="v$VERSION"
+          title="Margin v$VERSION"
+          pre=()
+          if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
+          if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != "true" ]; then
+              echo "::error::Release $tag is already published. Bump the version in apps/margin/Cargo.toml and tag again."
+              exit 1
+            fi
+            echo "Updating draft $tag: replacing its assets"
+            gh release view "$tag" --json assets --jq '.assets[].name' | while read -r asset; do
+              gh release delete-asset "$tag" "$asset" --yes
+            done
+            gh release edit "$tag" --draft --title "$title" --notes-file ../notes.md --target "$GITHUB_SHA" --prerelease="$PRERELEASE"
+            gh release upload "$tag" --clobber -- *
+          else
+            echo "Creating draft $tag"
+            gh release create "$tag" --draft --title "$title" --notes-file ../notes.md --target "$GITHUB_SHA" "${pre[@]}" -- *
+          fi
+          {
+            echo "Draft release **$title** at \`${GITHUB_SHA::9}\`:"
+            echo
+            sed 's/^/    /' SHA256SUMS
+          } >>"$GITHUB_STEP_SUMMARY"
