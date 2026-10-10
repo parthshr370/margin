@@ -368,10 +368,9 @@ fn actions(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     });
     ui.add_enabled_ui(input.editable(), |ui| {
         let colour = look::color_button(ui, ACTION, shown_color(input.notes, a.color), false, "Change colour", None);
-        egui::Popup::menu(&colour).show(|ui| {
+        look::popover(&colour, egui::Id::new(("margin-highlight-colour", a.page, a.index))).show(|ui| {
             if let Some(i) = color_row(ui, input) {
                 action = Some(Action::Color(i));
-                ui.close();
             }
         });
         if look::icon_button(ui, "trash-2", ACTION, false, "Delete highlight", input.keys.delete.as_deref()).clicked() {

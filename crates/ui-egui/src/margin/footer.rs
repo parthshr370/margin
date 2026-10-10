@@ -112,17 +112,15 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, keys: &Z
         let menu =
             ui.add(egui::Button::new(egui::RichText::new(percent).font(theme::regular(11.5)).color(t.text)).frame(false).min_size(vec2(50.0, 0.0)));
         let menu = look::tooltip(menu, "Zoom and fit", None);
-        egui::Popup::menu(&menu).show(|ui| {
+        look::popover(&menu, egui::Id::new("margin-zoom-menu")).show(|ui| {
             ui.set_min_width(170.0);
             for (fit, label) in [(Fit::Width, "Fit width"), (Fit::Page, "Fit page")] {
                 if ui.radio(view.fit == fit, label).clicked() {
                     view.set_fit(fit);
-                    ui.close();
                 }
             }
             if ui.button("Fit visible content").clicked() {
                 command = Some("view.fit_visible");
-                ui.close();
             }
             ui.separator();
             for step in ZOOM_STEPS {
@@ -130,7 +128,6 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, keys: &Z
                 let on = view.fit == Fit::None && (view.zoom - zoom).abs() < 0.005;
                 if ui.radio(on, format!("{step}%")).clicked() {
                     view.set_zoom(zoom);
-                    ui.close();
                 }
             }
         });

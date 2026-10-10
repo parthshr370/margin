@@ -148,6 +148,13 @@ pub(crate) fn shortcut_with(app: &PdfCraftApp, command: &str, args: &Value) -> O
     spec.shortcut.filter(|_| app.margin_keys.falls_back(spec)).map(|keys| keys.label(mac))
 }
 
+/// A Margin option popover toggled by `button`, under the stable `id` (so a change made inside it
+/// never makes it a different popup). Its options apply at once and leave it open; a click
+/// outside it, Esc or `button` again closes it. The caller sets its frame and placement.
+pub(crate) fn popover<'a>(button: &Response, id: egui::Id) -> egui::Popup<'a> {
+    egui::Popup::menu(button).id(id).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+}
+
 /// A tooltip naming the control, with its shortcut after it in muted text. A disabled control
 /// shows it too, so its label can say why it is off.
 pub(crate) fn tooltip(resp: Response, label: &str, shortcut: Option<&str>) -> Response {

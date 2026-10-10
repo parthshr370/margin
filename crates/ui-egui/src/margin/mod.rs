@@ -232,6 +232,9 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     sync(app);
     motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
     let t = crate::theme::Tokens::get(ctx);
+    // A click while a popover or menu is open closes it (`look::popover`) and does nothing else:
+    // the page must not also clear its selection, follow a link or place a mark.
+    let dismissing = egui::Popup::is_any_open(ctx) && ctx.input(|i| i.pointer.any_click());
     // The sidebar slides itself in and out (`margin_chrome.sidebar_open`).
     if app.active.is_some() {
         sidebar::show(app, ui);
@@ -249,6 +252,13 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         Some(i) => {
             #[cfg(not(target_arch = "wasm32"))]
             library::hidden(app);
+            if dismissing {
+                // Disabled for this frame only, at full opacity (as the canvas pauses a wheel
+                // gesture).
+                let opacity = ui.opacity();
+                ui.disable();
+                ui.set_opacity(opacity);
+            }
             crate::canvas::document_area(app, i, ui)
         }
     });

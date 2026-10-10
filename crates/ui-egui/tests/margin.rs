@@ -293,6 +293,51 @@ fn full_screen_bar_has_an_exit_button() {
     assert!(!h.state().full_screen, "Esc leaves full screen");
 }
 
+/// Margin's option popovers apply each option and stay open; Esc, the toggle again or a click
+/// outside close them in one action, and that action does nothing else (the selection stays).
+#[test]
+fn option_popovers_stay_open_until_dismissed() {
+    let mut h = harness(Flavor::Margin);
+    let display = "Page colour and layout";
+    let open = |h: &Harness<'static, PdfCraftApp>| h.query_by_label("Brightness").is_some();
+    click(&mut h, display);
+    for option in ["Single", "Two-up", "Width", "Auto", "Sepia", "Night"] {
+        click(&mut h, option);
+        assert!(open(&h), "{option} left the Display popover open");
+    }
+    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
+    assert!(h.state().views[0].margin.trim.on);
+
+    h.state_mut().views[0].select_text(0, 0, 2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!open(&h), "Esc closes the popover");
+    assert!(h.state().views[0].selected_text().is_some(), "and leaves the selection");
+
+    click(&mut h, display);
+    assert!(open(&h));
+    click(&mut h, display);
+    assert!(!open(&h), "the toggle closes it again");
+
+    click(&mut h, display);
+    let on_page = h.state().views[0].glyph_screen_pos(0, 2).expect("text layer loaded");
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: on_page, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert!(!open(&h), "a click outside closes it");
+    assert!(h.state().views[0].selected_text().is_some(), "without clearing the selection under it");
+
+    // The zoom menu keeps itself open the same way.
+    let percent = format!("{:.0}%", h.state().views[0].zoom * 100.0);
+    click(&mut h, &percent);
+    click(&mut h, "Fit visible content");
+    assert!(h.query_by_label("Fit visible content").is_some(), "the zoom menu stays open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.query_by_label("Fit visible content").is_none(), "Esc closes the zoom menu");
+}
+
 /// A Margin app at 60 frames a second, reading its settings from `config` (written first when
 /// `settings` is given), its renders settled.
 fn realtime_harness(config: &std::path::Path, settings: Option<&str>) -> Harness<'static, PdfCraftApp> {

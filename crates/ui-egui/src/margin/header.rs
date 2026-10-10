@@ -92,8 +92,10 @@ fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if look::icon_button(ui, "maximize", BUTTON, app.full_screen, "Full screen", keys.as_deref()).clicked() {
         app.execute("view.full_screen");
     }
-    let display = look::icon_button(ui, "contrast", BUTTON, false, "Page colour and layout", None);
-    let popup = egui::Popup::menu(&display).frame(crate::margin::display::popover_frame(ui.style()));
+    let display_id = egui::Id::new("margin-display-popover");
+    let display_open = egui::Popup::is_id_open(ui.ctx(), display_id);
+    let display = look::icon_button(ui, "contrast", BUTTON, display_open, "Page colour and layout", None);
+    let popup = look::popover(&display, display_id).frame(crate::margin::display::popover_frame(ui.style()));
     let rise_id = popup.get_id().with("margin-rise");
     // egui fades the popup in (`motion::sync` sets its fade time); it also rises a few pixels.
     match popup.show(|ui| display_popover(app, ui)) {

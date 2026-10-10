@@ -586,13 +586,14 @@ fn run_pdfcraft(app: &mut PdfCraftApp, ctx: &egui::Context, id: &str) {
 }
 
 /// Escape: closes Margin's own layer, else does what PdfCraft's view did (clear the selection,
-/// else close the find bar). Text fields, dialogs and the palette close themselves on the Escape
-/// the dispatcher leaves in the input.
+/// else close the find bar). Text fields, dialogs, the palette and an open popover (Display,
+/// zoom, a colour) close themselves on the Escape the dispatcher leaves in the input, and that
+/// Escape does nothing else.
 fn close_layer(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.margin_keys.sheet.take().is_some() {
         return;
     }
-    if ctx.egui_wants_keyboard_input() || app.dialog.is_some() || app.palette_open {
+    if ctx.egui_wants_keyboard_input() || app.dialog.is_some() || app.palette_open || egui::Popup::is_any_open(ctx) {
         return;
     }
     let Some(view) = app.active.and_then(|index| app.views.get_mut(index)) else { return };

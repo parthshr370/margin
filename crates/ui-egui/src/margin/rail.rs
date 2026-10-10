@@ -174,7 +174,7 @@ fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut C
         prefs.pinned = !prefs.pinned;
     }
     let colour = look::color_button(ui, BUTTON, color32(style.color), true, "Colour", None);
-    popover(&colour, |ui| {
+    popover(&colour, "colour", |ui| {
         let palette = crate::margin::obsidian::swatches(ui.ctx()).unwrap_or_else(|| SWATCHES.iter().map(|(n, c)| ((*n).to_string(), *c)).collect());
         let dots: Vec<ColorDot<'_>> = palette
             .iter()
@@ -187,11 +187,10 @@ fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut C
             .collect();
         if let Some((_, c)) = look::color_dots(ui, &dots).and_then(|i| palette.get(i)) {
             prefs.set_color(tool, *c);
-            ui.close();
         }
     });
     let opacity = look::rail_button(ui, "blend", BUTTON, false, "Opacity", None);
-    popover(&opacity, |ui| {
+    popover(&opacity, "opacity", |ui| {
         let mut percent = (style.opacity * PERCENT).round();
         if value_slider(ui, t, "Opacity", &mut percent, OPACITY_PERCENT, OPACITY_STEP, |v| format!("{v:.0} %")) {
             prefs.set_opacity(tool, percent / PERCENT);
@@ -199,7 +198,7 @@ fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut C
     });
     if tool.has_width() {
         let thickness = look::rail_button(ui, "sliders-horizontal", BUTTON, false, "Line thickness", None);
-        popover(&thickness, |ui| {
+        popover(&thickness, "thickness", |ui| {
             let mut width = style.width;
             if value_slider(ui, t, "Line thickness", &mut width, THICKNESS_PT, THICKNESS_STEP, |v| format!("{v:.1} pt")) {
                 prefs.set_width(tool, width);
@@ -208,15 +207,14 @@ fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut C
     }
 }
 
-/// A popover to the right of a rail button, in the Display popover's frame; stays open while
-/// its slider is dragged.
-fn popover(button: &egui::Response, contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Popup::menu(button)
+/// A popover to the right of a rail button, in the Display popover's frame, named `which`
+/// (`look::popover`: picking a colour or dragging a slider leaves it open).
+fn popover(button: &egui::Response, which: &str, contents: impl FnOnce(&mut egui::Ui)) {
+    look::popover(button, egui::Id::new(("margin-rail-popover", which)))
         .align(egui::RectAlign::RIGHT_START)
         // Clear of the rail's own padding, then the small step.
         .gap(f32::from(PADDING) + look::GAP)
         .frame(display::popover_frame(&button.ctx.global_style()))
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(contents);
 }
 
