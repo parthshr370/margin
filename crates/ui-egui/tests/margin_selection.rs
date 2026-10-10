@@ -28,11 +28,11 @@ const CALLOUT: &str = "> [!PDF|yellow] [[papers/text.pdf#page=1|text, p.1]]\n> >
 struct Vault(PathBuf);
 
 impl Vault {
-    fn new(name: &str) -> Self {
+    fn new(name: &str, pdf: &[u8]) -> Self {
         let root = std::env::temp_dir().join(format!("margin-selection-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("vault/papers")).unwrap();
-        std::fs::write(root.join("vault/papers/text.pdf"), TEXT_FIXTURE).unwrap();
+        std::fs::write(root.join("vault/papers/text.pdf"), pdf).unwrap();
         Self(root)
     }
 }
@@ -52,7 +52,8 @@ fn harness(vault: &Vault) -> Harness<'static, PdfCraftApp> {
         app.margin_keys.set_config_dir(root.join("config"));
         app.margin_keys.set_data_dir(root.join("data"));
         let pdf = root.join("vault/papers/text.pdf");
-        app.open_bytes("text.pdf", Some(pdf.to_string_lossy().into_owned()), TEXT_FIXTURE.to_vec()).expect("opens");
+        let bytes = std::fs::read(&pdf).expect("the vault's PDF");
+        app.open_bytes("text.pdf", Some(pdf.to_string_lossy().into_owned()), bytes).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("notes.vault", &root.join("vault").to_string_lossy()).unwrap();
         app.notes.launch_obsidian = false;
@@ -112,7 +113,7 @@ fn is_yellow(color: Option<[f32; 3]>) -> bool {
 
 #[test]
 fn copy_and_copy_callout_work_without_writing_a_mark() {
-    let vault = Vault::new("copy");
+    let vault = Vault::new("copy", TEXT_FIXTURE);
     let mut h = harness(&vault);
     select(&mut h);
     assert!(bar_open(&h), "a finished selection shows the bar");
@@ -133,7 +134,7 @@ fn copy_and_copy_callout_work_without_writing_a_mark() {
 
 #[test]
 fn colours_write_one_mark_and_restyle_it_one_undo_step_each() {
-    let vault = Vault::new("colour");
+    let vault = Vault::new("colour", TEXT_FIXTURE);
     let mut h = harness(&vault);
     select(&mut h);
     h.get_by_label("Yellow").click();
@@ -157,7 +158,7 @@ fn colours_write_one_mark_and_restyle_it_one_undo_step_each() {
 
 #[test]
 fn number_keys_mark_the_selection_and_esc_closes_the_bar() {
-    let vault = Vault::new("keys");
+    let vault = Vault::new("keys", TEXT_FIXTURE);
     let mut h = harness(&vault);
     select(&mut h);
     // `2` is Red in the built-in keymap's Selection context.
@@ -177,7 +178,7 @@ fn number_keys_mark_the_selection_and_esc_closes_the_bar() {
 
 #[test]
 fn a_press_outside_closes_the_bar_and_it_stays_closed() {
-    let vault = Vault::new("outside");
+    let vault = Vault::new("outside", TEXT_FIXTURE);
     let mut h = harness(&vault);
     select(&mut h);
     assert!(bar_open(&h));
@@ -195,4 +196,101 @@ fn a_press_outside_closes_the_bar_and_it_stays_closed() {
     // A new selection brings it back.
     select(&mut h);
     assert!(bar_open(&h));
+}
+
+/// A 400×300 two-column page drawn row by row across the columns, with a heading over both
+/// columns and a figure caption over both halfway down.
+fn columns_pdf() -> Vec<u8> {
+    let mut content = String::from("BT /F1 12 Tf 20 270 Td (A heading that spans both columns of text) Tj ET\n");
+    let rows = [
+        (255, "Left one alpha", "Right one delta"),
+        (242, "Left two beta", "Right two epsilon"),
+        (229, "Figure 1: a caption that runs across the full width of both text columns", ""),
+        (216, "Left three gamma", "Right three zeta"),
+        (203, "Left four", "Right four"),
+    ];
+    for (y, left, right) in rows {
+        content.push_str(&format!("BT /F1 10 Tf 20 {y} Td ({left}) Tj ET\n"));
+        if !right.is_empty() {
+            content.push_str(&format!("BT /F1 10 Tf 210 {y} Td ({right}) Tj ET\n"));
+        }
+    }
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >> endobj
+5 0 obj << /Length {} >> stream
+{content}endstream endobj
+7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// The glyph range of `needle` on page 1 (through the document's own search).
+fn glyphs_of(h: &mut Harness<'static, PdfCraftApp>, needle: &str) -> std::ops::Range<usize> {
+    h.state_mut().set_option("find", needle).unwrap();
+    settle(h);
+    let view = &mut h.state_mut().views[0];
+    let range = view.find.as_ref().and_then(|f| f.matches.first()).map(|(_, r)| r.clone()).expect("a match");
+    view.find = None;
+    range
+}
+
+/// Drag from glyph `from` to glyph `to` of page 1 and return the selected text.
+fn drag_glyphs(h: &mut Harness<'static, PdfCraftApp>, from: usize, to: usize) -> String {
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, from).expect("glyph"), v.glyph_screen_pos(0, to).expect("glyph"))
+    };
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(b);
+    h.run_steps(3);
+    h.state().views[0].selected_text().unwrap_or_default()
+}
+
+/// Across the gutter, forwards and backwards, then rotated and trimmed: the selection reads the
+/// left column's tail then the right column's head; copy, callout and the mark quote the same.
+#[test]
+fn two_column_selection_follows_reading_order_and_copy_callout_and_mark_agree() {
+    let vault = Vault::new("columns", &columns_pdf());
+    let mut h = harness(&vault);
+    let from = glyphs_of(&mut h, "Left two beta").start;
+    let to = glyphs_of(&mut h, "Right one delta").end - 1;
+    let expected = "Left two beta\nRight one delta";
+    assert_eq!(drag_glyphs(&mut h, from, to), expected, "forward drag");
+    assert_eq!(drag_glyphs(&mut h, to, from), expected, "reverse drag");
+    // The caption over both columns is read after the right column's top half.
+    let caption = glyphs_of(&mut h, "Figure 1").start;
+    assert!(caption > glyphs_of(&mut h, "Right two epsilon").start && caption < glyphs_of(&mut h, "Left three").start);
+    // Rotated a quarter turn, then auto-trimmed: the same glyphs give the same text.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::R);
+    settle(&mut h);
+    assert_eq!(drag_glyphs(&mut h, from, to), expected, "rotated");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::R);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::R);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::R);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::T);
+    settle(&mut h);
+    assert_eq!(drag_glyphs(&mut h, to, from), expected, "trimmed");
+    // Copy callout quotes it; the highlight the bar writes marks exactly it.
+    let quote = "> > Left two beta Right one delta\n";
+    let callout = pdfcraft_ui_egui::margin::obsidian::selection_callout(h.state(), 0, 0, expected, None).unwrap();
+    assert!(callout.ends_with(quote), "{callout}");
+    h.get_by_label("Yellow").click();
+    h.run_steps(3);
+    settle(&mut h);
+    assert_eq!(pdfcraft_ui_egui::margin::obsidian::callout_for(h.state(), 0, 0, 0).unwrap(), callout);
 }

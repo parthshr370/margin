@@ -372,13 +372,19 @@ fn union(a: &mut [f32; 4], b: &[f32; 4]) {
     a[3] = a[3].max(b[3]);
 }
 
+/// How far (in the segment's line heights) above a segment a column may end for the segment to
+/// count as spanning it (layout step 2).
+const BRIDGE_REACH_LINES: f32 = 3.0;
+
 /// Reading-order layout. Glyphs are reordered so that `glyphs` is in reading order, lines are
 /// numbered in that order, and word gaps are inferred per line.
 ///
 /// Heuristics (documented so they can be tuned and tested; plan/architecture.md §8):
 /// 1. *Segments:* consecutive glyphs (content order) on one baseline with no column-sized gap.
 ///    Segments on the same baseline that nearly touch are merged (text drawn out of order).
-/// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
+/// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally. A segment
+///    that straddles two columns ending just above it (a heading or caption spanning both)
+///    starts a block of its own.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
 ///    that overlaps it vertically (so columns read left, then right).
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
@@ -456,19 +462,35 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
         s.idx.sort_by(|a, b| glyphs[*a].rect[0].total_cmp(&glyphs[*b].rect[0]));
     }
 
-    // 2. Blocks.
+    // 2. Blocks. A segment that straddles two columns which end just above it (a heading or
+    // caption spanning both) starts its own block instead of continuing either column, so the
+    // second column is read before it and what follows it isn't read into the first column.
+    let x_overlap = |a: &[f32; 4], b: &[f32; 4]| a[2].min(b[2]) - a[0].max(b[0]);
     let mut by_top: Vec<usize> = (0..segs.len()).collect();
     by_top.sort_by(|a, b| segs[*a].bbox[1].total_cmp(&segs[*b].bbox[1]));
     let mut blocks: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
     for si in by_top {
         let s = &segs[si];
-        let target = blocks.iter().position(|(members, bb)| {
+        let target = blocks.iter().enumerate().position(|(b, (members, bb))| {
             let Some(&m) = members.last() else { return false };
             let last = &segs[m];
             let vgap = s.bbox[1] - last.bbox[3];
-            let overlap = s.bbox[2].min(bb[2]) - s.bbox[0].max(bb[0]);
+            let overlap = x_overlap(&s.bbox, bb);
             let minw = (s.bbox[2] - s.bbox[0]).min(bb[2] - bb[0]).max(1.0);
-            vgap > -last.h * 0.5 && vgap < last.h.max(s.h) * 1.1 && overlap > minw * 0.3 && (last.h / s.h - 1.0).abs() < 0.6
+            let continues = vgap > -last.h * 0.5 && vgap < last.h.max(s.h) * 1.1 && overlap > minw * 0.3 && (last.h / s.h - 1.0).abs() < 0.6;
+            // Another column whose bottom line ends just above `s`, beside `last`'s column.
+            let bridges = || {
+                blocks.iter().enumerate().any(|(k, (others, _))| {
+                    let Some(bottom) = others.last().map(|o| &segs[*o].bbox) else { return false };
+                    let above = s.bbox[1] - bottom[3];
+                    k != b
+                        && x_overlap(&s.bbox, bottom) > 0.0
+                        && x_overlap(&last.bbox, bottom) <= 0.0
+                        && above > -s.h * 0.5
+                        && above < s.h * BRIDGE_REACH_LINES
+                })
+            };
+            continues && !bridges()
         });
         match target {
             Some(b) => {
@@ -671,6 +693,50 @@ mod tests {
         word(&mut v, "Right2", 200.0, 24.0, 6.0);
         let t = layout(v);
         assert_eq!(t.plain_text(), "Left1\nLeft2\nRight1\nRight2");
+    }
+
+    /// A two-column page drawn row by row across both columns, with a heading over both and a
+    /// caption over both halfway down: each column is read to its end before what spans it.
+    fn spanning_page() -> PageText {
+        let mut v = Vec::new();
+        word(&mut v, "TitleOverTheTwoColumnsOfThisPage", 10.0, 0.0, 7.0);
+        word(&mut v, "Lone", 10.0, 14.0, 6.0);
+        word(&mut v, "Rone", 200.0, 14.0, 6.0);
+        word(&mut v, "Ltwo", 10.0, 28.0, 6.0);
+        word(&mut v, "Rtwo", 200.0, 28.0, 6.0);
+        word(&mut v, "CaptionSpanningBothColumnsHere", 10.0, 42.0, 7.0);
+        word(&mut v, "Lthree", 10.0, 56.0, 6.0);
+        word(&mut v, "Rthree", 200.0, 56.0, 6.0);
+        word(&mut v, "Lfour", 10.0, 70.0, 6.0);
+        word(&mut v, "Rfour", 200.0, 70.0, 6.0);
+        layout(v)
+    }
+
+    #[test]
+    fn a_caption_spanning_both_columns_is_read_after_both() {
+        assert_eq!(
+            spanning_page().plain_text(),
+            "TitleOverTheTwoColumnsOfThisPage\nLone\nLtwo\nRone\nRtwo\nCaptionSpanningBothColumnsHere\nLthree\nLfour\nRthree\nRfour"
+        );
+    }
+
+    /// A drag from the bottom of the left column into the right one selects the left column's
+    /// tail, then the right column's head, the same text both ways, one box per line.
+    #[test]
+    fn a_drag_across_the_gutter_follows_reading_order() {
+        let t = spanning_page();
+        // From "Ltwo"'s first letter to "Rone"'s last.
+        let from = t.nearest(11.0, 33.0).expect("glyph");
+        let to = t.nearest(223.0, 19.0).expect("glyph");
+        let forward = t.text_of(from.min(to)..from.max(to) + 1);
+        assert_eq!(forward, "Ltwo\nRone");
+        let (back_from, back_to) = (to, from);
+        assert_eq!(t.text_of(back_from.min(back_to)..back_from.max(back_to) + 1), forward);
+        assert_eq!(t.line_rects(from.min(to)..from.max(to) + 1).len(), 2);
+        // A line pick stays in its column.
+        let r = t.nearest(203.0, 33.0).expect("glyph");
+        let (first, last) = t.line_at(r).expect("line");
+        assert_eq!(t.text_of(first..last + 1), "Rtwo");
     }
 
     #[test]
