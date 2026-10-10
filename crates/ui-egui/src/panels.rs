@@ -52,7 +52,7 @@ fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool
     (go_back, close)
 }
 
-pub(crate) fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let (_, close) = panel_header(ui, t, "All tools", false);
     if close {
         app.left_open = false;
@@ -109,7 +109,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
     resp.on_hover_text(tip)
 }
 
-pub(crate) fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
     let (back, close) = panel_header(ui, t, g.label, true);
     if back {
         app.left = LeftPanel::AllTools;
@@ -118,7 +118,22 @@ pub(crate) fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, 
     if close {
         app.left_open = false;
     }
-    if let Availability::Planned(m) = g.availability {
+    tool_detail_body(app, ui, t, g);
+}
+
+/// Whether the group's item list shows `item` (Fill & Sign lists its signatures separately).
+pub(crate) fn listed(g: &ToolGroup, item: &catalog::ToolItem) -> bool {
+    !(g.id == "fill_sign" && (item.command.starts_with("sign.fill.signature") || item.command.starts_with("sign.fill.initials")))
+}
+
+/// A tool group's options and items under its header. Margin's Tools tab (`margin::tools`)
+/// draws its own header and calls this; in Margin there is no milestone banner, the items are
+/// Margin's rows (`margin::tools::section`, working items only) and the buttons Margin's.
+pub(crate) fn tool_detail_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+    let margin = app.flavor == crate::Flavor::Margin;
+    if let Availability::Planned(m) = g.availability
+        && !margin
+    {
         egui::Frame::NONE.fill(t.accent_soft).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(
@@ -141,8 +156,17 @@ pub(crate) fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, 
     if g.id == "form" {
         ui.horizontal(|ui| {
             let label = if app.form_preview { "Edit fields" } else { "Preview" };
-            if widgets::pill_button(ui, tl!(label), app.form_preview).on_hover_text(tl!("Try the form as people filling it in will see it")).clicked()
-            {
+            let tip = tl!("Try the form as people filling it in will see it");
+            let clicked = if margin {
+                crate::margin::look::Button::secondary(crate::margin::look::ButtonSize::Compact, tl!(label))
+                    .selected(app.form_preview)
+                    .tip(tip)
+                    .show(ui)
+                    .clicked()
+            } else {
+                widgets::pill_button(ui, tl!(label), app.form_preview).on_hover_text(tip).clicked()
+            };
+            if clicked {
                 app.form_preview = !app.form_preview;
                 if app.form_preview {
                     app.quick_tool = crate::QuickTool::Select;
@@ -162,9 +186,15 @@ pub(crate) fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, 
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
         for s in g.sections {
+            if margin {
+                if let Some(command) = crate::margin::tools::section(app, ui, t, g, s) {
+                    run = Some(command);
+                }
+                continue;
+            }
             widgets::section_title(ui, tl!(s.title));
             for item in s.items {
-                if g.id == "fill_sign" && (item.command.starts_with("sign.fill.signature") || item.command.starts_with("sign.fill.initials")) {
+                if !listed(g, item) {
                     continue;
                 }
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
@@ -218,10 +248,18 @@ pub(crate) fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, 
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked() {
+                let (redact, clear) = if margin {
+                    use crate::margin::look::{ButtonSize, button_primary, button_secondary};
+                    let redact = ui.add_enabled_ui(marks > 0, |ui| button_primary(ui, ButtonSize::Compact, tl!("Redact all"))).inner.clicked();
+                    (redact, ui.add_enabled_ui(marks > 0, |ui| button_secondary(ui, ButtonSize::Compact, tl!("Clear all"))).inner.clicked())
+                } else {
+                    let redact = ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked();
+                    (redact, ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Clear all"), false)).inner.clicked())
+                };
+                if redact {
                     run = Some("redact.apply");
                 }
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Clear all"), false)).inner.clicked() {
+                if clear {
                     run = Some("redact.clear");
                 }
             });

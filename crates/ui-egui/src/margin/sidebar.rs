@@ -2,18 +2,17 @@
 //! progress), the current tab's pane, and the tab strip at the bottom.
 //!
 //! Panes reuse PdfCraft's panels: Pages and Bookmarks are the right panel's bodies
-//! (`panels::panel_body`), Tools is the tool catalogue (`panels::all_tools` / `tool_detail`).
+//! (`panels::panel_body`); Tools is Margin's list over the tool catalogue (`margin::tools`).
 //! Highlights is Margin's card list (`margin::highlights`), Find the search's results
 //! (`margin::find`), Contents the outline as a reading table of contents (`margin::contents`).
 
 use egui::{Align2, CornerRadius, Rect, Sense, vec2};
-use pdfcraft_engine::catalog;
 
 use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
 use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, reading};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
-use crate::{DocView, Flavor, LeftPanel, PdfCraftApp, icons};
+use crate::{DocView, Flavor, PdfCraftApp, icons};
 
 const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
@@ -308,7 +307,7 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     match app.margin_chrome.tab {
         SidebarTab::Contents => super::contents::show(app, ui, t, index),
         SidebarTab::Highlights => highlights(app, ui, t, index),
-        SidebarTab::Tools => tools(app, ui, t),
+        SidebarTab::Tools => super::tools::show(app, ui, t),
         // The search's status and results; its field is in the header (`margin::find`).
         SidebarTab::Find => super::find::results(app, ui, t, index),
         SidebarTab::Bookmarks => {
@@ -353,23 +352,6 @@ fn navigate(view: Option<&mut DocView>, nav: Option<Nav>) {
             view.flash = Some((p, r, 0.0));
         }
         None => {}
-    }
-}
-
-/// The tool catalogue, and a picked tool's options (PdfCraft's left panel).
-fn tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    // Shown now, even if the tab was picked this frame (after `sync`).
-    app.left_open = true;
-    match app.left {
-        LeftPanel::AllTools => crate::panels::all_tools(app, ui, t),
-        LeftPanel::Tool(id) => match catalog::group(id) {
-            Some(group) => crate::panels::tool_detail(app, ui, t, group),
-            None => app.left = LeftPanel::AllTools,
-        },
-    }
-    // The panel's close button.
-    if !app.left_open {
-        app.margin_chrome.sidebar_open = false;
     }
 }
 

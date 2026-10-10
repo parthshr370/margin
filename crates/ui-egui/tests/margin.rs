@@ -148,7 +148,16 @@ fn sidebar_tabs_drive_pdfcrafts_panels() {
     h.get_by_label("No highlights yet.");
     tab(&mut h, "Tools");
     assert!(h.state().left_open);
-    h.get_by_label("All tools");
+    // R10: Margin's own list, working items only: Edit a PDF's ready items show, its planned
+    // "Attach file" doesn't, and nothing says Ready.
+    h.get_by_label("Edit a PDF").click();
+    h.run_steps(3);
+    h.get_by_label("Rotate pages");
+    assert!(h.query_by_label("Attach file").is_none(), "planned items stay out of Margin's Tools");
+    assert!(h.query_by_label_contains("Ready").is_none(), "no Ready pills");
+    h.get_by_label("Back to all tools").click();
+    h.run_steps(3);
+    h.get_by_label("Edit a PDF");
     tab(&mut h, "Contents");
     assert_eq!((h.state().right, h.state().left_open), (None, false));
     // A command that opens a PdfCraft panel switches the sidebar to it.

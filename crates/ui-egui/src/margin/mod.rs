@@ -40,6 +40,7 @@ pub mod stats;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stats_sheet;
 pub mod toast;
+pub mod tools;
 pub mod trim;
 
 use crate::{PdfCraftApp, RightPanel};
