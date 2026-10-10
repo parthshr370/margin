@@ -225,8 +225,8 @@ fn paint_cell(ui: &egui::Ui, t: &Tokens, resp: &egui::Response, cell: &Cell<'_>)
     }
 }
 
-/// Each page's highlight colours, in order, one per highlight.
-fn highlight_dots(info: &pdfcraft_render::DocInfo) -> HashMap<usize, Vec<Color32>> {
+/// Each page's highlight colours, in order, one per highlight (also the footer scrubber's dots).
+pub(crate) fn highlight_dots(info: &pdfcraft_render::DocInfo) -> HashMap<usize, Vec<Color32>> {
     let mut dots: HashMap<usize, Vec<Color32>> = HashMap::new();
     for a in obsidian::markup_comments(info) {
         let [r, g, b] = a.color.unwrap_or(UNCOLORED_MARK).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);

@@ -31,6 +31,7 @@ pub mod rail;
 pub mod reading;
 pub mod saving;
 pub mod scroll_step;
+pub mod scrubber;
 pub mod selection;
 pub mod settings_watch;
 pub mod sidebar;

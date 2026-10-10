@@ -199,25 +199,34 @@ pub(crate) fn tooltip(resp: Response, label: &str, shortcut: Option<&str>) -> Re
 /// the control.
 pub(crate) fn tooltip_ui(resp: &Response, contents: impl FnOnce(&mut egui::Ui)) {
     let tip = if resp.enabled() { egui::Tooltip::for_enabled(resp) } else { egui::Tooltip::for_disabled(resp) };
-    show_card(tip, resp, contents);
+    show_card(tip, resp, resp.rect, contents);
 }
 
 /// `message` on the tooltip card at `resp` now, without waiting for a hover: what a field says
 /// about its input (the page field's page range after a page it doesn't have).
 pub(crate) fn note(resp: &Response, message: &str) {
     let tip = egui::Tooltip::always_open(resp.ctx.clone(), resp.layer_id, resp.id.with("margin-note"), resp.rect);
-    show_card(tip, resp, |ui| {
+    show_card(tip, resp, resp.rect, |ui| {
         let t = Tokens::get(ui.ctx());
         ui.label(egui::RichText::new(message).color(t.text));
     });
 }
 
-fn show_card(mut tip: egui::Tooltip<'_>, resp: &Response, contents: impl FnOnce(&mut egui::Ui)) {
+/// Contents on the tooltip card now, its arrow at `x` along `resp`: a preview that follows the
+/// pointer while a control is hovered or dragged (the footer's scrubber).
+pub(crate) fn pointer_card(resp: &Response, x: f32, contents: impl FnOnce(&mut egui::Ui)) {
+    let anchor = Rect::from_x_y_ranges(x..=x, resp.rect.y_range());
+    let tip = egui::Tooltip::always_open(resp.ctx.clone(), resp.layer_id, resp.id.with("margin-pointer-card"), anchor);
+    show_card(tip, resp, anchor, contents);
+}
+
+/// `tip` on Margin's card, its arrow pointing at `anchor` (part of `resp`).
+fn show_card(mut tip: egui::Tooltip<'_>, resp: &Response, anchor: Rect, contents: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(&resp.ctx);
     let card = egui::Frame::popup(&resp.ctx.global_style()).fill(TOOLTIP_FILL).corner_radius(CornerRadius::same(t.radius)).inner_margin(TOOLTIP_PAD);
     tip.popup = tip.popup.gap(TOOLTIP_GAP).frame(card);
     if let Some(shown) = tip.show(contents) {
-        tooltip_arrow(&resp.ctx, &t, shown.response.layer_id, resp.rect, shown.response.rect);
+        tooltip_arrow(&resp.ctx, &t, shown.response.layer_id, anchor, shown.response.rect);
     }
 }
 

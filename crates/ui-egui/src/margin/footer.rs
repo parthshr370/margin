@@ -1,13 +1,13 @@
 //! The footer under the page: the page box (`x / N`, type a number or label), zoom `− 100% +`
-//! with its menu and the fit toggle, a reading-progress scrubber, and the save status.
+//! with its menu and the fit toggle, the reading-progress scrubber (`margin::scrubber`), and the
+//! save status.
 
-use egui::{Align, CornerRadius, Layout, Sense, Stroke, vec2};
+use egui::{Align, CornerRadius, Layout, Stroke, vec2};
 use serde_json::{Value, json};
 
 use crate::PdfCraftApp;
 use crate::canvas::Fit;
 use crate::margin::look::{self, GAP, GAP_LARGE};
-use crate::margin::motion;
 use crate::margin::reading;
 use crate::theme::{self, Tokens};
 
@@ -17,10 +17,6 @@ const ZOOM_MATCH: f32 = 0.005;
 /// The id of the page box, shared with PdfCraft's `view.focus_page_input` (⇧⌘N).
 const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
-const SCRUB_HEIGHT: f32 = 18.0;
-/// The scrubber's knob, and its size under the pointer or while dragged.
-const KNOB_RADIUS: f32 = 5.0;
-const KNOB_RADIUS_HOVER: f32 = 6.0;
 const ZOOM_BUTTON: f32 = 22.0;
 const FIT_BUTTON: f32 = 24.0;
 /// The page field's text size.
@@ -40,7 +36,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some((index, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-    let sections: Vec<usize> = doc.info.outline.iter().filter_map(|o| o.page).collect();
+    let marks = super::scrubber::Marks {
+        pages: labels.len(),
+        sections: doc.info.outline.iter().filter_map(|o| o.page).collect(),
+        dots: super::pages::highlight_dots(&doc.info),
+    };
     let status = crate::margin::reading::save_status(app, index);
     let save_key = look::shortcut(app, "file.save");
     let save_line = super::saving::line(
@@ -61,6 +61,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some(view) = app.views.get_mut(index) else { return };
     let mut command = None;
     let mut save_command = None;
+    let mut preview = None;
     // egui draws the panel's top divider line.
     egui::Panel::bottom("margin_footer")
         .exact_size(HEIGHT)
@@ -81,10 +82,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         save_command = super::saving::show(ui, &t, &save_line);
                     });
                     ui.add_space(GAP_LARGE);
-                    scrubber(ui, &t, view, labels.len(), &sections);
+                    preview = super::scrubber::show(ui, &t, view, &marks);
                 });
             });
         });
+    if let Some((resp, page)) = preview
+        && let Some(doc) = app.session.get(id)
+    {
+        super::scrubber::preview(&resp, &doc.info, &marks, page);
+    }
     if let Some((id, args)) = command {
         // The keys' own path: the same zoom stops and fits as `Ctrl+=`, `W` and the palette.
         super::keys::run(app, ui.ctx(), id, &args);
@@ -261,38 +267,4 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32
         command = Some(("view.fit.toggle_width", Value::Null));
     }
     command
-}
-
-/// The reading position as a track: ticks mark the top-level sections; click or drag to jump.
-fn scrubber(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, pages: usize, sections: &[usize]) {
-    let width = ui.available_width();
-    if width < 40.0 || pages == 0 {
-        return;
-    }
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, SCRUB_HEIGHT), Sense::click_and_drag());
-    let last = pages.saturating_sub(1).max(1) as f32;
-    let x_of = |page: usize| rect.left() + rect.width() * (page as f32 / last).clamp(0.0, 1.0);
-    let y = rect.center().y;
-    let painter = ui.painter();
-    painter.hline(rect.x_range(), y, Stroke::new(2.0, t.border));
-    for &s in sections {
-        painter.vline(x_of(s), (y - 3.0)..=(y + 3.0), Stroke::new(1.0, t.text_faint));
-    }
-    // The knob glides to a new page (a jump, or page turns) and grows a little under the pointer.
-    let share = motion::follow(ui.ctx(), resp.id.with("knob"), view.current as f32 / last, motion::SLIDE).clamp(0.0, 1.0);
-    let knob = rect.left() + rect.width() * share;
-    let grown = motion::hover(ui.ctx(), resp.id, resp.hovered() || resp.dragged());
-    painter.hline(rect.left()..=knob, y, Stroke::new(2.0, t.accent));
-    painter.circle_filled(egui::pos2(knob, y), egui::lerp(KNOB_RADIUS..=KNOB_RADIUS_HOVER, grown), t.accent);
-    let page_at = |x: f32| (((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) * last).round() as usize;
-    if (resp.clicked() || resp.drag_stopped())
-        && let Some(pos) = resp.interact_pointer_pos()
-    {
-        view.go_to_page(page_at(pos.x).min(pages - 1));
-    }
-    let hovered_page = resp.hover_pos().map(|pos| page_at(pos.x).min(pages - 1));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, format!("Page {} of {pages}", view.current + 1)));
-    if let Some(page) = hovered_page {
-        resp.on_hover_text_at_pointer(format!("p. {}", page + 1));
-    }
 }
