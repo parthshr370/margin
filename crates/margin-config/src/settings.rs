@@ -42,6 +42,12 @@ pub struct Settings {
     /// rendering and cache budgets; semantics live in PERF-AND-IPC.md
     #[schemars(extend("x-margin-scope" = "app"))]
     pub perf: Perf,
+    /// the library: folders scanned for PDFs and how the shelves show
+    #[schemars(extend("x-margin-scope" = "app"))]
+    pub library: Library,
+    /// reading statistics in stats.sqlite
+    #[schemars(extend("x-margin-scope" = "app"))]
+    pub stats: Stats,
 }
 
 impl Default for Settings {
@@ -54,6 +60,8 @@ impl Default for Settings {
             ui: Ui::default(),
             keys: Keys::default(),
             perf: Perf::default(),
+            library: Library::default(),
+            stats: Stats::default(),
         }
     }
 }
@@ -409,6 +417,60 @@ pub struct Keys {
 impl Default for Keys {
     fn default() -> Self {
         Self { base: KeymapBase::Margin, chord_timeout_ms: 1000, annotate_letters: true, show_pending: true }
+    }
+}
+
+/// How the library lists books.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryView {
+    /// Covers in a grid.
+    #[default]
+    Grid,
+    /// One row per book.
+    List,
+}
+
+/// The library's sort order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LibrarySort {
+    /// Last opened first, then last added.
+    #[default]
+    Recent,
+    /// By title.
+    Title,
+    /// By author.
+    Author,
+    /// Most read first.
+    Progress,
+    /// Last added first.
+    Added,
+}
+
+/// The library block (`[app]`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Library {
+    /// folders scanned for PDFs (with their subfolders) on start and on Rescan; absolute paths
+    pub folders: Vec<String>,
+    /// "grid" | "list"
+    pub view: LibraryView,
+    /// "recent" | "title" | "author" | "progress" | "added"
+    pub sort: LibrarySort,
+}
+
+/// The stats block (`[app]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Stats {
+    /// record reading sessions and time per page in stats.sqlite
+    pub enabled: bool,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 

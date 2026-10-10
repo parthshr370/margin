@@ -24,6 +24,14 @@ dirs = "7"
 jsonc-parser = { version = "0.34", features = ["cst"] }
 # JSON Schema from the Settings struct: the validator walks it and editors complete from it.
 schemars = "1"
+# Library covers: the first page through the existing renderer (already in the tree via the engine).
+pdfcraft-render = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# library.sqlite and stats.sqlite, SQLite compiled in (no system library needed).
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Decoding cached JPEG covers (already in the tree through the engine).
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 # Generated schemas checked against an independent validator.

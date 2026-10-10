@@ -13,6 +13,10 @@
 //! Sidecars: [`Sidecar`] is the v1 file format and [`store`] reads and writes it. Theme and
 //! profile file formats are here too; nothing loads them yet.
 //!
+//! Library and stats (desktop only): [`library`] keeps `<data>/library.sqlite` (books, covers,
+//! collections) and scans folders as a cancellable job; [`stats`] keeps `<data>/stats.sqlite`
+//! (reading sessions, time per page) and turns it into summaries and a calendar.
+//!
 //! Nothing here depends on egui, and no config file can crash it.
 
 mod context;
@@ -21,6 +25,8 @@ mod error;
 mod jsonc;
 mod keymap;
 mod keystroke;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod library;
 mod load;
 mod problem;
 mod profile;
@@ -29,6 +35,8 @@ pub mod resolve;
 pub mod schema;
 mod settings;
 mod sidecar;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod stats;
 pub mod store;
 mod theme;
 mod validate;
@@ -48,8 +56,8 @@ pub use problem::{Problem, Severity};
 pub use profile::{Profile, ProfileMatch};
 pub use registry::{CommandEntry, CommandId, CommandInfo, Group, MARGIN_NAMESPACES, Registry, Source};
 pub use settings::{
-    FindOptions, Fit, KeymapBase, Keys, Layout, PageColor, Perf, Rail, RailSide, Reader, SETTINGS_SCHEMA_URL, SETTINGS_VERSION, Settings, Start,
-    TileFormat, ToolOptions, Ui, View,
+    FindOptions, Fit, KeymapBase, Keys, Layout, Library, LibrarySort, LibraryView, PageColor, Perf, Rail, RailSide, Reader, SETTINGS_SCHEMA_URL,
+    SETTINGS_VERSION, Settings, Start, Stats, TileFormat, ToolOptions, Ui, View,
 };
 pub use sidecar::{
     Bookmark, Highlight, HighlightSource, HighlightStyle, Locator, PageNote, PdfAnnot, Progress, Sidecar, SidecarDoc, SidecarFormat, SidecarObsidian,
