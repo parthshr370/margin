@@ -107,7 +107,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
         .interactable(open)
         .fade_in(false)
         .show(ui.ctx(), |ui| {
-            ui.multiply_opacity(shown);
+            if !open {
+                // Closing: no clicks (`interactable`) and no keyboard focus either.
+                ui.disable();
+            }
+            ui.set_opacity(shown);
             egui::Frame::NONE
                 .fill(t.card)
                 .stroke(Stroke::new(1.0, t.border))

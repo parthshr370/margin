@@ -398,8 +398,13 @@ fn resolve_keys(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(timeout_s - waited));
         }
     }
+    // A control focused from the keyboard (Tab) takes plain Space and Enter: egui clicks it.
+    let control_focused = control_focused(ctx);
     for (index, event) in events.iter().enumerate() {
         let Event::Key { key, pressed: true, modifiers, .. } = event else { continue };
+        if control_focused && modifiers.is_none() && matches!(key, Key::Space | Key::Enter) {
+            continue;
+        }
         let Some(stroke) = stroke(*key, *modifiers, os) else { continue };
         let step = resolve::step(table, &stack, &keys.pending, &stroke);
         let mut typed = keys.pending.clone();
@@ -442,10 +447,15 @@ fn resolve_keys(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
+/// A control (not a text field) has the keyboard focus: it was reached with Tab.
+fn control_focused(ctx: &egui::Context) -> bool {
+    !ctx.text_edit_focused() && ctx.memory(|memory| memory.focused()).is_some()
+}
+
 /// What is left of `canvas::shortcuts` once its keys are bound in the keymap: ⌘C, which egui
 /// delivers as a Copy event, not a key.
 pub(crate) fn view_keys(view: &mut DocView, ctx: &egui::Context) {
-    if ctx.egui_wants_keyboard_input() {
+    if ctx.text_edit_focused() {
         return;
     }
     let copy = ctx.input(|input| input.events.iter().any(|event| matches!(event, Event::Copy)));
@@ -464,7 +474,8 @@ fn node(name: &str, attrs: &[(&str, &str)]) -> ContextNode {
 
 /// The focused context stack, outermost first.
 pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<ContextNode> {
-    let typing = ctx.egui_wants_keyboard_input();
+    // A text field typing; a button focused from the keyboard leaves the reader's keys working.
+    let typing = ctx.text_edit_focused();
     let mut stack = vec![node("App", &[("os", Os::current().name())])];
     let text_input = |stack: &mut Vec<ContextNode>| {
         if typing {
@@ -599,7 +610,16 @@ fn close_layer(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.margin_keys.sheet.take().is_some() {
         return;
     }
-    if ctx.egui_wants_keyboard_input() || app.dialog.is_some() || app.palette_open || egui::Popup::is_any_open(ctx) {
+    if ctx.text_edit_focused() || app.dialog.is_some() || app.palette_open || egui::Popup::is_any_open(ctx) {
+        return;
+    }
+    if control_focused(ctx) {
+        // A control focused from the keyboard is the topmost thing: Esc lets go of it.
+        ctx.memory_mut(|memory| {
+            if let Some(id) = memory.focused() {
+                memory.surrender_focus(id);
+            }
+        });
         return;
     }
     let Some(view) = app.active.and_then(|index| app.views.get_mut(index)) else { return };

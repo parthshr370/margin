@@ -70,6 +70,9 @@ const DOT_EDGE_ALPHA: u8 = 40;
 /// The slider's rail thickness and its idle knob's ring.
 const SLIDER_RAIL_HEIGHT: f32 = 3.0;
 const SLIDER_KNOB_RING: f32 = 1.5;
+/// The keyboard focus ring: an accent outline, so a focused control reads apart from a hovered
+/// one (the pill) and a selected one (the pill and accent text).
+const FOCUS_RING: f32 = 1.5;
 
 /// How a list marks the row under the pointer and its selected row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -91,11 +94,20 @@ impl RowLook {
 }
 
 /// A row's background: the hover fill under a hovered or selected row, fading in and out over
-/// [`motion::HOVER`]; nothing otherwise.
+/// [`motion::HOVER`]; nothing otherwise. A row with keyboard focus gets the focus ring.
 pub(crate) fn row_fill(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response, selected: bool) {
     let shown = motion::hover(ui.ctx(), resp.id, resp.hovered() || selected);
     if shown > 0.0 {
         ui.painter().rect_filled(rect, CornerRadius::same(t.radius), t.hover.gamma_multiply(shown));
+    }
+    focus_ring(ui, t, rect, resp, t.radius);
+}
+
+/// The keyboard focus ring round `rect` while `resp` has focus. egui gives a button focus only
+/// from the keyboard (Tab), never from a click, so the ring never follows the pointer.
+pub(crate) fn focus_ring(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response, radius: u8) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect, CornerRadius::same(radius), Stroke::new(FOCUS_RING, t.accent), egui::StrokeKind::Inside);
     }
 }
 
@@ -151,7 +163,18 @@ pub(crate) fn shortcut_with(app: &PdfCraftApp, command: &str, args: &Value) -> O
 /// A Margin option popover toggled by `button`, under the stable `id` (so a change made inside it
 /// never makes it a different popup). Its options apply at once and leave it open; a click
 /// outside it, Esc or `button` again closes it. The caller sets its frame and placement.
+///
+/// Esc gives the keyboard focus back to `button` (egui closes the popup on that Escape, this
+/// frame; the next frame sees it closed).
 pub(crate) fn popover<'a>(button: &Response, id: egui::Id) -> egui::Popup<'a> {
+    let ctx = &button.ctx;
+    let escaping_id = id.with("closing-by-escape");
+    let open = egui::Popup::is_id_open(ctx, id);
+    if !open && ctx.data(|d| d.get_temp::<bool>(escaping_id)).unwrap_or(false) {
+        button.request_focus();
+    }
+    let escaping = open && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    ctx.data_mut(|d| d.insert_temp(escaping_id, escaping));
     egui::Popup::menu(button).id(id).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
 }
 
@@ -249,6 +272,7 @@ fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str,
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
     let stroke = border.map_or(Stroke::NONE, |c| Stroke::new(1.0, c));
     ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on && enabled), stroke, egui::StrokeKind::Inside);
+    focus_ring(ui, &t, rect, &resp, t.radius);
     let tint = if enabled { icon_tint(&t, on, resp.hovered()) } else { t.text_faint };
     icons::paint(ui, rect, icon, (size * ICON_SHARE).round(), tint);
     tooltip(resp, label, shortcut)
@@ -262,6 +286,7 @@ pub(crate) fn color_button(ui: &mut egui::Ui, size: f32, color: Color32, bordere
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     let stroke = if bordered { Stroke::new(1.0, t.border) } else { Stroke::NONE };
     ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false), stroke, egui::StrokeKind::Inside);
+    focus_ring(ui, &t, rect, &resp, t.radius);
     paint_dot(ui, rect.center(), color);
     tooltip(resp, label, shortcut)
 }
@@ -291,6 +316,7 @@ pub(crate) fn color_dots(ui: &mut egui::Ui, dots: &[ColorDot<'_>]) -> Option<usi
             let (rect, resp) = ui.allocate_exact_size(Vec2::splat(COLOR_CELL), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), dot.selected, dot.name));
             ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
+            focus_ring(ui, &t, rect, &resp, t.radius);
             paint_dot(ui, rect.center(), dot.color);
             if dot.selected {
                 ui.painter().circle_stroke(rect.center(), COLOR_DOT / 2.0 + COLOR_RING_GAP, Stroke::new(COLOR_RING, dot.color));
@@ -305,17 +331,18 @@ pub(crate) fn color_dots(ui: &mut egui::Ui, dots: &[ColorDot<'_>]) -> Option<usi
 
 /// Margin's slider (the mockup's range input): a thin rail in the divider colour and a round
 /// knob. egui fills the idle knob with the rail's colour, so the idle knob is a light ring;
-/// hovered and dragged it fills. Call before adding the slider.
+/// hovered it fills; dragged or focused from the keyboard it fills inside the focus ring. Call
+/// before adding the slider.
 pub(crate) fn slider_style(ui: &mut egui::Ui, t: &Tokens) {
     ui.spacing_mut().slider_rail_height = SLIDER_RAIL_HEIGHT;
     ui.visuals_mut().handle_shape = egui::style::HandleShape::Circle;
     let widgets = &mut ui.visuals_mut().widgets;
     widgets.inactive.bg_fill = t.divider;
     widgets.inactive.fg_stroke = Stroke::new(SLIDER_KNOB_RING, t.text_muted);
-    for state in [&mut widgets.hovered, &mut widgets.active] {
-        state.bg_fill = t.text;
-        state.fg_stroke = Stroke::NONE;
-    }
+    widgets.hovered.bg_fill = t.text;
+    widgets.hovered.fg_stroke = Stroke::NONE;
+    widgets.active.bg_fill = t.text;
+    widgets.active.fg_stroke = Stroke::new(FOCUS_RING, t.accent);
 }
 
 /// An icon and a word ("Tools") with [`icon_button`]'s states (the word in the accent too when
@@ -328,6 +355,7 @@ pub(crate) fn text_button(ui: &mut egui::Ui, icon: &str, label: &str, height: f3
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label));
     ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on));
+    focus_ring(ui, &t, rect, &resp, t.radius);
     let tint = icon_tint(&t, on, resp.hovered());
     let icon_rect = Rect::from_center_size(egui::pos2(rect.left() + GAP + icon_size / 2.0, rect.center().y), Vec2::splat(icon_size));
     icons::paint(ui, icon_rect, icon, icon_size, tint);
@@ -362,6 +390,7 @@ pub(crate) fn switch(ui: &mut egui::Ui, on: bool, label: &str) -> Response {
     let knob_x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
     let knob = t.text_muted.lerp_to_gamma(Color32::WHITE, how_on);
     ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), radius - SWITCH_KNOB_INSET, knob);
+    focus_ring(ui, &t, rect, &resp, radius as u8);
     resp
 }
 
@@ -376,6 +405,10 @@ pub(crate) fn accent_button(ui: &mut egui::Ui, label: &str) -> Response {
     let fill =
         if resp.is_pointer_button_down_on() { t.accent.gamma_multiply(ACCENT_PRESSED_SHADE) } else { t.accent.lerp_to_gamma(ACCENT_HOVER, lift) };
     ui.painter().rect_filled(rect, CornerRadius::same(t.radius), fill);
+    // On the accent fill the ring is the text colour.
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect, CornerRadius::same(t.radius), Stroke::new(FOCUS_RING, t.text), egui::StrokeKind::Inside);
+    }
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
     resp
 }
@@ -389,6 +422,7 @@ pub(crate) fn plain_button(ui: &mut egui::Ui, label: &str) -> Response {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
     ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
+    focus_ring(ui, &t, rect, &resp, t.radius);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.text_muted.lerp_to_gamma(t.text, shown));
     resp
 }
@@ -407,6 +441,7 @@ pub(crate) fn chip_button(ui: &mut egui::Ui, icon: &str, label: &str, width: f32
         Stroke::new(1.0, t.border),
         egui::StrokeKind::Inside,
     );
+    focus_ring(ui, &t, rect, &resp, t.radius);
     let color = if enabled { t.text } else { t.text_faint };
     let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::regular(BUTTON_TEXT), color);
     let content = BUTTON_ICON + GAP / 2.0 + galley.size().x;
@@ -448,6 +483,7 @@ pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<u
         let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
         let fill = if segment.selected { t.selected } else { t.hover.gamma_multiply(shown) };
         ui.painter().rect_filled(rect, CornerRadius::same(t.radius.saturating_sub(1)), fill);
+        focus_ring(ui, &t, rect, &resp, t.radius.saturating_sub(1));
         let color = if segment.selected { t.accent } else { t.text_muted.lerp_to_gamma(t.text, shown) };
         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
         let resp = match segment.tip {

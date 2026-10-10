@@ -532,12 +532,14 @@ fn trim_preview(view: &mut DocView, page: usize, size: Option<(f32, f32)>, label
     changed
 }
 
-/// A row label in the label column shared by slider and choice rows.
-fn row_label(ui: &mut egui::Ui, t: &Tokens, label: &str) {
+/// A row label in the label column shared by slider and choice rows. Returns the label's id,
+/// which names the row's control for screen readers.
+fn row_label(ui: &mut egui::Ui, t: &Tokens, label: &str) -> egui::Id {
     ui.allocate_ui_with_layout(vec2(LABEL_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_min_width(LABEL_WIDTH);
-        ui.label(egui::RichText::new(label).font(theme::regular(LABEL_TEXT)).color(t.text_muted));
-    });
+        ui.label(egui::RichText::new(label).font(theme::regular(LABEL_TEXT)).color(t.text_muted)).id
+    })
+    .inner
 }
 
 /// A control row: the label column, then a segmented control from the controls' shared start
@@ -552,6 +554,9 @@ fn choice_row(ui: &mut egui::Ui, t: &Tokens, label: &str, segments: &[Segment<'_
     .inner
 }
 
+/// A swatch's corner radius.
+const SWATCH_RADIUS: u8 = 9;
+
 /// A page colour swatch: a small page in the mode's paper with lines of its ink, and the name.
 fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: f32) -> egui::Response {
     let name = i18n::t(mode.name());
@@ -562,12 +567,13 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: 
     let picked = motion::toggle(ui.ctx(), resp.id.with("margin-picked"), selected, motion::FADE);
     let hovered = motion::hover(ui.ctx(), resp.id, resp.hovered() && !selected);
     if hovered > 0.0 {
-        painter.rect_filled(rect, CornerRadius::same(9), t.hover.gamma_multiply(hovered));
+        painter.rect_filled(rect, CornerRadius::same(SWATCH_RADIUS), t.hover.gamma_multiply(hovered));
     }
     if picked > 0.0 {
         let stroke = Stroke::new(1.0, t.accent.gamma_multiply(picked));
-        painter.rect(rect, CornerRadius::same(9), t.accent_soft.gamma_multiply(picked), stroke, egui::StrokeKind::Inside);
+        painter.rect(rect, CornerRadius::same(SWATCH_RADIUS), t.accent_soft.gamma_multiply(picked), stroke, egui::StrokeKind::Inside);
     }
+    look::focus_ring(ui, t, rect, &resp, SWATCH_RADIUS);
     let page = Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(width - 12.0, SWATCH_HEIGHT));
     let rgb = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
     let (paper, ink) = (rgb(mode.paper()), rgb(mode.ink()));
@@ -615,11 +621,12 @@ fn switch_row(ui: &mut egui::Ui, t: &Tokens, label: &str, sub: Option<&str>, on:
 fn slider_row(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut u16, range: std::ops::RangeInclusive<u16>, show: impl Fn(u16) -> String) {
     ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = GAP_LARGE;
-        row_label(ui, t, label);
+        let name = row_label(ui, t, label);
         ui.spacing_mut().slider_width = POPOVER_WIDTH - LABEL_WIDTH - VALUE_WIDTH - 2.0 * GAP_LARGE;
         look::slider_style(ui, t);
         // A slider senses drags, not clicks, so its response never reports a double-click.
-        let resp = look::tooltip(ui.add(egui::Slider::new(value, range).show_value(false)), i18n::t("Double-click to reset"), None);
+        let slider = ui.add(egui::Slider::new(value, range).show_value(false)).labelled_by(name);
+        let resp = look::tooltip(slider, i18n::t("Double-click to reset"), None);
         let on_slider = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| resp.rect.contains(p));
         // A third quick click counts as a triple, not a double: either resets.
         let repeated = ui.input(|i| {

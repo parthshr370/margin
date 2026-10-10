@@ -684,3 +684,54 @@ fn sidebar_choices_survive_restarts_find_and_document_switches() {
     assert_eq!(h.state().margin_chrome.tab, SidebarTab::Highlights);
     assert!(h.state().views[0].find.is_none());
 }
+
+/// Press Tab until the first widget named `label` has keyboard focus.
+fn tab_to(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    for _ in 0..80 {
+        if h.query_all_by_label(label).next().is_some_and(|node| node.accesskit_node().is_focused()) {
+            return;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    panic!("Tab never reached {label}");
+}
+
+/// R8 item 19: Display, its layout and colour choices and the sidebar tabs work from the
+/// keyboard alone; Esc closes only the popover and gives the focus back to its button.
+#[test]
+fn display_and_sidebar_tabs_work_from_the_keyboard() {
+    let mut h = harness(Flavor::Margin);
+    tab_to(&mut h, "Page colour and layout");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(egui::Popup::is_any_open(&h.ctx), "Enter opens Display");
+    tab_to(&mut h, "Two-up");
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, "Space picks the focused segment");
+    tab_to(&mut h, "Night");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let mode = h.state().views[0].margin.display.color.mode;
+    assert_eq!(mode, pdfcraft_ui_egui::margin::pagecolor::PageMode::Night, "Enter picks the focused colour");
+    assert!(egui::Popup::is_any_open(&h.ctx), "choices leave Display open");
+    let page = h.state().views[0].current;
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Esc closes Display");
+    assert!(h.get_by_label("Page colour and layout").accesskit_node().is_focused(), "focus goes back to the Display button");
+    // A focused button leaves the reader's keys working; the next Esc lets go of it.
+    let fit = h.state().views[0].fit;
+    h.key_press(egui::Key::W);
+    h.run_steps(3);
+    assert_ne!(h.state().views[0].fit, fit, "W still changes the fit");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.get_by_label("Page colour and layout").accesskit_node().is_focused(), "Esc lets go of the button");
+    assert_eq!(h.state().views[0].current, page);
+    tab_to(&mut h, "Pages");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().margin_chrome.tab, SidebarTab::Pages);
+}

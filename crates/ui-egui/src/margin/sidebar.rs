@@ -53,6 +53,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let rect = Rect::from_min_size(egui::pos2(visible.right() - width, visible.top()), vec2(width, visible.height()));
             let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
             body.set_clip_rect(visible.intersect(ui.clip_rect()));
+            if !app.margin_chrome.sidebar_open {
+                // Closing: no clicks and no keyboard focus (its icons fade to faint as it goes).
+                let opacity = body.opacity();
+                body.disable();
+                body.set_opacity(opacity);
+            }
             sections(app, &mut body, &t);
             ui.expand_to_include_rect(visible);
         });
