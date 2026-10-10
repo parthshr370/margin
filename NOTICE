@@ -1,11 +1,24 @@
+Margin
+Copyright (c) 2026 Parth Sharma.
+Margin is a derivative of PdfCraft (https://github.com/storytold/pdfcraft) and is distributed under
+the same terms: the MIT License or the Apache License, Version 2.0, at your option (LICENSE-MIT,
+LICENSE-APACHE). Margin's own code lives mainly in apps/margin, crates/margin-config,
+crates/ui-egui/src/margin and packaging/margin, plus small hooks in PdfCraft's files; the rest is
+PdfCraft's, covered by the notices below. As PdfCraft's brand licence requires for derived works,
+the ArtCraft marks have been removed from this repository and from Margin builds. Margin is based
+on PdfCraft by the ArtCraft team and contributors, and is not made, sponsored or endorsed by the
+ArtCraft Team.
+
+----------------------------------------------------------------------------------------------------
+
 PdfCraft
 Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
 (LICENSE-MIT, LICENSE-APACHE).
 
-The ArtCraft name, wordmark and logos in docs/brand/ are trademarks of the ArtCraft Team. They are
-not open source and are not covered by the license above; their terms are in
-docs/brand/LICENSE-brand.txt.
+The ArtCraft name, wordmark and logos are trademarks of the ArtCraft Team. They are not open source
+and are not covered by the license above. Upstream PdfCraft ships them in docs/brand/ under
+docs/brand/LICENSE-brand.txt; Margin has removed them, as that licence requires for derived works.
 
 Third-party material
 

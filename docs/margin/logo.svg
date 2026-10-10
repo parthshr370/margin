@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Margin</title>
+  <desc id="desc">A happy ember-orange fox nestled around the margin of a cream page, with a curled white-tipped tail and paws resting over the paper.</desc>
+  <defs>
+    <linearGradient id="paper" x1="100" y1="76" x2="330" y2="428" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff9ed"/><stop offset="1" stop-color="#e9dfcc"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="306" y1="78" x2="336" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffdf6"/><stop offset="1" stop-color="#d8cbb4"/>
+    </linearGradient>
+    <linearGradient id="fur" x1="290" y1="178" x2="365" y2="348" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f58b45"/><stop offset="0.52" stop-color="#ec5b2b"/><stop offset="1" stop-color="#ce431e"/>
+    </linearGradient>
+    <linearGradient id="body" x1="342" y1="298" x2="393" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ec5b2b"/><stop offset="1" stop-color="#ad361c"/>
+    </linearGradient>
+    <linearGradient id="tail" x1="419" y1="324" x2="393" y2="422" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f58b45"/><stop offset="0.6" stop-color="#ec5b2b"/><stop offset="1" stop-color="#ce431e"/>
+    </linearGradient>
+    <linearGradient id="cream" x1="324" y1="281" x2="353" y2="352" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff9ed"/><stop offset="1" stop-color="#f0dfc2"/>
+    </linearGradient>
+    <linearGradient id="ear" x1="310" y1="184" x2="336" y2="246" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8f3424"/><stop offset="1" stop-color="#d95a34"/>
+    </linearGradient>
+    <linearGradient id="paw" x1="0" y1="330" x2="0" y2="365" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f58b45"/><stop offset="1" stop-color="#ec5b2b"/>
+    </linearGradient>
+    <linearGradient id="cast" x1="263" y1="267" x2="307" y2="328" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#704124" stop-opacity="0"/><stop offset="1" stop-color="#704124" stop-opacity="0.18"/>
+    </linearGradient>
+    <clipPath id="page-clip">
+      <path transform="rotate(-4 220 256)" d="M112 76H304L348 120V408Q348 428 328 428H112Q92 428 92 408V96Q92 76 112 76Z"/>
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#0e0e0e"/>
+  <g id="mark">
+    <!-- The tail and seated shoulders sit behind the right-hand page edge. -->
+    <path d="M355 393C368 375 389 380 406 365C421 352 426 331 422 313C421 306 427 304 432 310C453 333 461 365 450 392C438 424 393 436 365 414C357 408 351 400 355 393Z" fill="url(#tail)"/>
+    <path d="M422 313C421 306 427 304 432 310C447 327 455 349 454 369C445 365 438 359 432 351L426 355L423 346C427 335 424 322 422 313Z" fill="url(#cream)"/>
+    <path d="M320 303C345 291 377 305 393 329C406 349 413 385 399 405C387 423 356 424 339 405L307 349Z" fill="url(#body)"/>
+    <path d="M342 322C356 319 376 329 382 345C387 359 382 374 370 381L348 369Z" fill="url(#cream)"/>
+    <g transform="rotate(-4 220 256)">
+      <path d="M112 84H304L348 128V416Q348 436 328 436H112Q92 436 92 416V104Q92 84 112 84Z" fill="#000" opacity="0.22"/>
+      <path d="M112 76H304L348 120V408Q348 428 328 428H112Q92 428 92 408V96Q92 76 112 76Z" fill="url(#paper)"/>
+      <path d="M304 78L348 120H316Q304 120 304 108Z" fill="#ad9774" opacity="0.15" transform="translate(-2 4)"/>
+      <path d="M304 76L348 120H316Q304 120 304 108Z" fill="url(#fold)"/>
+      <!-- An even reading rhythm; only the highlighted sentence carries colour. -->
+      <g fill="#b6ab98">
+        <rect x="124" y="128" width="132" height="10" rx="5"/>
+        <rect x="124" y="160" width="170" height="10" rx="5"/>
+        <rect x="124" y="192" width="145" height="10" rx="5"/>
+        <rect x="124" y="256" width="128" height="10" rx="5"/>
+        <rect x="124" y="288" width="108" height="10" rx="5"/>
+        <rect x="124" y="352" width="122" height="10" rx="5"/>
+        <rect x="124" y="384" width="150" height="10" rx="5"/>
+      </g>
+      <path d="M122 214C164 212 214 215 273 213L270 238C216 237 163 240 120 238Z" fill="#ec5b2b" opacity="0.34"/>
+      <path d="M128 225H264" fill="none" stroke="#945132" stroke-width="9" stroke-linecap="round"/>
+    </g>
+    <!-- Filter-free, page-clipped contact shadow; the mark stays transparent. -->
+    <g clip-path="url(#page-clip)">
+      <path d="M275 207C253 228 239 272 249 302C242 312 252 327 276 340C294 351 318 359 338 355L360 354V245Z" fill="url(#cast)" transform="translate(-7 9)"/>
+      <path d="M290 337C281 344 279 357 285 367C292 376 311 378 321 370L365 370V340Z" fill="#704124" opacity="0.12"/>
+    </g>
+    <!-- One continuous silhouette joins rounded ears, temples and cheek tufts. -->
+    <path d="M260 245C262 223 264 192 276 163Q280 153 287 162L316 207Q333 202 350 207L378 161Q385 153 390 163C401 190 404 219 403 244C415 262 420 279 416 293L422 302Q416 310 405 313L407 319Q390 333 349 347Q333 352 317 346C294 339 273 327 261 316L252 313Q247 309 244 303L251 295C247 277 251 258 260 245Z" fill="url(#fur)"/>
+    <path d="M274 226C274 211 278 189 281 182Q283 179 286 185L307 217C295 217 284 220 274 226Z" fill="url(#ear)"/>
+    <path d="M360 217L381 183Q384 179 386 185C391 199 394 214 394 227C383 221 372 218 360 217Z" fill="url(#ear)"/>
+    <path d="M277 219C278 207 280 198 282 192L295 214Z" fill="#f4a076" opacity="0.65"/>
+    <path d="M372 214L383 193C386 201 388 210 389 219Z" fill="#f4a076" opacity="0.65"/>
+    <path d="M253 297C267 297 280 282 297 283C313 284 321 301 334 304C348 301 356 284 371 283C388 282 401 295 416 297L410 305L418 307C405 321 391 326 380 333C362 344 348 349 334 349C316 349 302 342 287 334C273 328 260 321 253 313L260 308Z" fill="#a9361c" opacity="0.38"/>
+    <path d="M252 291C265 292 279 277 297 278C312 279 320 298 334 300C348 298 356 279 371 278C387 277 399 291 416 293L410 301L418 303C407 316 393 322 381 329C363 340 348 344 334 344C316 344 303 337 287 329C274 324 260 317 253 309L260 304Z" fill="url(#cream)"/>
+    <g fill="none" stroke="#35251e" stroke-width="8" stroke-linecap="round">
+      <path d="M280 266C287 255 299 255 306 266"/>
+      <path d="M359 266C366 255 378 255 385 266"/>
+    </g>
+    <path d="M323 303Q334 299 345 303Q350 306 346 311L338 319Q334 323 330 319L322 311Q318 306 323 303Z" fill="#35251e"/>
+    <path d="M334 319V324C331 332 323 333 318 329M334 324C337 332 345 333 350 329" fill="none" stroke="#35251e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Tapered forelegs grow out of the cheeks and wrap onto the page. -->
+    <path d="M291 330C287 338 281 345 283 355C285 365 295 369 306 366C318 364 323 354 320 345L315 337Z" fill="url(#paw)"/>
+    <path d="M352 338L347 348C344 358 350 367 362 368C374 370 384 364 384 354C384 344 377 337 375 330Z" fill="url(#paw)"/>
+    <g fill="none" stroke="#ad3d21" stroke-width="3" stroke-linecap="round" opacity="0.7">
+      <path d="M294 357V363M304 358V364M358 359V365M369 358V365"/>
+    </g>
+  </g>
+</svg>
