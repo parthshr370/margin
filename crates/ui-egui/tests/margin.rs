@@ -2,7 +2,7 @@
 //! header, sidebar tabs, footer and annotate rail, each running PdfCraft's own commands.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::comments::CommentTool;
 use pdfcraft_ui_egui::margin::SidebarTab;
 use pdfcraft_ui_egui::{Dialog, Flavor, PdfCraftApp, QuickTool, RightPanel};
@@ -465,4 +465,173 @@ fn reduce_motion_turns_animations_off() {
     };
     assert!(sliding_after_click(None, "motion-on"), "by default the sidebar slides out");
     assert!(!sliding_after_click(Some(r#"{ "ui": { "reduce_motion": true } }"#), "motion-off"), "reduced: gone at once");
+}
+
+/// An outline entry for [`outlined_fixture`].
+struct Entry {
+    title: String,
+    /// 0-based.
+    page: usize,
+    children: Vec<Entry>,
+}
+
+impl Entry {
+    fn new(title: impl Into<String>, page: usize, children: Vec<Entry>) -> Self {
+        Self { title: title.into(), page, children }
+    }
+}
+
+/// `pages` blank letter pages with `outline`; the document closes every entry with children
+/// (negative `/Count`). No xref: the parser rebuilds it.
+fn outlined_fixture(pages: usize, outline: &[Entry]) -> Vec<u8> {
+    // Objects: 1 catalog, 2 pages, 3 outline root, the pages, then the entries.
+    const FIRST_PAGE: usize = 4;
+    /// Writes `entries` (children of object `parent`), numbering from `next`; their first and
+    /// last object numbers.
+    fn emit(entries: &[Entry], parent: usize, next: &mut usize, body: &mut String) -> (usize, usize) {
+        let ids: Vec<usize> = entries
+            .iter()
+            .map(|_| {
+                *next += 1;
+                *next - 1
+            })
+            .collect();
+        for (i, entry) in entries.iter().enumerate() {
+            let mut dict = format!("<< /Title ({}) /Parent {parent} 0 R /Dest [{} 0 R /Fit]", entry.title, FIRST_PAGE + entry.page);
+            if i > 0 {
+                dict += &format!(" /Prev {} 0 R", ids[i - 1]);
+            }
+            if let Some(after) = ids.get(i + 1) {
+                dict += &format!(" /Next {after} 0 R");
+            }
+            if !entry.children.is_empty() {
+                let (first, last) = emit(&entry.children, ids[i], next, body);
+                dict += &format!(" /First {first} 0 R /Last {last} 0 R /Count -{}", entry.children.len());
+            }
+            *body += &format!("{} 0 obj {dict} >> endobj\n", ids[i]);
+        }
+        (ids[0], ids[ids.len() - 1])
+    }
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", FIRST_PAGE + i)).collect();
+    let mut next = FIRST_PAGE + pages;
+    let mut entries = String::new();
+    let (first, last) = emit(outline, 3, &mut next, &mut entries);
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [{}] /Count {pages} >> endobj\n\
+         3 0 obj << /Type /Outlines /First {first} 0 R /Last {last} 0 R /Count {} >> endobj\n",
+        kids.join(" "),
+        outline.len(),
+    );
+    for i in 0..pages {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj\n", FIRST_PAGE + i);
+    }
+    pdf += &entries;
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    pdf.into_bytes()
+}
+
+/// R8 QoL 16: Contents keeps to the current section without fighting the reader. A deliberate
+/// jump opens the section's parents; a chevron only opens or closes and never jumps; a closed
+/// parent of the current section is marked instead; the reader's open choices survive jumps
+/// in and out; reopening Contents reveals the section; a list scrolled away stays there while
+/// reading on, until "Reveal current"; Expand all / Collapse all; a deep, long outline is fine.
+#[test]
+fn contents_follows_the_section_without_fighting_the_reader() {
+    const PARTS: usize = 12;
+    const CHAPTERS: usize = 3;
+    const PER_PART: usize = CHAPTERS + 1;
+    const DEEP: usize = 40;
+    let first_page = |part: usize| (part - 1) * PER_PART;
+    let mut outline: Vec<Entry> = (1..=PARTS)
+        .map(|part| {
+            let chapters = (1..=CHAPTERS).map(|ch| Entry::new(format!("Part {part}, chapter {ch}"), first_page(part) + ch, Vec::new())).collect();
+            Entry::new(format!("Part {part}"), first_page(part), chapters)
+        })
+        .collect();
+    // A chain deeper than Margin lists, under a title too long for its row.
+    let deep = (1..=DEEP).rev().fold(Vec::new(), |inner, level| vec![Entry::new(format!("Level {level}"), PARTS * PER_PART - 1, inner)]);
+    outline.push(Entry::new(format!("Appendix with a title {} long", "far too ".repeat(12)), PARTS * PER_PART - 1, deep));
+    let bytes = outlined_fixture(PARTS * PER_PART, &outline);
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 700.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.set_option("language", "en").unwrap();
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-test-data-{}", std::process::id())));
+        app.open_bytes("book.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let marked = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    let in_view = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        let top = h.get_by_label("Collapse all").rect().bottom();
+        let bottom = h.get_all_by_label(SidebarTab::Highlights.label()).next().expect("tab").rect().top();
+        let row = h.get_by_label(label).rect();
+        row.top() >= top && row.bottom() <= bottom
+    };
+    let jump = |h: &mut Harness<'static, PdfCraftApp>, page: usize| {
+        h.state_mut().views[0].go_to_page(page);
+        h.run_steps(4);
+    };
+    assert!(marked(&h, "Part 1"));
+    assert!(h.query_by_label("Part 1, chapter 1").is_none(), "the document closes its parts");
+
+    jump(&mut h, first_page(3) + 2);
+    assert!(marked(&h, "Part 3, chapter 2") && !marked(&h, "Part 3"), "a jump opens the section's part");
+    h.get_by_label("Collapse Part 3").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, first_page(3) + 2, "a chevron never jumps");
+    assert!(h.query_by_label("Part 3, chapter 2").is_none());
+    assert!(marked(&h, "Part 3"), "the closed part holding the section is marked");
+    h.get_by_label("Expand Part 3").click();
+    h.run_steps(3);
+    assert!(marked(&h, "Part 3, chapter 2"));
+    h.get_by_label("Collapse Part 3").click();
+    h.run_steps(3);
+
+    jump(&mut h, first_page(3) + 3);
+    assert!(marked(&h, "Part 3, chapter 3"), "jumping into the closed part opens it");
+    jump(&mut h, first_page(6));
+    assert!(marked(&h, "Part 6"));
+    assert!(h.query_by_label("Part 3, chapter 3").is_some(), "and it stays open after jumping out");
+
+    h.get_all_by_label(SidebarTab::Pages.label()).next().expect("tab").click();
+    h.run_steps(3);
+    h.get_all_by_label(SidebarTab::Contents.label()).next().expect("tab").click();
+    h.run_steps(4);
+    assert!(marked(&h, "Part 6") && in_view(&h, "Part 6"), "reopening Contents shows the section");
+
+    h.get_by_label("Expand all").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Part 1, chapter 1").is_some() && h.query_by_label("Level 1").is_some());
+    assert!(h.query_by_label(&format!("Level {DEEP}")).is_none(), "the list stops at its depth limit");
+    jump(&mut h, first_page(PARTS));
+    assert!(marked(&h, &format!("Part {PARTS}")) && in_view(&h, &format!("Part {PARTS}")), "a jump brings the section into view");
+
+    // Scroll the list to its top, then read on into the next chapter (a page turn, not a jump).
+    h.hover_at(h.get_by_label(&format!("Part {PARTS}")).rect().center());
+    for _ in 0..30 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(6);
+    assert!(in_view(&h, "Part 1"), "the list scrolled to its top");
+    h.state_mut().views[0].step_page(true);
+    h.run_steps(6);
+    let next_chapter = format!("Part {PARTS}, chapter 1");
+    assert!(marked(&h, &next_chapter), "the section moved on");
+    assert!(!in_view(&h, &next_chapter) && in_view(&h, "Part 1"), "and the list stayed where the reader put it");
+    h.get_by_label("Reveal current").click();
+    h.run_steps(4);
+    assert!(in_view(&h, &next_chapter), "Reveal current brings it back");
+
+    h.get_by_label("Collapse all").click();
+    h.run_steps(3);
+    assert!(h.query_by_label(&next_chapter).is_none() && h.query_by_label("Part 1, chapter 1").is_none());
+    assert!(marked(&h, &format!("Part {PARTS}")), "collapsed, the part holding the section is marked");
 }

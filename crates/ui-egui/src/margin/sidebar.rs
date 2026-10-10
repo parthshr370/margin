@@ -4,17 +4,13 @@
 //! Panes reuse PdfCraft's panels: Pages and Bookmarks are the right panel's bodies
 //! (`panels::panel_body`), Tools is the tool catalogue (`panels::all_tools` / `tool_detail`).
 //! Highlights is Margin's card list (`margin::highlights`), Find the search's results
-//! (`margin::find`). Contents is the outline as a reading table of contents, marking the
-//! section being read.
-
-use std::collections::HashSet;
+//! (`margin::find`), Contents the outline as a reading table of contents (`margin::contents`).
 
 use egui::{Align2, CornerRadius, Rect, Sense, vec2};
 use pdfcraft_engine::catalog;
-use pdfcraft_render::{DocInfo, OutlineItem};
 
 use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
-use crate::margin::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, SidebarTab, current_section, motion, open_tab, outline_at, reading};
+use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, reading};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{DocView, Flavor, LeftPanel, PdfCraftApp, icons};
@@ -24,12 +20,9 @@ const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 440.0;
 const TAB_HEIGHT: f32 = 32.0;
 const TOP_BUTTON: f32 = 30.0;
-const ROW_HEIGHT: f32 = 28.0;
+pub(super) const ROW_HEIGHT: f32 = 28.0;
 /// Rows sit nearly touching, so neighbouring hover fills read as one list.
-const ROW_SPACING: f32 = 2.0;
-const INDENT: f32 = 12.0;
-/// The expand/collapse chevron's box.
-const TWISTY: f32 = 16.0;
+pub(super) const ROW_SPACING: f32 = 2.0;
 const COVER: egui::Vec2 = vec2(52.0, 67.0);
 /// The card lines up with the panes' headings: the pane's edge plus a row's padding, less the
 /// top section's own edge.
@@ -248,14 +241,14 @@ fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// A pane's title: its small-caps section label, lined up with the rows' text.
-fn pane_title(ui: &mut egui::Ui, t: &Tokens, title: &str, count: Option<usize>) {
+pub(super) fn pane_title(ui: &mut egui::Ui, t: &Tokens, title: &str, count: Option<usize>) {
     ui.add_space(GAP_LARGE);
     ui.horizontal(|ui| look::section_label(ui, t, title, count));
     ui.add_space(GAP);
 }
 
 /// The mockup's empty state: a muted message, centred.
-fn empty(ui: &mut egui::Ui, t: &Tokens, lines: &[&str]) {
+pub(super) fn empty(ui: &mut egui::Ui, t: &Tokens, lines: &[&str]) {
     ui.add_space(GAP_LARGE * 2.0);
     ui.vertical_centered(|ui| {
         for line in lines {
@@ -267,7 +260,7 @@ fn empty(ui: &mut egui::Ui, t: &Tokens, lines: &[&str]) {
 fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let Some((index, _)) = app.active_ids() else { return };
     match app.margin_chrome.tab {
-        SidebarTab::Contents => contents(app, ui, t, index),
+        SidebarTab::Contents => super::contents::show(app, ui, t, index),
         SidebarTab::Highlights => highlights(app, ui, t, index),
         SidebarTab::Tools => tools(app, ui, t),
         // The search's status and results; its field is in the header (`margin::find`).
@@ -287,98 +280,6 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
             ui.add_space(GAP_LARGE);
             crate::panels::panel_body(app, ui);
-        }
-    }
-}
-
-/// The table of contents: the outline, with the section being read marked; click to go there.
-fn contents(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
-    let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
-    let info = &doc.info;
-    pane_title(ui, t, "Contents", None);
-    if info.outline.is_empty() {
-        empty(ui, t, &["This document has no table of contents.", "Pages and Find still get you around."]);
-        return;
-    }
-    let current = current_section(&info.outline, view.current).unwrap_or_default();
-    let toggled_id = egui::Id::new(("margin-toc-toggled", view.id.0));
-    let mut toggled: HashSet<Vec<usize>> = ui.data(|d| d.get_temp(toggled_id)).unwrap_or_default();
-    let mut cx = TocCtx { info, current: &current, toggled: &mut toggled, go: None, flip: None, drawn: 0 };
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = ROW_SPACING;
-        for (i, item) in info.outline.iter().enumerate() {
-            toc_row(ui, t, item, &mut vec![i], &mut cx);
-        }
-    });
-    let (go, flip) = (cx.go, cx.flip);
-    if let Some(path) = flip
-        && !toggled.remove(&path)
-    {
-        toggled.insert(path);
-    }
-    ui.data_mut(|d| d.insert_temp(toggled_id, toggled));
-    if let (Some(page), Some(view)) = (go, app.views.get_mut(index)) {
-        view.go_to_page(page);
-    }
-}
-
-struct TocCtx<'a> {
-    info: &'a DocInfo,
-    /// The path of the section being read.
-    current: &'a [usize],
-    /// Entries whose open state the user flipped from the default.
-    toggled: &'a mut HashSet<Vec<usize>>,
-    go: Option<usize>,
-    flip: Option<Vec<usize>>,
-    drawn: usize,
-}
-
-fn toc_row(ui: &mut egui::Ui, t: &Tokens, item: &OutlineItem, path: &mut Vec<usize>, cx: &mut TocCtx<'_>) {
-    cx.drawn += 1;
-    if cx.drawn > MAX_OUTLINE_ITEMS || path.len() > MAX_OUTLINE_DEPTH {
-        return;
-    }
-    let depth = path.len().saturating_sub(1) as f32;
-    let is_current = cx.current == path.as_slice();
-    // Open by default: entries the document opens, and the ones holding the current section.
-    let default_open = item.open || cx.current.starts_with(path);
-    let open = default_open != cx.toggled.contains(path.as_slice());
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, is_current, &item.title));
-    look::row_fill(ui, t, rect, &resp, is_current);
-    let left = rect.left() + ROW_PAD / 2.0 + depth * INDENT;
-    if !item.children.is_empty() {
-        let twisty = Rect::from_center_size(egui::pos2(left + TWISTY / 2.0, rect.center().y), vec2(TWISTY, TWISTY));
-        let click = ui.interact(twisty, ui.id().with(("toc-twisty", path.as_slice())), Sense::click());
-        icons::paint(ui, twisty, if open { "chevron-down" } else { "chevron-right" }, 12.0, look::icon_tint(t, false, click.hovered()));
-        if look::tooltip(click, if open { "Collapse" } else { "Expand" }, None).clicked() {
-            cx.flip = Some(path.clone());
-        }
-    }
-    // The page column stays muted, selected or not.
-    let label = item.page.and_then(|p| cx.info.pages.get(p)).map(|p| p.label.clone()).unwrap_or_default();
-    let label_width = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(11.0), t.text_muted).size().x);
-    ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, &label, theme::regular(11.0), t.text_muted);
-    let text_left = left + TWISTY + 4.0;
-    let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
-    crate::widgets::row_text(
-        ui,
-        egui::pos2(text_left, rect.center().y),
-        item.title.trim(),
-        theme::regular(12.5),
-        look::row_text(t, is_current, t.text),
-        max_width,
-    );
-    if resp.clicked()
-        && let Some(page) = item.page
-    {
-        cx.go = Some(page);
-    }
-    if open {
-        for (i, child) in item.children.iter().enumerate() {
-            path.push(i);
-            toc_row(ui, t, child, path, cx);
-            path.pop();
         }
     }
 }
