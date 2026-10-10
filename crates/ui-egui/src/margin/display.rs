@@ -12,6 +12,7 @@ use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, Te
 use serde_json::{Map, Value};
 
 use super::look::{self, CONTROL_ROW, GAP, GAP_LARGE, GAP_SECTION, Segment};
+use super::motion;
 use super::pagecolor::{BRIGHTNESS_RANGE, CONTRAST_RANGE, NEUTRAL_PERCENT, PageColor, PageMode};
 use super::reading::{self, DefaultRow};
 use super::trim::{self, Margins};
@@ -492,10 +493,15 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: 
     let (rect, resp) = ui.allocate_exact_size(vec2(width, SWATCH_HEIGHT + SWATCH_NAME_HEIGHT), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name));
     let painter = ui.painter();
-    if selected {
-        painter.rect(rect, CornerRadius::same(9), t.accent_soft, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-    } else if resp.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(9), t.hover);
+    // The pick moves between swatches with a crossfade, hover fills fade in and out.
+    let picked = motion::toggle(ui.ctx(), resp.id.with("margin-picked"), selected, motion::FADE);
+    let hovered = motion::hover(ui.ctx(), resp.id, resp.hovered() && !selected);
+    if hovered > 0.0 {
+        painter.rect_filled(rect, CornerRadius::same(9), t.hover.gamma_multiply(hovered));
+    }
+    if picked > 0.0 {
+        let stroke = Stroke::new(1.0, t.accent.gamma_multiply(picked));
+        painter.rect(rect, CornerRadius::same(9), t.accent_soft.gamma_multiply(picked), stroke, egui::StrokeKind::Inside);
     }
     let page = Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(width - 12.0, SWATCH_HEIGHT));
     let rgb = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);

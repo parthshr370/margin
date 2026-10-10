@@ -587,7 +587,7 @@ mod tests {
         let levels = [0x00u8, 0x60, 0x80, 0xA0, 0xFF];
         let mut row: Vec<u8> = levels.iter().flat_map(|&v| [v, v, v, 0xFF]).collect();
         PageColor { mode: PageMode::Mono, keep_hues: false, ..PageColor::default() }.apply(&mut row, levels.len(), 1);
-        let out: Vec<u8> = row.chunks_exact(4).map(|px| px[0]).collect();
+        let out: Vec<u8> = row.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
         assert_eq!(out.first(), Some(&LIGHT_INK[0]), "ink is light");
         assert_eq!(out.last(), Some(&MONO_DARK[0]), "paper is dark");
         assert!(out.windows(2).all(|pair| pair[0] > pair[1]), "edge levels stay distinct and ordered: {out:?}");

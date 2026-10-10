@@ -6,7 +6,7 @@ use egui::{Align, Layout};
 use pdfcraft_engine::commands;
 
 use crate::margin::look::{self, GAP_LARGE};
-use crate::margin::{SidebarTab, current_section, open_tab, outline_at};
+use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
@@ -93,7 +93,17 @@ fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.execute("view.full_screen");
     }
     let display = look::icon_button(ui, "contrast", BUTTON, false, "Page colour and layout", None);
-    egui::Popup::menu(&display).frame(crate::margin::display::popover_frame(ui.style())).show(|ui| display_popover(app, ui));
+    let popup = egui::Popup::menu(&display).frame(crate::margin::display::popover_frame(ui.style()));
+    let rise_id = popup.get_id().with("margin-rise");
+    // egui fades the popup in (`motion::sync` sets its fade time); it also rises a few pixels.
+    match popup.show(|ui| display_popover(app, ui)) {
+        Some(shown) => {
+            let rise = (1.0 - motion::toggle(ui.ctx(), rise_id, true, motion::FADE)) * motion::RISE;
+            ui.ctx().transform_layer_shapes(shown.response.layer_id, egui::emath::TSTransform::from_translation(egui::vec2(0.0, rise)));
+        }
+        // Closed: back to the start at once, so the next opening rises again.
+        None => _ = motion::toggle(ui.ctx(), rise_id, false, 0.0),
+    }
     let rail = app.margin_chrome.rail_open;
     let keys = look::shortcut(app, "reader.annotate.toggle");
     if look::icon_button(ui, "pen-tool", BUTTON, rail, "Annotate", keys.as_deref()).clicked() {

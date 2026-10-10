@@ -13,7 +13,7 @@ use pdfcraft_engine::catalog;
 use pdfcraft_render::{DocInfo, OutlineItem};
 
 use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
-use crate::margin::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, SidebarTab, current_section, open_tab, outline_at, reading};
+use crate::margin::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, SidebarTab, current_section, motion, open_tab, outline_at, reading};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{DocView, LeftPanel, PdfCraftApp, icons};
@@ -36,15 +36,33 @@ const MARKUP: [&str; 4] = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
 const PAGE_BOOKMARKS_MAX_HEIGHT: f32 = 220.0;
 const ROW_BUTTON: f32 = 22.0;
 
+/// The sidebar, sliding open and closed with `margin_chrome.sidebar_open` over
+/// [`motion::SLIDE`]: while it moves, its width eases between zero and the width the reader set
+/// and the panes keep their full width, clipped, so nothing reflows inside it.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let id = egui::Id::new("margin_sidebar");
+    let shown = motion::toggle(ui.ctx(), id.with("open"), app.margin_chrome.sidebar_open, motion::SLIDE);
+    if shown <= 0.0 {
+        return;
+    }
+    if shown < 1.0 {
+        // A panel of its own, so the resizable panel keeps the reader's width.
+        let width = egui::PanelState::load(ui.ctx(), id).map_or(DEFAULT_WIDTH, |s| s.size().x).clamp(MIN_WIDTH, MAX_WIDTH);
+        egui::Panel::left(id.with("sliding")).exact_size(width * shown).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+            let visible = ui.max_rect();
+            let rect = Rect::from_min_size(egui::pos2(visible.right() - width, visible.top()), vec2(width, visible.height()));
+            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+            body.set_clip_rect(visible.intersect(ui.clip_rect()));
+            sections(app, &mut body, &t);
+            ui.expand_to_include_rect(visible);
+        });
+        return;
+    }
     // Each panel draws its own divider line (egui's separator, in the theme's divider colour).
-    egui::Panel::left("margin_sidebar")
-        .resizable(true)
-        .default_size(DEFAULT_WIDTH)
-        .size_range(MIN_WIDTH..=MAX_WIDTH)
-        .frame(egui::Frame::NONE.fill(t.panel))
-        .show(ui, |ui| {
+    egui::Panel::left(id).resizable(true).default_size(DEFAULT_WIDTH).size_range(MIN_WIDTH..=MAX_WIDTH).frame(egui::Frame::NONE.fill(t.panel)).show(
+        ui,
+        |ui| {
             // The reader sets the sidebar's width by dragging its edge; its contents never do.
             // egui widens a panel to what its contents use, so a pane row a little too wide
             // (Bookmarks' search field was) widened it more every frame, shrinking the page and
@@ -54,7 +72,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             body.set_clip_rect(rect.intersect(ui.clip_rect()));
             sections(app, &mut body, &t);
             ui.expand_to_include_rect(rect);
-        });
+        },
+    );
 }
 
 /// The sidebar's three parts: buttons and the document card, the pane, the tab strip.
@@ -145,7 +164,8 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Opti
                 let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
                 let (bar, _) = ui.allocate_exact_size(vec2(bar_width, 3.0), Sense::hover());
                 ui.painter().rect_filled(bar, CornerRadius::same(2), t.divider);
-                let fill = Rect::from_min_size(bar.min, vec2(bar.width() * percent as f32 / 100.0, bar.height()));
+                let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
+                let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
                 ui.painter().rect_filled(fill, CornerRadius::same(2), t.accent);
                 ui.label(meta(&count));
             });
@@ -168,7 +188,7 @@ fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let on = app.margin_chrome.tab == tab;
             let (rect, resp) = ui.allocate_exact_size(vec2(width, TAB_HEIGHT), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tab.label()));
-            look::row_fill(ui, t, rect, resp.hovered(), on);
+            look::row_fill(ui, t, rect, &resp, on);
             icons::paint(ui, rect, tab.icon(), 16.0, look::icon_tint(t, on, resp.hovered()));
             // The keymap opens a tab with `view.sidebar.tab` and its key (Ctrl+1…4 by default).
             let keys = tab.key().and_then(|key| look::shortcut_with(app, "view.sidebar.tab", &serde_json::json!({ "tab": key })));
@@ -279,7 +299,7 @@ fn toc_row(ui: &mut egui::Ui, t: &Tokens, item: &OutlineItem, path: &mut Vec<usi
     let open = default_open != cx.toggled.contains(path.as_slice());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, is_current, &item.title));
-    look::row_fill(ui, t, rect, resp.hovered(), is_current);
+    look::row_fill(ui, t, rect, &resp, is_current);
     let left = rect.left() + ROW_PAD / 2.0 + depth * INDENT;
     if !item.children.is_empty() {
         let twisty = Rect::from_center_size(egui::pos2(left + TWISTY / 2.0, rect.center().y), vec2(TWISTY, TWISTY));
@@ -432,7 +452,7 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
                 for (page, title, label) in &rows {
                     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *page == current, title));
-                    look::row_fill(ui, t, rect, resp.hovered(), *page == current);
+                    look::row_fill(ui, t, rect, &resp, *page == current);
                     let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
                     icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
                     // Hovered rows trade the page label for a remove button.

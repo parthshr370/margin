@@ -292,3 +292,69 @@ fn full_screen_bar_has_an_exit_button() {
     h.run_steps(2);
     assert!(!h.state().full_screen, "Esc leaves full screen");
 }
+
+/// A Margin app at 60 frames a second, reading its settings from `config` (written first when
+/// `settings` is given), its renders settled.
+fn realtime_harness(config: &std::path::Path, settings: Option<&str>) -> Harness<'static, PdfCraftApp> {
+    std::fs::create_dir_all(config).expect("temp dir");
+    if let Some(text) = settings {
+        std::fs::write(config.join("settings.jsonc"), text).expect("settings written");
+    }
+    let config = config.to_path_buf();
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(120).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.set_option("language", "en").unwrap();
+        app.margin_keys.set_config_dir(config.clone());
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-test-data-{}", std::process::id())));
+        app.open_bytes("reader.pdf", None, FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    h
+}
+
+/// Frames until nothing asks for an immediate repaint (egui repaints only while something
+/// moves); panics past the harness's 120-frame cap.
+fn frames_until_idle(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
+    h.try_run().expect("the window goes idle")
+}
+
+/// The chrome's animations end: sliding the sidebar and the rail and opening the Display popover
+/// take a handful of frames at 60 fps, then the window asks for no more frames while idle.
+#[test]
+fn animations_settle_and_the_idle_window_stops_repainting() {
+    let config = std::env::temp_dir().join(format!("margin-motion-test-{}", std::process::id()));
+    let mut h = realtime_harness(&config, None);
+    frames_until_idle(&mut h);
+    for label in ["Sidebar", "Annotate", "Sidebar", "Annotate", "Page colour and layout"] {
+        h.get_by_label(label).click();
+        let frames = frames_until_idle(&mut h);
+        // 160 ms is 10 frames; a few more for the click and egui's fade.
+        assert!((3..=20).contains(&frames), "{label}: {frames} frames");
+    }
+    for _ in 0..3 {
+        assert_eq!(frames_until_idle(&mut h), 1, "an idle frame asks for no next frame");
+    }
+    std::fs::remove_dir_all(&config).expect("temp dir removed");
+}
+
+/// `ui.reduce_motion` turns the slides off: the sidebar is gone in the frame after the click,
+/// where it would still be sliding out.
+#[test]
+fn reduce_motion_turns_animations_off() {
+    let sliding_after_click = |settings: Option<&str>, name: &str| {
+        let config = std::env::temp_dir().join(format!("margin-{name}-test-{}", std::process::id()));
+        let mut h = realtime_harness(&config, settings);
+        frames_until_idle(&mut h);
+        h.get_by_label("Sidebar").click();
+        h.run_steps(2);
+        assert!(!h.state().margin_chrome.sidebar_open);
+        // The Library button lives in the sidebar.
+        let still_shown = h.query_by_label("Library").is_some();
+        std::fs::remove_dir_all(&config).expect("temp dir removed");
+        still_shown
+    };
+    assert!(sliding_after_click(None, "motion-on"), "by default the sidebar slides out");
+    assert!(!sliding_after_click(Some(r#"{ "ui": { "reduce_motion": true } }"#), "motion-off"), "reduced: gone at once");
+}

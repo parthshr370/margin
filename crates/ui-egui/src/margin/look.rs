@@ -10,7 +10,7 @@ use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Vec2, vec2};
 use pdfcraft_engine::commands;
 use serde_json::Value;
 
-use crate::margin::keysheet;
+use crate::margin::{keysheet, motion};
 use crate::theme::{self, Tokens};
 use crate::{Flavor, PdfCraftApp, icons};
 
@@ -58,10 +58,12 @@ impl RowLook {
     }
 }
 
-/// A row's background: the hover fill under a hovered or selected row, nothing otherwise.
-pub(crate) fn row_fill(ui: &egui::Ui, t: &Tokens, rect: Rect, hovered: bool, selected: bool) {
-    if hovered || selected {
-        ui.painter().rect_filled(rect, CornerRadius::same(t.radius), t.hover);
+/// A row's background: the hover fill under a hovered or selected row, fading in and out over
+/// [`motion::HOVER`]; nothing otherwise.
+pub(crate) fn row_fill(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response, selected: bool) {
+    let shown = motion::hover(ui.ctx(), resp.id, resp.hovered() || selected);
+    if shown > 0.0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(t.radius), t.hover.gamma_multiply(shown));
     }
 }
 
@@ -145,7 +147,7 @@ fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str,
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label));
     let stroke = border.map_or(Stroke::NONE, |c| Stroke::new(1.0, c));
-    ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(&t, &resp, on), stroke, egui::StrokeKind::Inside);
+    ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on), stroke, egui::StrokeKind::Inside);
     icons::paint(ui, rect, icon, (size * ICON_SHARE).round(), icon_tint(&t, on, resp.hovered()));
     tooltip(resp, label, shortcut)
 }
@@ -158,7 +160,7 @@ pub(crate) fn text_button(ui: &mut egui::Ui, icon: &str, label: &str, height: f3
     let width = GAP + icon_size + GAP / 2.0 + galley.size().x + GAP;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label));
-    ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(&t, &resp, on));
+    ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on));
     let tint = icon_tint(&t, on, resp.hovered());
     let icon_rect = Rect::from_center_size(egui::pos2(rect.left() + GAP + icon_size / 2.0, rect.center().y), Vec2::splat(icon_size));
     icons::paint(ui, icon_rect, icon, icon_size, tint);
@@ -167,15 +169,11 @@ pub(crate) fn text_button(ui: &mut egui::Ui, icon: &str, label: &str, height: f3
     tooltip(resp, tip, None)
 }
 
-/// A button's background: pressed, then the hover fill when on or hovered.
-fn button_fill(t: &Tokens, resp: &Response, on: bool) -> Color32 {
-    if resp.is_pointer_button_down_on() {
-        t.pressed
-    } else if on || resp.hovered() {
-        t.hover
-    } else {
-        Color32::TRANSPARENT
-    }
+/// A button's background: pressed, then the hover fill (fading over [`motion::HOVER`]) when on
+/// or hovered.
+fn button_fill(ctx: &egui::Context, t: &Tokens, resp: &Response, on: bool) -> Color32 {
+    let shown = motion::hover(ctx, resp.id, on || resp.hovered());
+    if resp.is_pointer_button_down_on() { t.pressed } else { t.hover.gamma_multiply(shown) }
 }
 
 /// An icon's colour on a button or tab: the accent when on, full text when hovered.
@@ -190,17 +188,18 @@ pub(crate) fn icon_tint(t: &Tokens, on: bool, hovered: bool) -> Color32 {
 }
 
 /// An on/off switch, the mockup's `.sw-t`: an accent track with a white knob on the right when
-/// on, a divider-coloured track with a muted knob on the left when off. Screen readers and tests
-/// see a checkbox named `label`.
+/// on, a divider-coloured track with a muted knob on the left when off; the knob slides and the
+/// colours blend over [`motion::FADE`]. Screen readers and tests see a checkbox named `label`.
 pub(crate) fn switch(ui: &mut egui::Ui, on: bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(SWITCH_SIZE, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
+    let how_on = motion::toggle(ui.ctx(), resp.id.with("margin-switch"), on, motion::FADE);
     let radius = rect.height() / 2.0;
-    let track = if on { t.accent } else { t.divider };
-    ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), track);
-    let knob_x = if on { rect.right() - radius } else { rect.left() + radius };
-    ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), radius - SWITCH_KNOB_INSET, if on { Color32::WHITE } else { t.text_muted });
+    ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), t.divider.lerp_to_gamma(t.accent, how_on));
+    let knob_x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
+    let knob = t.text_muted.lerp_to_gamma(Color32::WHITE, how_on);
+    ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), radius - SWITCH_KNOB_INSET, knob);
     resp
 }
 
@@ -230,15 +229,10 @@ pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<u
         x += width + SEGMENT_INSET;
         let resp = ui.interact(rect, ui.id().with(("segment", segment.label)), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), segment.selected, segment.label));
-        let fill = if segment.selected {
-            t.selected
-        } else if resp.hovered() {
-            t.hover
-        } else {
-            Color32::TRANSPARENT
-        };
+        let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
+        let fill = if segment.selected { t.selected } else { t.hover.gamma_multiply(shown) };
         ui.painter().rect_filled(rect, CornerRadius::same(t.radius.saturating_sub(1)), fill);
-        let color = if segment.selected || resp.hovered() { t.text } else { t.text_muted };
+        let color = if segment.selected { t.text } else { t.text_muted.lerp_to_gamma(t.text, shown) };
         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
         let resp = match segment.tip {
             Some(tip) => resp.on_hover_text(tip),

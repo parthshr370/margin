@@ -51,11 +51,15 @@ fn main() -> Result<(), String> {
         let mut app = PdfCraftApp::with_flavor(flavor);
         if flavor == Flavor::Margin {
             app.set_theme_preference(pdfcraft_ui_egui::theme::ThemePreference::Dark);
+            // A shot must not touch the reader's data: no library or stats rows, and the file
+            // opens without its path, so its sidecar is neither read nor written.
+            app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-shot-data-{}", std::process::id())));
         }
         if let Some(f) = &file {
             let bytes = std::fs::read(f).unwrap_or_default();
             let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            if let Err(e) = app.open_bytes(&name, Some(f.clone()), bytes) {
+            let path = (flavor == Flavor::PdfCraft).then(|| f.clone());
+            if let Err(e) = app.open_bytes(&name, path, bytes) {
                 eprintln!("shot: {f}: {e}");
             }
         }

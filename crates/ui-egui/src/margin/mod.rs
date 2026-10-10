@@ -17,6 +17,7 @@ pub mod keysheet;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod library;
 pub mod look;
+pub mod motion;
 pub mod obsidian;
 pub mod pagecolor;
 pub mod rail;
@@ -227,8 +228,10 @@ pub(crate) fn sync(app: &mut PdfCraftApp) {
 /// Draw Margin's whole window (everything but full screen, which PdfCraft's `ui` handles).
 pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     sync(app);
+    motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
     let t = crate::theme::Tokens::get(ctx);
-    if app.active.is_some() && app.margin_chrome.sidebar_open {
+    // The sidebar slides itself in and out (`margin_chrome.sidebar_open`).
+    if app.active.is_some() {
         sidebar::show(app, ui);
     }
     header::show(app, ui);

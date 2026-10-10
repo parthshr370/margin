@@ -6,6 +6,7 @@ use egui::{Align, CornerRadius, Layout, Sense, Stroke, vec2};
 use crate::PdfCraftApp;
 use crate::canvas::Fit;
 use crate::margin::look::{self, GAP, GAP_LARGE};
+use crate::margin::motion;
 use crate::margin::reading::SaveStatus;
 use crate::theme::{self, Tokens};
 
@@ -16,6 +17,9 @@ const ZOOM_STEPS: [u16; 5] = [75, 100, 125, 150, 200];
 const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
 const SCRUB_HEIGHT: f32 = 18.0;
+/// The scrubber's knob, and its size under the pointer or while dragged.
+const KNOB_RADIUS: f32 = 5.0;
+const KNOB_RADIUS_HOVER: f32 = 6.0;
 const ZOOM_BUTTON: f32 = 22.0;
 const FIT_BUTTON: f32 = 24.0;
 
@@ -156,9 +160,12 @@ fn scrubber(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, pages: usi
     for &s in sections {
         painter.vline(x_of(s), (y - 3.0)..=(y + 3.0), Stroke::new(1.0, t.text_faint));
     }
-    let knob = x_of(view.current);
+    // The knob glides to a new page (a jump, or page turns) and grows a little under the pointer.
+    let share = motion::follow(ui.ctx(), resp.id.with("knob"), view.current as f32 / last, motion::SLIDE).clamp(0.0, 1.0);
+    let knob = rect.left() + rect.width() * share;
+    let grown = motion::hover(ui.ctx(), resp.id, resp.hovered() || resp.dragged());
     painter.hline(rect.left()..=knob, y, Stroke::new(2.0, t.accent));
-    painter.circle_filled(egui::pos2(knob, y), if resp.hovered() || resp.dragged() { 6.0 } else { 5.0 }, t.accent);
+    painter.circle_filled(egui::pos2(knob, y), egui::lerp(KNOB_RADIUS..=KNOB_RADIUS_HOVER, grown), t.accent);
     let page_at = |x: f32| (((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) * last).round() as usize;
     if (resp.clicked() || resp.drag_stopped())
         && let Some(pos) = resp.interact_pointer_pos()

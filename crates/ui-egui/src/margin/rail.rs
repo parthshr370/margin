@@ -6,7 +6,7 @@ use egui::{Color32, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::commands;
 
 use crate::comments::CommentTool;
-use crate::margin::look;
+use crate::margin::{look, motion};
 use crate::theme::Tokens;
 use crate::{PdfCraftApp, QuickTool};
 
@@ -86,17 +86,24 @@ impl RailItem {
     }
 }
 
-/// Draw the rail over the page area `area` (the canvas calls this instead of its quick bar).
+/// Draw the rail over the page area `area` (the canvas calls this instead of its quick bar). It
+/// fades and slides in from the edge over [`motion::SLIDE`], and takes clicks only while open.
 pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
-    if !app.margin_chrome.rail_open {
+    let id = egui::Id::new("margin-rail");
+    let open = app.margin_chrome.rail_open;
+    let shown = motion::toggle(ui.ctx(), id.with("open"), open, motion::SLIDE);
+    if shown <= 0.0 {
         return;
     }
     let t = Tokens::get(ui.ctx());
-    egui::Area::new(egui::Id::new("margin-rail"))
+    egui::Area::new(id)
         .order(egui::Order::Middle)
         .pivot(egui::Align2::LEFT_CENTER)
-        .fixed_pos(area.left_center() + vec2(INSET, 0.0))
+        .fixed_pos(area.left_center() + vec2(INSET - (1.0 - shown) * motion::RAIL_SHIFT, 0.0))
+        .interactable(open)
+        .fade_in(false)
         .show(ui.ctx(), |ui| {
+            ui.multiply_opacity(shown);
             egui::Frame::NONE
                 .fill(t.card)
                 .stroke(Stroke::new(1.0, t.border))

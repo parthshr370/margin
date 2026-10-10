@@ -690,7 +690,7 @@ fn segment(ui: &mut egui::Ui, t: &Tokens, label: &str, on: bool) -> egui::Respon
     let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(12.5), if on { t.text } else { t.text_muted });
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 20.0, 28.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
-    look::row_fill(ui, t, rect, resp.hovered(), on);
+    look::row_fill(ui, t, rect, &resp, on);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.text);
     resp
 }
@@ -848,7 +848,7 @@ fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], a
             let Some(book) = app.margin_library.books.get(index).cloned() else { continue };
             let (rect, resp) = ui.allocate_exact_size(vec2(width, LIST_ROW), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
-            look::row_fill(ui, t, rect, resp.hovered(), false);
+            look::row_fill(ui, t, rect, &resp, false);
             let cover = Rect::from_min_size(pos2(rect.left() + GAP, rect.center().y - LIST_COVER.y / 2.0), LIST_COVER);
             paint_cover(app, ui, t, cover, &book);
             let text_left = cover.right() + GAP_LARGE;

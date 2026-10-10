@@ -8,6 +8,7 @@ use egui::{Align, Layout, Sense, UiBuilder};
 use crate::PdfCraftApp;
 use crate::margin::header;
 use crate::margin::look::{self, GAP_LARGE};
+use crate::margin::motion;
 use crate::theme::Tokens;
 
 /// How long the bar stays after entering full screen, in seconds.
@@ -26,6 +27,7 @@ struct Session {
 
 /// The bar over the full-screen page. Call every full-screen frame.
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
     let id = egui::Id::new("margin-focus");
     let (now, frame) = (ctx.input(|i| i.time), ctx.cumulative_frame_nr());
     let session = ctx
@@ -44,11 +46,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if intro_left > 0.0 {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(intro_left));
     }
-    if !shown {
+    // The bar slides down from the top edge and fades in; it slides back up when it goes.
+    let how_shown = motion::toggle(ctx, id.with("slide"), shown, motion::FADE);
+    if how_shown <= 0.0 {
         return;
     }
     let t = Tokens::get(ctx);
-    egui::Area::new(id.with("bar")).order(egui::Order::Foreground).fixed_pos(bar.min).show(ctx, |ui| {
+    let top = bar.min - egui::vec2(0.0, (1.0 - how_shown) * header::HEIGHT);
+    egui::Area::new(id.with("bar")).order(egui::Order::Foreground).fixed_pos(top).interactable(shown).fade_in(false).show(ctx, |ui| {
+        ui.multiply_opacity(how_shown);
         let (rect, _) = ui.allocate_exact_size(bar.size(), Sense::hover());
         ui.painter().rect_filled(rect, 0.0, t.chrome);
         ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, t.divider));

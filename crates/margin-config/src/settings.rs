@@ -297,13 +297,15 @@ impl Default for Reader {
     }
 }
 
-/// The UI block (`[app]`). Only the rail so far; the rest of CUSTOMIZATION §1 `ui` lands with
-/// the tasks that read it.
+/// The UI block (`[app]`): the rail and motion so far; the rest of CUSTOMIZATION §1 `ui` lands
+/// with the tasks that read it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ui {
     /// annotate rail, visible in annotate mode (mockup:1685)
     pub rail: Rail,
+    /// true = no animation: the sidebar, rail, popovers, hover fills and progress bars change at once
+    pub reduce_motion: bool,
 }
 
 /// Which side the rail sits on.

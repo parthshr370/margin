@@ -855,7 +855,7 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &item.title));
         if ember {
-            crate::margin::look::row_fill(ui, t, rect, resp.hovered(), selected);
+            crate::margin::look::row_fill(ui, t, rect, &resp, selected);
         } else if resp.hovered() {
             ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
         }
@@ -950,7 +950,7 @@ fn pages(
             let selected = i == view.current;
             let radius = if ember { CornerRadius::same(t.radius) } else { CornerRadius::same(8) };
             if ember {
-                crate::margin::look::row_fill(ui, t, rect, resp.hovered(), selected || picked);
+                crate::margin::look::row_fill(ui, t, rect, &resp, selected || picked);
             } else if selected || picked {
                 ui.painter().rect_filled(rect, radius, t.accent_soft);
             } else if resp.hovered() {
