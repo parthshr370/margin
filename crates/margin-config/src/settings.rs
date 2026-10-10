@@ -297,15 +297,50 @@ impl Default for Reader {
     }
 }
 
-/// The UI block (`[app]`): the rail and motion so far; the rest of CUSTOMIZATION §1 `ui` lands
-/// with the tasks that read it.
+/// The UI block (`[app]`): the sidebar, the rail and motion so far; the rest of CUSTOMIZATION §1
+/// `ui` lands with the tasks that read it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ui {
+    /// left pane
+    pub sidebar: Sidebar,
     /// annotate rail, visible in annotate mode (mockup:1685)
     pub rail: Rail,
     /// true = no animation: the sidebar, rail, popovers, hover fills, progress bars and screen steps change at once
     pub reduce_motion: bool,
+}
+
+/// The sidebar (CU-UI-3). `visible` and `tab` are the first run's choice only: afterwards Margin
+/// reopens the sidebar as it was left.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sidebar {
+    /// open on the first start; later starts reopen it as it was left
+    pub visible: bool,
+    /// the first start's tab; later starts reopen the last tab used (never Find)
+    pub tab: SidebarTab,
+}
+
+impl Default for Sidebar {
+    fn default() -> Self {
+        Self { visible: true, tab: SidebarTab::Contents }
+    }
+}
+
+/// A sidebar tab a reader can start on (Find opens with a search).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarTab {
+    /// The table of contents.
+    Contents,
+    /// The highlight cards.
+    Highlights,
+    /// The page thumbnails.
+    Pages,
+    /// Page bookmarks and the PDF's bookmarks.
+    Bookmarks,
+    /// The tool catalogue.
+    Tools,
 }
 
 /// Which side the rail sits on.

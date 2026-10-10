@@ -179,7 +179,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     view.margin.quotes.refresh(doc.edit_generation(), info, &view.texts);
     let mut out = Outcome::default();
     let no_note = view.comments.notes.note.clone().err();
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt(("margin-highlights", view.id.0)).auto_shrink([false, false]).show(ui, |ui| {
         obsidian::panel_block(ui, t, &mut view.comments.notes);
         ui.spacing_mut().item_spacing.y = CARD_SPACING;
         for a in obsidian::markup_comments(info) {

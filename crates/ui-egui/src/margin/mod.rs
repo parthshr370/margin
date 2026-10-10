@@ -40,7 +40,9 @@ pub mod trim;
 
 use crate::{PdfCraftApp, RightPanel};
 
-/// What the reader chrome shows. Not saved between runs.
+/// What the reader chrome shows. Whether the sidebar is open and its tab are saved with the app's
+/// state ([`ReaderChrome::to_json`]); a first start takes them from the `ui.sidebar` settings.
+/// The sidebar's width is the resizable panel's own, kept in egui's saved memory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReaderChrome {
     pub sidebar_open: bool,
@@ -50,16 +52,47 @@ pub struct ReaderChrome {
     /// The right panel the chrome last asked for. When `app.right` differs, a command or option
     /// picked a panel since, and the sidebar follows it.
     synced_right: Option<RightPanel>,
-    /// The document shown when the chrome last synced; another one starts on Contents.
+    /// The document shown when the chrome last synced.
     synced_doc: Option<pdfcraft_engine::DocId>,
     /// While a search is open: the tab and sidebar state it replaced, shown again when it closes
     /// (`find::sync`).
     before_find: Option<(SidebarTab, bool)>,
+    /// Nothing was restored from a previous run: the first `sync` applies `ui.sidebar`.
+    first_start: bool,
 }
 
 impl Default for ReaderChrome {
     fn default() -> Self {
-        Self { sidebar_open: true, tab: SidebarTab::Contents, rail_open: true, synced_right: None, synced_doc: None, before_find: None }
+        Self {
+            sidebar_open: true,
+            tab: SidebarTab::Contents,
+            rail_open: true,
+            synced_right: None,
+            synced_doc: None,
+            before_find: None,
+            first_start: true,
+        }
+    }
+}
+
+impl ReaderChrome {
+    /// The sidebar as the reader chose it, for the app's saved state. A search's Find tab is
+    /// never saved: the tab and open state it replaced are. A PdfCraft panel without a tab saves
+    /// no tab.
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        let (tab, open) = match self.before_find {
+            Some(before) if self.tab == SidebarTab::Find => before,
+            _ => (self.tab, self.sidebar_open),
+        };
+        serde_json::json!({ "sidebar_open": open, "tab": tab.key().filter(|_| tab != SidebarTab::Find) })
+    }
+
+    /// Restore what [`Self::to_json`] wrote. Malformed or missing values keep the defaults.
+    pub(crate) fn restore(&mut self, value: &serde_json::Value) {
+        let Some(open) = value["sidebar_open"].as_bool() else { return };
+        self.sidebar_open = open;
+        self.tab = value["tab"].as_str().and_then(SidebarTab::from_key).filter(|tab| *tab != SidebarTab::Find).unwrap_or(SidebarTab::Contents);
+        self.first_start = false;
     }
 }
 
@@ -138,6 +171,23 @@ impl SidebarTab {
             Self::Other(_) => None,
         }
     }
+
+    /// The strip's tab whose [`Self::key`] is `key`.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::STRIP.into_iter().find(|tab| tab.key() == Some(key))
+    }
+
+    /// The tab the `ui.sidebar.tab` setting names.
+    fn from_setting(tab: margin_config::SidebarTab) -> Self {
+        use margin_config::SidebarTab as S;
+        match tab {
+            S::Contents => Self::Contents,
+            S::Highlights => Self::Highlights,
+            S::Pages => Self::Pages,
+            S::Bookmarks => Self::Bookmarks,
+            S::Tools => Self::Tools,
+        }
+    }
 }
 
 /// Margin's defaults on a new app (saved settings may override them afterwards).
@@ -155,13 +205,10 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
         "view.sidebar.toggle" => app.margin_chrome.sidebar_open = !app.margin_chrome.sidebar_open,
         "reader.annotate.toggle" => app.margin_chrome.rail_open = !app.margin_chrome.rail_open,
-        "view.sidebar.tab" => {
-            let wanted = args.get("tab").and_then(serde_json::Value::as_str);
-            match SidebarTab::STRIP.into_iter().find(|tab| tab.key().is_some() && tab.key() == wanted) {
-                Some(tab) => open_tab(app, tab),
-                None => return false,
-            }
-        }
+        "view.sidebar.tab" => match args.get("tab").and_then(serde_json::Value::as_str).and_then(SidebarTab::from_key) {
+            Some(tab) => open_tab(app, tab),
+            None => return false,
+        },
         // Without a document the key is spent, as PdfCraft's view keys are.
         "reader.bookmark.toggle" => {
             let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
@@ -201,7 +248,8 @@ pub(crate) fn open_tab(app: &mut PdfCraftApp, tab: SidebarTab) {
 
 /// Keep PdfCraft's panel state and the sidebar in step, once per frame before drawing.
 ///
-/// A newly shown document starts on Contents, or on the panel its initial view asks for.
+/// The first frame of a first start opens the sidebar as `ui.sidebar` says. Another document
+/// keeps the reader's tab, unless its initial view asks for a panel (Pages, Attachments…).
 /// Commands (`comment.list`, `edit.advanced_search`, `sign.panel`, the control channel's
 /// `panel` option) still set `app.right`: the sidebar switches to the matching tab. Closing a
 /// panel with its own close button closes the sidebar. In turn the sidebar sets `app.right` to
@@ -209,19 +257,27 @@ pub(crate) fn open_tab(app: &mut PdfCraftApp, tab: SidebarTab) {
 /// while the Tools tab shows a tool's options. An open search shows the Find tab
 /// (`find::sync`).
 pub(crate) fn sync(app: &mut PdfCraftApp) {
+    if app.margin_chrome.first_start {
+        let configured = &app.margin_keys.settings().ui.sidebar;
+        let chrome = &mut app.margin_chrome;
+        chrome.first_start = false;
+        chrome.sidebar_open = configured.visible;
+        chrome.tab = SidebarTab::from_setting(configured.tab);
+    }
     if app.active.is_none() {
         return;
     }
     let doc = app.active_ids().map(|(_, id)| id);
     let chrome = &mut app.margin_chrome;
     if doc != chrome.synced_doc {
-        // PdfCraft opens a document on Comments or Bookmarks when it has them; a reader starts
-        // on its contents. A panel the document asks for (Pages, Attachments…) still shows.
+        // PdfCraft opens a document on Comments or Bookmarks when it has them; that is not the
+        // reader's choice, so the tab stays.
         chrome.synced_doc = doc;
-        chrome.tab = match app.right {
-            Some(RightPanel::Comments | RightPanel::Bookmarks) | None => SidebarTab::Contents,
-            Some(panel) => SidebarTab::for_panel(panel),
-        };
+        if let Some(panel) =
+            app.right.filter(|panel| Some(*panel) != chrome.synced_right && !matches!(panel, RightPanel::Comments | RightPanel::Bookmarks))
+        {
+            chrome.tab = SidebarTab::for_panel(panel);
+        }
         chrome.synced_right = app.right;
     }
     if app.right != chrome.synced_right {

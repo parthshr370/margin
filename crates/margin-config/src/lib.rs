@@ -57,7 +57,7 @@ pub use profile::{Profile, ProfileMatch};
 pub use registry::{CommandEntry, CommandId, CommandInfo, Group, MARGIN_NAMESPACES, Registry, Source};
 pub use settings::{
     FindOptions, Fit, KeymapBase, Keys, Layout, Library, LibrarySort, LibraryView, PageColor, Perf, Rail, RailSide, Reader, SETTINGS_SCHEMA_URL,
-    SETTINGS_VERSION, Settings, Start, Stats, TileFormat, ToolOptions, Ui, View,
+    SETTINGS_VERSION, Settings, Sidebar, SidebarTab, Start, Stats, TileFormat, ToolOptions, Ui, View,
 };
 pub use sidecar::{
     Bookmark, Highlight, HighlightSource, HighlightStyle, Locator, PageNote, PdfAnnot, Progress, Sidecar, SidecarDoc, SidecarFormat, SidecarObsidian,

@@ -332,6 +332,7 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
     let key = look::shortcut(app, "reader.bookmark.toggle");
     let Some(view) = app.views.get(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
+    let scroll_id = ("margin-page-bookmarks", view.id.0);
     let info = &doc.info;
     // Unnamed bookmarks show the section they are in.
     let rows: Vec<(usize, String, String)> = view
@@ -371,39 +372,36 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
             ui.label(egui::RichText::new(hint).font(theme::regular(12.0)).color(t.text_muted));
         });
     } else {
-        egui::ScrollArea::vertical().id_salt("margin-page-bookmarks").max_height(PAGE_BOOKMARKS_MAX_HEIGHT).auto_shrink([false, true]).show(
-            ui,
-            |ui| {
-                ui.spacing_mut().item_spacing.y = ROW_SPACING;
-                for (page, title, label) in &rows {
-                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-                    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *page == current, title));
-                    look::row_fill(ui, t, rect, &resp, *page == current);
-                    let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
-                    icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
-                    // Hovered rows trade the page label for a remove button.
-                    let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
-                    let label_width = if resp.hovered() || ui.rect_contains_pointer(side) {
-                        let x = ui.interact(side, ui.id().with(("remove-page-bookmark", *page)), Sense::click());
-                        icons::paint(ui, side, "x", 12.0, look::icon_tint(t, false, x.hovered()));
-                        if look::tooltip(x, "Remove bookmark", None).clicked() {
-                            remove = Some(*page);
-                        }
-                        ROW_BUTTON
-                    } else {
-                        ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, label, theme::regular(11.0), t.text_muted);
-                        ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(11.0), t.text_muted).size().x)
-                    };
-                    let text_left = icon.right() + GAP;
-                    let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
-                    let color = look::row_text(t, *page == current, t.text);
-                    crate::widgets::row_text(ui, egui::pos2(text_left, rect.center().y), title.as_str(), theme::regular(12.5), color, max_width);
-                    if resp.clicked() && remove.is_none() {
-                        go = Some(*page);
+        egui::ScrollArea::vertical().id_salt(scroll_id).max_height(PAGE_BOOKMARKS_MAX_HEIGHT).auto_shrink([false, true]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = ROW_SPACING;
+            for (page, title, label) in &rows {
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *page == current, title));
+                look::row_fill(ui, t, rect, &resp, *page == current);
+                let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
+                icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
+                // Hovered rows trade the page label for a remove button.
+                let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
+                let label_width = if resp.hovered() || ui.rect_contains_pointer(side) {
+                    let x = ui.interact(side, ui.id().with(("remove-page-bookmark", *page)), Sense::click());
+                    icons::paint(ui, side, "x", 12.0, look::icon_tint(t, false, x.hovered()));
+                    if look::tooltip(x, "Remove bookmark", None).clicked() {
+                        remove = Some(*page);
                     }
+                    ROW_BUTTON
+                } else {
+                    ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, label, theme::regular(11.0), t.text_muted);
+                    ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(11.0), t.text_muted).size().x)
+                };
+                let text_left = icon.right() + GAP;
+                let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
+                let color = look::row_text(t, *page == current, t.text);
+                crate::widgets::row_text(ui, egui::pos2(text_left, rect.center().y), title.as_str(), theme::regular(12.5), color, max_width);
+                if resp.clicked() && remove.is_none() {
+                    go = Some(*page);
                 }
-            },
-        );
+            }
+        });
     }
     ui.add_space(GAP);
     let Some(view) = app.views.get_mut(index) else { return };

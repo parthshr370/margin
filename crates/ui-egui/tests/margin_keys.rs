@@ -214,20 +214,17 @@ fn page_keys_follow_the_layout() {
     h.state_mut().views[0].set_cover(false);
     press(&mut h, Key::Home);
     let turns = |h: &mut Harness<'static, PdfCraftApp>, keys: &[Key]| {
-        keys.iter().map(|key| {
-            press(h, *key);
-            current(h)
-        })
-        .collect::<Vec<_>>()
+        keys.iter()
+            .map(|key| {
+                press(h, *key);
+                current(h)
+            })
+            .collect::<Vec<_>>()
     };
     assert_eq!(turns(&mut h, &[Key::ArrowRight, Key::ArrowRight, Key::ArrowLeft]), [2, 4, 2], "Two-up: spreads [0 1] [2 3] [4 5]");
     h.state_mut().views[0].set_cover(true);
     press(&mut h, Key::Home);
-    assert_eq!(
-        turns(&mut h, &[Key::ArrowRight, Key::ArrowRight, Key::ArrowLeft, Key::ArrowLeft]),
-        [1, 3, 1, 0],
-        "with a cover: [0] [1 2] [3 4] [5]"
-    );
+    assert_eq!(turns(&mut h, &[Key::ArrowRight, Key::ArrowRight, Key::ArrowLeft, Key::ArrowLeft]), [1, 3, 1, 0], "with a cover: [0] [1 2] [3 4] [5]");
     let place = current(&h);
 
     assert!(h.state_mut().execute("edit.find"));

@@ -562,7 +562,8 @@ fn contents_follows_the_section_without_fighting_the_reader() {
     });
     h.run_steps(4);
     settle(&mut h);
-    let marked = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    let marked =
+        |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
     let in_view = |h: &Harness<'static, PdfCraftApp>, label: &str| {
         let top = h.get_by_label("Collapse all").rect().bottom();
         let bottom = h.get_all_by_label(SidebarTab::Highlights.label()).next().expect("tab").rect().top();
@@ -634,4 +635,52 @@ fn contents_follows_the_section_without_fighting_the_reader() {
     h.run_steps(3);
     assert!(h.query_by_label(&next_chapter).is_none() && h.query_by_label("Part 1, chapter 1").is_none());
     assert!(marked(&h, &format!("Part {PARTS}")), "collapsed, the part holding the section is marked");
+}
+
+/// R8 item 17: the sidebar's tab and open state outlive a restart; Find is never saved, closing it
+/// returns to the tab it replaced, and another document keeps the reader's tab.
+#[test]
+fn sidebar_choices_survive_restarts_find_and_document_switches() {
+    let mut h = harness(Flavor::Margin);
+    let tab = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_label(label).next().expect("tab").click();
+        h.run_steps(3);
+    };
+    tab(&mut h, "Pages");
+    click(&mut h, "Sidebar");
+    let saved = h.state().persist();
+
+    // A restart restores the closed sidebar; showing it again shows Pages.
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.set_option("language", "en").unwrap();
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-test-data-{}", std::process::id())));
+        app.restore(&saved);
+        app.open_bytes("reader.pdf", None, FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(!h.state().margin_chrome.sidebar_open, "the sidebar reopens closed");
+    click(&mut h, "Sidebar");
+    assert_eq!((h.state().margin_chrome.tab, h.state().right), (SidebarTab::Pages, Some(RightPanel::Pages)));
+
+    // Find from Highlights: never saved, and closing it goes back to Highlights.
+    tab(&mut h, "Highlights");
+    tab(&mut h, "Find");
+    assert_eq!(h.state().margin_chrome.tab, SidebarTab::Find);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).expect("json");
+    assert_eq!(saved["margin_chrome"], serde_json::json!({ "sidebar_open": true, "tab": "highlights" }));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].find.is_none());
+    assert_eq!(h.state().margin_chrome.tab, SidebarTab::Highlights);
+
+    // Another document (PdfCraft would open it on Bookmarks) and back: still Highlights, no Find.
+    h.state_mut().open_bytes("long.pdf", None, long_fixture(3)).expect("opens");
+    h.run_steps(3);
+    assert_eq!((h.state().active, h.state().margin_chrome.tab), (Some(1), SidebarTab::Highlights));
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    assert_eq!(h.state().margin_chrome.tab, SidebarTab::Highlights);
+    assert!(h.state().views[0].find.is_none());
 }

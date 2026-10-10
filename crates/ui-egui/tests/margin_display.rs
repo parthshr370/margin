@@ -218,9 +218,7 @@ fn display_rows_line_up_and_scroll_in_a_short_window() {
     assert!(sliders.iter().all(|r| (r.left() - sliders[0].left()).abs() < SAME_COLUMN), "slider starts {sliders:?}");
     assert!(sliders[0].left() <= starts[0] && starts[0] - sliders[0].left() < SEGMENT_SLACK, "sliders {sliders:?}, choices {starts:?}");
 
-    let follow = |h: &Harness<'static, PdfCraftApp>| {
-        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").rect()
-    };
+    let follow = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").rect();
     assert!(follow(&h).bottom() > SHORT_WINDOW.y, "the expanded popover is taller than the window: {:?}", follow(&h));
     h.hover_at(h.get_by_label("Width").rect().center());
     for _ in 0..20 {

@@ -22,8 +22,8 @@ use margin_config::{CompileOptions, Compiled, CompiledKeymap, ContextNode, Keyma
 use pdfcraft_engine::commands::{self, CommandSpec, Shortcut};
 use serde_json::Value;
 
-use super::{reading, scroll_step};
 use super::settings_watch::SettingsWatch;
+use super::{reading, scroll_step};
 use crate::canvas::{DocView, Fit, PageLayout};
 use crate::{PdfCraftApp, QuickTool};
 

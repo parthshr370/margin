@@ -93,7 +93,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     tree.seen_history = Some(history);
     tree.drawn_pass = pass;
     let mut rows = Rows { info, current: &current, open: &tree.open, scroll, go: None, flip: None, drawn: 0, marked_in_view: false };
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt(tree_id.with("scroll")).auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_SPACING;
         for (i, item) in info.outline.iter().enumerate() {
             rows.row(ui, t, item, &mut vec![i]);

@@ -112,7 +112,8 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
     }
     let font = theme::regular(PAGE_TEXT);
     // Sized by the current label and the page count, never by what is being typed.
-    let widest = [current.as_str(), &labels.len().to_string()].map(|text| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x);
+    let widest =
+        [current.as_str(), &labels.len().to_string()].map(|text| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x);
     let width = (widest[0].max(widest[1]) + 2.0 * PAGE_FIELD_PAD).clamp(PAGE_FIELD_MIN, PAGE_FIELD_MAX);
     let edit = egui::TextEdit::singleline(&mut view.page_input)
         .id(id)
