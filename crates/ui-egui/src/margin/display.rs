@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, TextureOptions, pos2, vec2};
 use serde_json::{Map, Value};
 
+use super::look::{self, CONTROL_ROW, GAP, GAP_LARGE, GAP_SECTION, Segment};
 use super::pagecolor::{BRIGHTNESS_RANGE, CONTRAST_RANGE, NEUTRAL_PERCENT, PageColor, PageMode};
 use super::reading::{self, DefaultRow};
 use super::trim::{self, Margins};
@@ -178,13 +179,27 @@ impl PageColorCache {
 }
 
 const POPOVER_WIDTH: f32 = 384.0;
-const SWATCH_GAP: f32 = 8.0;
 const SWATCH_HEIGHT: f32 = 62.0;
+/// The swatch's name line under its page preview.
+const SWATCH_NAME_HEIGHT: f32 = 34.0;
+/// The label column of slider and choice rows (the mockup's `.ctl` grid: 92 px).
 const LABEL_WIDTH: f32 = 92.0;
 const VALUE_WIDTH: f32 = 36.0;
-const SWITCH_SIZE: egui::Vec2 = egui::Vec2::new(30.0, 18.0);
-const ROW_HEIGHT: f32 = 22.0;
+/// A row holding only a text link ("Reset brightness & contrast"): shorter than a control row.
+const LINK_ROW: f32 = 24.0;
+/// The section header row (small caps label and "Set as default").
+const SECTION_HEADER: f32 = 16.0;
 const SLIDER_RAIL_HEIGHT: f32 = 3.0;
+const SLIDER_KNOB_RING: f32 = 1.5;
+/// The mode description keeps room for this many lines, so the rows under it stay put when the
+/// mode (and its description's length) changes.
+const DESCRIPTION_LINES: f32 = 2.0;
+/// Text sizes: row labels, the line under a switch label, descriptions and links.
+const LABEL_TEXT: f32 = 12.5;
+const SUB_TEXT: f32 = 11.5;
+const BODY_TEXT: f32 = 12.0;
+/// Space between a switch label and the line under it.
+const SUB_GAP: f32 = 2.0;
 
 /// The trim editor's page previews.
 const TRIM_PREVIEW_WIDTH: f32 = 96.0;
@@ -193,27 +208,33 @@ const MIN_TRIM_DRAG: f32 = 0.1;
 /// How dark the trimmed-off part of a preview is drawn.
 const TRIMMED_SHADE: u8 = 150;
 
+/// The popover's frame: the theme's popup, padded by the section step on every side.
+pub fn popover_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::popup(style).inner_margin(GAP_SECTION)
+}
+
 /// The Display popover's body for the active document, laid out like the mockup: page colour
 /// swatches, keep figure hues (Ink and Mono), brightness and contrast (double-click a slider to
 /// reset it) and their reset; then layout, cover page, fit and trim; then follow system. "Set
 /// as default" copies the page colour or layout into `settings.jsonc`. The caller owns the popup
-/// frame and its placement.
+/// ([`popover_frame`]) and its placement. Every gap is a step of `look`'s spacing scale: the
+/// frame and both sides of a divider get the section step, a header is followed by the small
+/// step, controls sit in rows of [`CONTROL_ROW`].
 pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(POPOVER_WIDTH);
-    ui.spacing_mut().item_spacing.y = 6.0;
+    ui.spacing_mut().item_spacing.y = 0.0;
     let Some(index) = app.active.filter(|i| *i < app.views.len()) else {
-        ui.label(egui::RichText::new(i18n::t("Open a document to change how it shows.")).font(theme::regular(12.5)).color(t.text_muted));
+        ui.label(egui::RichText::new(i18n::t("Open a document to change how it shows.")).font(theme::regular(LABEL_TEXT)).color(t.text_muted));
         return;
     };
     let mut default_row = None;
-    if section_with_default(ui, &t, "Page color") {
+    if section_header(ui, &t, "Page color") {
         default_row = Some(DefaultRow::PageColor);
     }
     page_color_rows(&mut app.views[index].margin.display, ui, &t);
-    ui.add_space(6.0);
-    ui.separator();
-    if section_with_default(ui, &t, "Layout") {
+    section_divider(ui, &t);
+    if section_header(ui, &t, "Layout") {
         default_row = Some(DefaultRow::Layout);
     }
     let reading_width = app.margin_keys.settings().view.reading_width_px;
@@ -222,8 +243,7 @@ pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     let pages = app.session.get(app.views[index].id).map(|doc| doc.info.pages.iter().map(|p| (p.width, p.height)).collect::<Vec<_>>());
     trim_rows(&mut app.views[index], &pages.unwrap_or_default(), ui, &t);
-    ui.add_space(6.0);
-    ui.separator();
+    section_divider(ui, &t);
     let state = &mut app.views[index].margin.display;
     let follow_sub = if state.follow_system {
         i18n::t("Night when the system is dark, Paper when light")
@@ -239,52 +259,69 @@ pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// A section title with "Set as default" on the right. True when that was clicked.
-fn section_with_default(ui: &mut egui::Ui, t: &Tokens, title: &str) -> bool {
-    ui.horizontal(|ui| {
-        crate::widgets::section_title(ui, title);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
-            let label = egui::RichText::new(i18n::t("Set as default")).font(theme::regular(12.0)).color(t.accent_text);
-            ui.add(egui::Button::new(label).frame(false))
-                .on_hover_text(i18n::t("Use this for documents opened for the first time (settings.jsonc)"))
-                .clicked()
+/// A section header (small caps title, "Set as default" on the right) and the small step under
+/// it. True when "Set as default" was clicked.
+fn section_header(ui: &mut egui::Ui, t: &Tokens, title: &str) -> bool {
+    let clicked = ui
+        .allocate_ui_with_layout(vec2(POPOVER_WIDTH, SECTION_HEADER), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(look::section_caps(t, i18n::t(title), None));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = egui::RichText::new(i18n::t("Set as default")).font(theme::regular(BODY_TEXT)).color(t.accent_text);
+                ui.add(egui::Label::new(label).sense(Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(i18n::t("Use this for documents opened for the first time (settings.jsonc)"))
+                    .clicked()
+            })
+            .inner
         })
-        .inner
-    })
-    .inner
+        .inner;
+    ui.add_space(GAP);
+    clicked
 }
 
-/// Swatches, keep figure hues, brightness, contrast and their reset.
+/// The line between sections, across the whole popover (into the frame's padding), with the
+/// section step on both sides.
+fn section_divider(ui: &mut egui::Ui, t: &Tokens) {
+    ui.add_space(GAP_SECTION);
+    let (rect, _) = ui.allocate_exact_size(vec2(POPOVER_WIDTH, 1.0), Sense::hover());
+    ui.painter().hline((rect.left() - GAP_SECTION)..=(rect.right() + GAP_SECTION), rect.center().y, Stroke::new(1.0, t.divider));
+    ui.add_space(GAP_SECTION);
+}
+
+/// Swatches, the mode's description, keep figure hues, brightness, contrast and their reset.
 fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
     let shown = state.effective(ui.ctx().system_theme());
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = SWATCH_GAP;
-        let w = (POPOVER_WIDTH - SWATCH_GAP * 4.0) / 5.0;
+        ui.spacing_mut().item_spacing.x = GAP;
+        let w = (POPOVER_WIDTH - GAP * 4.0) / 5.0;
         for mode in PageMode::ALL {
             if swatch(ui, t, mode, mode == shown.mode, w).clicked() {
                 state.pick(mode);
             }
         }
     });
-    ui.add_space(4.0);
-    ui.add(egui::Label::new(egui::RichText::new(i18n::t(shown.mode.description())).font(theme::regular(12.0)).color(t.text_muted)).wrap());
+    ui.add_space(GAP_LARGE);
+    let font = theme::regular(BODY_TEXT);
+    let description_height = DESCRIPTION_LINES * ui.fonts_mut(|f| f.row_height(&font));
+    ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, description_height), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_min_height(description_height);
+        ui.add(egui::Label::new(egui::RichText::new(i18n::t(shown.mode.description())).font(font).color(t.text_muted)).wrap());
+    });
+    ui.add_space(GAP);
     if shown.mode.offers_keep_hues() {
         let sub = i18n::t("Ink and Mono only: figures get Night colors, not two-tone");
         if switch_row(ui, t, i18n::t("Keep figure hues"), Some(sub), state.color.keep_hues) {
             state.color.keep_hues = !state.color.keep_hues;
         }
     }
-    ui.add_space(4.0);
     slider_row(ui, t, i18n::t("Brightness"), &mut state.color.brightness, BRIGHTNESS_RANGE, |v| v.to_string());
     let mono = shown.mode == PageMode::Mono;
     let (label, low, high) = (if mono { i18n::t("Cut-off") } else { i18n::t("Contrast") }, *CONTRAST_RANGE.start(), *CONTRAST_RANGE.end());
     let show = move |v: u16| if mono { format!("{}%", u32::from(v.saturating_sub(low)) * 100 / u32::from(high - low)) } else { v.to_string() };
     slider_row(ui, t, label, &mut state.color.contrast, CONTRAST_RANGE, show);
-    let reset_row = vec2(POPOVER_WIDTH, ROW_HEIGHT);
-    ui.allocate_ui_with_layout(reset_row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let reset = egui::Button::new(egui::RichText::new(i18n::t("Reset brightness & contrast")).font(theme::regular(12.0)).color(t.accent_text))
-            .frame(false);
-        if ui.add(reset).clicked() {
+    ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, LINK_ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let reset = egui::RichText::new(i18n::t("Reset brightness & contrast")).font(theme::regular(BODY_TEXT)).color(t.accent_text);
+        if ui.add(egui::Label::new(reset).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             state.color.brightness = NEUTRAL_PERCENT;
             state.color.contrast = NEUTRAL_PERCENT;
         }
@@ -292,16 +329,11 @@ fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// Page display (Scroll, Single, Two-up, through PdfCraft's commands, which it returns), the
-/// cover page in Two-up, and fit (Read, Page, Width).
+/// cover page in Two-up, and fit (Width, Page, Read).
 fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &Tokens) -> Option<&'static str> {
-    let mut command = None;
-    choice_row(ui, t, i18n::t("Pages"), |ui| {
-        for (choice, name) in [(PageLayout::TwoUp, "Two-up"), (PageLayout::Single, "Single"), (PageLayout::Continuous, "Scroll")] {
-            if ui.selectable_label(view.layout == choice, i18n::t(name)).clicked() {
-                command = Some(choice.command());
-            }
-        }
-    });
+    let layouts = [(PageLayout::Continuous, "Scroll"), (PageLayout::Single, "Single"), (PageLayout::TwoUp, "Two-up")];
+    let segments = layouts.map(|(choice, name)| Segment { label: i18n::t(name), selected: view.layout == choice, tip: None });
+    let command = choice_row(ui, t, i18n::t("Pages"), &segments).and_then(|i| layouts.get(i)).map(|(choice, _)| choice.command());
     if view.cover_applies() {
         let sub = i18n::t("The first page sits alone on the right, like a book's cover");
         if switch_row(ui, t, i18n::t("Cover page alone"), Some(sub), view.cover) {
@@ -309,32 +341,29 @@ fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &To
         }
     }
     let reading = reading::reads(view);
-    choice_row(ui, t, i18n::t("Fit"), |ui| {
-        if ui.selectable_label(!reading && view.fit == Fit::Width, i18n::t("Width")).clicked() {
-            view.set_fit(Fit::Width);
-        }
-        if ui.selectable_label(!reading && view.fit == Fit::Page, i18n::t("Page")).clicked() {
-            view.set_fit(Fit::Page);
-        }
-        if ui.selectable_label(reading, i18n::t("Read")).on_hover_text(i18n::t("A comfortable reading width (view.reading_width_px)")).clicked() {
-            reading::fit_read(view, reading_width);
-        }
-    });
+    let segments = [
+        Segment { label: i18n::t("Width"), selected: !reading && view.fit == Fit::Width, tip: None },
+        Segment { label: i18n::t("Page"), selected: !reading && view.fit == Fit::Page, tip: None },
+        Segment { label: i18n::t("Read"), selected: reading, tip: Some(i18n::t("A comfortable reading width (view.reading_width_px)")) },
+    ];
+    match choice_row(ui, t, i18n::t("Fit"), &segments) {
+        Some(0) => view.set_fit(Fit::Width),
+        Some(1) => view.set_fit(Fit::Page),
+        Some(_) => reading::fit_read(view, reading_width),
+        None => {}
+    }
     command
 }
 
 /// Trim (Off, Auto, Manual) and, for Manual, the page previews to drag the kept part on.
 fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &Tokens) {
     let (on, manual) = (view.margin.trim.on, view.margin.trim.manual);
-    let mut pick = None;
-    choice_row(ui, t, i18n::t("Trim"), |ui| {
-        for (choice, name) in [((true, true), "Manual"), ((true, false), "Auto"), ((false, manual), "Off")] {
-            let selected = if choice.0 { on && manual == choice.1 } else { !on };
-            if ui.selectable_label(selected, i18n::t(name)).clicked() {
-                pick = Some(choice);
-            }
-        }
+    let choices = [((false, manual), "Off"), ((true, false), "Auto"), ((true, true), "Manual")];
+    let segments = choices.map(|(choice, name)| {
+        let selected = if choice.0 { on && manual == choice.1 } else { !on };
+        Segment { label: i18n::t(name), selected, tip: None }
     });
+    let pick = choice_row(ui, t, i18n::t("Trim"), &segments).and_then(|i| choices.get(i)).map(|(choice, _)| *choice);
     if let Some((on, manual)) = pick {
         // Manual starts from what auto trim found on this page.
         if manual && !view.margin.trim.manual && view.margin.trim.odd == Margins::default() {
@@ -360,15 +389,19 @@ fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &To
         vec![(current, "All pages")]
     };
     let mut changed = false;
+    ui.add_space(GAP);
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP_LARGE;
         for (page, label) in shown {
             ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = GAP / 2.0;
                 changed |= trim_preview(view, page, pages.get(page.min(pages.len().saturating_sub(1))).copied(), label, ui, t);
-                ui.label(egui::RichText::new(i18n::t(label)).font(theme::regular(11.0)).color(t.text_faint));
+                ui.label(egui::RichText::new(i18n::t(label)).font(theme::regular(SUB_TEXT)).color(t.text_faint));
             });
         }
     });
-    ui.label(egui::RichText::new(i18n::t("Drag across a page to keep that part")).font(theme::regular(11.5)).color(t.text_faint));
+    ui.add_space(GAP);
+    ui.label(egui::RichText::new(i18n::t("Drag across a page to keep that part")).font(theme::regular(SUB_TEXT)).color(t.text_faint));
     let sub = i18n::t("For scanned books, whose margins swap sides");
     if switch_row(ui, t, i18n::t("Odd and even pages separately"), Some(sub), separate) {
         let trim = &mut view.margin.trim;
@@ -435,23 +468,28 @@ fn trim_preview(view: &mut DocView, page: usize, size: Option<(f32, f32)>, label
     changed
 }
 
-/// A label on the left and choices packed against the right edge (right to left, so list them
-/// last first).
-fn choice_row(ui: &mut egui::Ui, t: &Tokens, label: &str, choices: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).font(theme::regular(12.5)).color(t.text_muted));
-        // The mockup's segmented control: the chosen item is a raised chip, not the selection colour.
-        ui.visuals_mut().selection.bg_fill = t.pressed;
-        ui.visuals_mut().selection.stroke = Stroke::new(1.0, t.text);
-        let rest = vec2(ui.available_width(), ROW_HEIGHT);
-        ui.allocate_ui_with_layout(rest, egui::Layout::right_to_left(egui::Align::Center), choices);
+/// A row label in the label column shared by slider and choice rows.
+fn row_label(ui: &mut egui::Ui, t: &Tokens, label: &str) {
+    ui.allocate_ui_with_layout(vec2(LABEL_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(LABEL_WIDTH);
+        ui.label(egui::RichText::new(label).font(theme::regular(LABEL_TEXT)).color(t.text_muted));
     });
+}
+
+/// A control row: the label column, then a segmented control against the right edge. Returns
+/// the clicked segment.
+fn choice_row(ui: &mut egui::Ui, t: &Tokens, label: &str, segments: &[Segment<'_>]) -> Option<usize> {
+    ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        row_label(ui, t, label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| look::segmented(ui, segments)).inner
+    })
+    .inner
 }
 
 /// A page colour swatch: a small page in the mode's paper with lines of its ink, and the name.
 fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: f32) -> egui::Response {
     let name = i18n::t(mode.name());
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, SWATCH_HEIGHT + 34.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, SWATCH_HEIGHT + SWATCH_NAME_HEIGHT), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name));
     let painter = ui.painter();
     if selected {
@@ -481,42 +519,45 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: 
     resp
 }
 
-/// A label (with an optional line under it) and a switch on the right. True when clicked.
+/// A label (with an optional line under it) and a switch on the right: a [`CONTROL_ROW`] at
+/// least, the text padded by half the small step. True when clicked.
 fn switch_row(ui: &mut egui::Ui, t: &Tokens, label: &str, sub: Option<&str>, on: bool) -> bool {
-    let mut clicked = false;
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(CONTROL_ROW);
         ui.vertical(|ui| {
-            ui.set_width(POPOVER_WIDTH - SWITCH_SIZE.x - 12.0);
-            ui.label(egui::RichText::new(label).font(theme::regular(12.5)).color(t.text_muted));
+            ui.set_width(POPOVER_WIDTH - look::SWITCH_SIZE.x - GAP_LARGE);
+            ui.spacing_mut().item_spacing.y = SUB_GAP;
+            ui.add_space(GAP / 2.0);
+            ui.label(egui::RichText::new(label).font(theme::regular(LABEL_TEXT)).color(t.text_muted));
             if let Some(sub) = sub {
-                ui.add(egui::Label::new(egui::RichText::new(sub).font(theme::regular(11.5)).color(t.text_faint)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(sub).font(theme::regular(SUB_TEXT)).color(t.text_faint)).wrap());
             }
+            ui.add_space(GAP / 2.0);
         });
-        let (rect, resp) = ui.allocate_exact_size(SWITCH_SIZE, Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
-        let radius = rect.height() / 2.0;
-        ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), if on { t.accent } else { t.divider });
-        let knob_x = if on { rect.right() - radius } else { rect.left() + radius };
-        ui.painter().circle_filled(pos2(knob_x, rect.center().y), radius - 2.0, if on { Color32::WHITE } else { t.text_muted });
-        clicked = resp.clicked();
-    });
-    clicked
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| look::switch(ui, on, label).clicked()).inner
+    })
+    .inner
 }
 
-/// Label, slider and value; double-clicking the slider resets it to 100 %.
+/// A control row: the label column, the slider, the value right-aligned in its column;
+/// double-clicking the slider resets it to 100 %.
 fn slider_row(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut u16, range: std::ops::RangeInclusive<u16>, show: impl Fn(u16) -> String) {
-    ui.horizontal(|ui| {
-        ui.allocate_ui_with_layout(vec2(LABEL_WIDTH, ROW_HEIGHT), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_min_width(LABEL_WIDTH);
-            ui.label(egui::RichText::new(label).font(theme::regular(12.5)).color(t.text_muted));
-        });
-        ui.spacing_mut().slider_width = POPOVER_WIDTH - LABEL_WIDTH - VALUE_WIDTH - 2.0 * ui.spacing().item_spacing.x;
+    ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = GAP_LARGE;
+        row_label(ui, t, label);
+        ui.spacing_mut().slider_width = POPOVER_WIDTH - LABEL_WIDTH - VALUE_WIDTH - 2.0 * GAP_LARGE;
         ui.spacing_mut().slider_rail_height = SLIDER_RAIL_HEIGHT;
-        // The mockup's range input: a thin rail in the divider colour, a light knob.
+        // The mockup's range input: a thin rail in the divider colour, a round knob. egui fills
+        // the idle knob with the rail's colour, so the idle knob is a light ring; hovered and
+        // dragged it fills.
+        ui.visuals_mut().handle_shape = egui::style::HandleShape::Circle;
         let widgets = &mut ui.visuals_mut().widgets;
         widgets.inactive.bg_fill = t.divider;
-        widgets.hovered.bg_fill = t.text;
-        widgets.active.bg_fill = t.text;
+        widgets.inactive.fg_stroke = Stroke::new(SLIDER_KNOB_RING, t.text_muted);
+        for state in [&mut widgets.hovered, &mut widgets.active] {
+            state.bg_fill = t.text;
+            state.fg_stroke = Stroke::NONE;
+        }
         // A slider senses drags, not clicks, so its response never reports a double-click.
         let resp = ui.add(egui::Slider::new(value, range).show_value(false)).on_hover_text(i18n::t("Double-click to reset"));
         let on_slider = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| resp.rect.contains(p));
@@ -527,9 +568,9 @@ fn slider_row(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut u16, range
         if on_slider && repeated {
             *value = NEUTRAL_PERCENT;
         }
-        ui.allocate_ui_with_layout(vec2(VALUE_WIDTH, ROW_HEIGHT), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(vec2(VALUE_WIDTH, CONTROL_ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.set_min_width(VALUE_WIDTH);
-            ui.label(egui::RichText::new(show(*value)).font(theme::regular(11.0)).color(t.text_faint));
+            ui.label(egui::RichText::new(show(*value)).font(theme::regular(SUB_TEXT)).color(t.text_faint));
         });
     });
 }

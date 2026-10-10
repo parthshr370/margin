@@ -5,13 +5,15 @@
 //! ```
 //! `--width N` downscales the image to N pixels wide (README screenshots). `--flavor margin`
 //! shows Margin's reader layout (dark theme, like `apps/margin`); `--margin-run ID` then runs a
-//! Margin id (`app.stats`, `library.open`…) before the shot. Any other
-//! `--key value` pair is passed to `PdfCraftApp::set_option`
-//! (the same verbs as the desktop app's command-line flags and the future control channel).
+//! Margin id (`app.stats`, `library.open`…) before the shot; `--click LABEL` and `--hover LABEL`
+//! (in the order given, after the runs) click or point at the widget with that accessible label.
+//! Any other `--key value` pair is passed to `PdfCraftApp::set_option` (the same verbs as the
+//! desktop app's command-line flags and the future control channel).
 
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
 fn main() -> Result<(), String> {
@@ -22,6 +24,7 @@ fn main() -> Result<(), String> {
     let mut width: Option<u32> = None;
     let mut flavor = Flavor::PdfCraft;
     let mut margin_runs = Vec::new();
+    let mut pointer = Vec::new();
     while let Some(a) = args.next() {
         match a.strip_prefix("--") {
             Some("size") => {
@@ -39,6 +42,7 @@ fn main() -> Result<(), String> {
                 }
             }
             Some("margin-run") => margin_runs.push(args.next().ok_or("--margin-run ID")?),
+            Some(verb @ ("click" | "hover")) => pointer.push((verb == "click", args.next().ok_or("--click/--hover LABEL")?)),
             Some(k) => opts.push((k.to_string(), args.next().unwrap_or_default())),
             None => file = Some(a),
         }
@@ -78,6 +82,15 @@ fn main() -> Result<(), String> {
     for id in &margin_runs {
         if !pdfcraft_ui_egui::margin::run(harness.state_mut(), id, &serde_json::Value::Null) {
             eprintln!("shot: --margin-run {id}: not a Margin id");
+        }
+        harness.run_steps(6);
+    }
+    for (click, label) in &pointer {
+        let Some(node) = harness.query_by_label(label) else { return Err(format!("--click/--hover {label}: no such widget")) };
+        if *click {
+            node.click();
+        } else {
+            node.hover();
         }
         harness.run_steps(6);
     }

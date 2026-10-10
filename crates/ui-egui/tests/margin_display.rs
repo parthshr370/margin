@@ -99,7 +99,7 @@ fn popover_harness(name: &str) -> Harness<'static, (PdfCraftApp, bool)> {
                 *styled = true;
                 return;
             }
-            egui::Frame::popup(ui.style()).show(ui, |ui| display::popover_contents(app, ui));
+            display::popover_frame(ui.style()).show(ui, |ui| display::popover_contents(app, ui));
         },
         (app, false),
     );

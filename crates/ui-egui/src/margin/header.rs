@@ -93,7 +93,7 @@ fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.execute("view.full_screen");
     }
     let display = look::icon_button(ui, "contrast", BUTTON, false, "Page colour and layout", None);
-    egui::Popup::menu(&display).show(|ui| display_popover(app, ui));
+    egui::Popup::menu(&display).frame(crate::margin::display::popover_frame(ui.style())).show(|ui| display_popover(app, ui));
     let rail = app.margin_chrome.rail_open;
     let keys = look::shortcut(app, "reader.annotate.toggle");
     if look::icon_button(ui, "pen-tool", BUTTON, rail, "Annotate", keys.as_deref()).clicked() {

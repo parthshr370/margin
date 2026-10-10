@@ -14,10 +14,14 @@ use crate::margin::keysheet;
 use crate::theme::{self, Tokens};
 use crate::{Flavor, PdfCraftApp, icons};
 
-/// Spacing rhythm: the small step (between related things) and the large one (between groups,
-/// and the sidebar's edge padding).
+/// Spacing scale, used for every gap: the small step (between related things), the large one
+/// (between groups, and the sidebar's edge padding) and the section step (a popover's edge and
+/// the space either side of a section divider).
 pub const GAP: f32 = 8.0;
 pub const GAP_LARGE: f32 = 12.0;
+pub const GAP_SECTION: f32 = 16.0;
+/// Height of one control row (a label and its slider, switch or segmented choice).
+pub const CONTROL_ROW: f32 = 32.0;
 /// Space between a list row's edge and its text; section labels line up with it.
 pub const ROW_PAD: f32 = 8.0;
 /// A section label's size and letter spacing (small caps: uppercase, tracked out).
@@ -25,6 +29,15 @@ const LABEL_SIZE: f32 = 11.0;
 const LABEL_TRACKING: f32 = 0.9;
 /// An icon's size within its button.
 const ICON_SHARE: f32 = 0.5;
+/// The switch (mockup `.sw-t`: 30×18, knob inset 2).
+pub(crate) const SWITCH_SIZE: Vec2 = Vec2::new(30.0, 18.0);
+const SWITCH_KNOB_INSET: f32 = 2.0;
+/// The segmented control (mockup `.seg`): its height inside a [`CONTROL_ROW`], the well's inset
+/// around and between the chips, a chip's side padding and its text size.
+const SEGMENT_HEIGHT: f32 = 28.0;
+const SEGMENT_INSET: f32 = 2.0;
+const SEGMENT_PAD_X: f32 = 10.0;
+const SEGMENT_TEXT: f32 = 12.0;
 
 /// How a list marks the row under the pointer and its selected row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -61,6 +74,11 @@ pub(crate) fn row_text(t: &Tokens, selected: bool, normal: Color32) -> Color32 {
 /// it in a horizontal layout.
 pub(crate) fn section_label(ui: &mut egui::Ui, t: &Tokens, title: &str, count: Option<usize>) -> Response {
     ui.add_space(ROW_PAD);
+    ui.label(section_caps(t, title, count))
+}
+
+/// The text of a [`section_label`], for places that set their own inset (popover headers).
+pub(crate) fn section_caps(t: &Tokens, title: &str, count: Option<usize>) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     let format =
         egui::TextFormat { font_id: theme::semibold(LABEL_SIZE), color: t.text_muted, extra_letter_spacing: LABEL_TRACKING, ..Default::default() };
@@ -68,7 +86,7 @@ pub(crate) fn section_label(ui: &mut egui::Ui, t: &Tokens, title: &str, count: O
     if let Some(n) = count {
         job.append(&n.to_string(), GAP, egui::TextFormat { font_id: theme::regular(LABEL_SIZE), ..format });
     }
-    ui.label(job)
+    job
 }
 
 /// The keys that run `command` (with no arguments) in Margin, as the keyboard sheet writes them.
@@ -169,4 +187,66 @@ pub(crate) fn icon_tint(t: &Tokens, on: bool, hovered: bool) -> Color32 {
     } else {
         t.icon
     }
+}
+
+/// An on/off switch, the mockup's `.sw-t`: an accent track with a white knob on the right when
+/// on, a divider-coloured track with a muted knob on the left when off. Screen readers and tests
+/// see a checkbox named `label`.
+pub(crate) fn switch(ui: &mut egui::Ui, on: bool, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(SWITCH_SIZE, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
+    let radius = rect.height() / 2.0;
+    let track = if on { t.accent } else { t.divider };
+    ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), track);
+    let knob_x = if on { rect.right() - radius } else { rect.left() + radius };
+    ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), radius - SWITCH_KNOB_INSET, if on { Color32::WHITE } else { t.text_muted });
+    resp
+}
+
+/// One choice of a [`segmented`] control.
+pub(crate) struct Segment<'a> {
+    pub label: &'a str,
+    pub selected: bool,
+    pub tip: Option<&'a str>,
+}
+
+/// The mockup's segmented control (`.seg`): choices in a hairline-bordered well, the chosen one a
+/// raised chip in full text, the others muted. Lays out left to right; returns the clicked index.
+pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::regular(SEGMENT_TEXT);
+    // Laid out in the placeholder colour, so each chip paints it in its own state's colour.
+    let galleys: Vec<_> = segments.iter().map(|s| ui.painter().layout_no_wrap(s.label.to_owned(), font.clone(), Color32::PLACEHOLDER)).collect();
+    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * SEGMENT_PAD_X).collect();
+    let inner_w: f32 = widths.iter().sum::<f32>() + SEGMENT_INSET * (segments.len().saturating_sub(1)) as f32;
+    let size = vec2(inner_w + 2.0 * SEGMENT_INSET, SEGMENT_HEIGHT);
+    let (well, _) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter().rect(well, CornerRadius::same(t.radius), t.field, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let mut clicked = None;
+    let mut x = well.left() + SEGMENT_INSET;
+    for (i, ((segment, galley), width)) in segments.iter().zip(galleys).zip(widths).enumerate() {
+        let rect = Rect::from_min_size(egui::pos2(x, well.top() + SEGMENT_INSET), vec2(width, SEGMENT_HEIGHT - 2.0 * SEGMENT_INSET));
+        x += width + SEGMENT_INSET;
+        let resp = ui.interact(rect, ui.id().with(("segment", segment.label)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), segment.selected, segment.label));
+        let fill = if segment.selected {
+            t.selected
+        } else if resp.hovered() {
+            t.hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(t.radius.saturating_sub(1)), fill);
+        let color = if segment.selected || resp.hovered() { t.text } else { t.text_muted };
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+        let resp = match segment.tip {
+            Some(tip) => resp.on_hover_text(tip),
+            None => resp,
+        };
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
 }
