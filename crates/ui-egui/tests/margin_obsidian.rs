@@ -176,21 +176,32 @@ fn open_in_obsidian_writes_the_highlight_and_opens_the_note() {
     assert!(std::fs::read_to_string(vault.note()).unwrap().contains(CALLOUT));
 }
 
+/// A highlight goes to the note as soon as it is made; one whose note is opened with it (the
+/// selection bar's Comment) waits until the note is saved, and its callout carries the note.
 #[test]
 fn autoadd_writes_each_new_highlight_with_its_note() {
     let vault = Vault::new("autoadd");
     let mut h = harness(&vault.dir());
     h.state_mut().set_option("notes.autoadd", "on").unwrap();
     highlight(&mut h, 4, 14);
-    // The new highlight's note is open for typing: nothing is written until it is saved.
-    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, String::new())));
-    assert!(!vault.note().exists());
+    assert_eq!(h.state().views[0].comments.editing, None, "Margin opens no note editor on a new highlight");
+    assert!(std::fs::read_to_string(vault.note()).unwrap().contains(CALLOUT));
+    assert_eq!(toast(&h), "Added to reading/text.md");
+    // "fox", selected with the pointer, then Comment: marked, its note open for typing.
+    h.state_mut().set_option("quick", "select").unwrap();
+    settle(&mut h);
+    highlight(&mut h, 16, 18);
+    h.get_by_label("Comment").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, String::new())));
+    let fox = "> [!PDF|yellow] [[papers/text.pdf#page=1|text, p.1]]\n> > fox\n";
+    assert!(!std::fs::read_to_string(vault.note()).unwrap().contains(fox), "nothing is written while its note is typed");
     let view = &mut h.state_mut().views[0];
     view.comments.editing = None;
-    view.pending_edit = Some(pdfcraft_engine::Edit::SetAnnotationContents { page: 0, index: 0, text: "speed matters".into() });
+    view.pending_edit = Some(pdfcraft_engine::Edit::SetAnnotationContents { page: 0, index: 1, text: "speed matters".into() });
     h.run_steps(3);
     let note = std::fs::read_to_string(vault.note()).unwrap();
-    assert!(note.contains(&format!("{CALLOUT}>\n> speed matters\n")), "{note}");
+    assert!(note.contains(&format!("{fox}>\n> speed matters\n")), "{note}");
     assert_eq!(toast(&h), "Added to reading/text.md");
     // The flag lives in the document's sidecar, not in the app's saved state.
     assert!(!h.state().persist().contains("\"autoadd\""));

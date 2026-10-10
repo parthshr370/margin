@@ -170,7 +170,7 @@ impl PageColorCache {
             self.figures.for_tile(page)
         } else {
             self.figures.sync_generation(doc.edit_generation());
-            self.figures.learn_images(page, info, || doc.page_images(page).into_iter().map(|image| image.rect).collect());
+            self.figures.learn_page(page, &doc.info, || doc.page_images(page).into_iter().map(|image| image.rect).collect());
             stale_tiles = self.figures.decide(page, &rgba, size[0], size[1]);
             self.figures.decided(page)
         };

@@ -90,6 +90,15 @@ impl RailItem {
     }
 }
 
+/// Whether Margin's Highlight tool draws an area box on a page with this text layer: only on a
+/// page known to have no text (a scan). On a text page a drag highlights the text it covers
+/// wherever it starts, between lines, in a word gap or in the margin, as the Select tool's drag
+/// selects it; PdfCraft's box off a glyph (Acrobat's area highlight) read as a broken highlight.
+/// While the page's text is still loading, nothing is boxed.
+pub(crate) fn highlight_boxes(text: Option<&pdfcraft_render::PageText>) -> bool {
+    text.is_some_and(|text| text.glyphs.is_empty())
+}
+
 /// Draw the rail over the page area `area` (the canvas calls this instead of its quick bar). It
 /// fades and slides in from the edge over [`motion::SLIDE`], and takes clicks only while open.
 pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {

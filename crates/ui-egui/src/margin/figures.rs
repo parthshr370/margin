@@ -12,14 +12,16 @@
 //! - The raster heuristic ([`pagecolor::detect_figures`]), only where those boxes can't answer:
 //!   the page reports no images (inline images, images inside form XObjects and documents the
 //!   engine can't inspect all report none) or one image covers most of it (a scanned page). It
-//!   finds colourful or many-toned blocks, so it can also take a coloured vector chart.
+//!   finds colourful or many-toned blocks, so it can also take a coloured vector chart. It looks
+//!   past the page's text marks (highlights, underlines…): a highlight is colourful too, and
+//!   took its paragraph for a figure, a paper-white block round it in Night.
 //!
 //! Vector drawings on a page that reports images are never figures: Night flips them with their
 //! hue kept, Ink and Mono draw them two-tone. Finding them is an engine gap, not guessed here.
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_render::{PageInfo, Tile};
+use pdfcraft_render::{DocInfo, PageInfo, Tile};
 
 use super::pagecolor;
 
@@ -52,6 +54,8 @@ pub(crate) struct Figures {
     generation: Option<u64>,
     /// The images each page draws, as shares.
     images: HashMap<usize, Vec<Share>>,
+    /// The text marks each page carries, as shares: the raster heuristic looks past them.
+    marks: HashMap<usize, Vec<Share>>,
     /// Each decided page's figures, as shares.
     decided: HashMap<usize, Vec<Share>>,
     /// Pages that got tiles before their figures were decided: those tiles are out of date once
@@ -65,14 +69,16 @@ impl Figures {
         if self.generation != Some(generation) {
             self.generation = Some(generation);
             self.images.clear();
+            self.marks.clear();
             self.decided.clear();
         }
     }
 
-    /// Look up the images `page` draws, once.
-    pub(crate) fn learn_images(&mut self, page: usize, info: Option<&PageInfo>, images: impl FnOnce() -> Vec<[f64; 4]>) {
-        let Some(info) = info else { return };
-        self.images.entry(page).or_insert_with(|| images().into_iter().filter_map(|rect| image_share(info, rect)).collect());
+    /// Look up the images `page` draws and the text marks it carries, once.
+    pub(crate) fn learn_page(&mut self, page: usize, info: &DocInfo, images: impl FnOnce() -> Vec<[f64; 4]>) {
+        let Some(page_info) = info.pages.get(page) else { return };
+        self.images.entry(page).or_insert_with(|| images().into_iter().filter_map(|rect| user_share(page_info, rect)).collect());
+        self.marks.entry(page).or_insert_with(|| mark_rects(info, page).into_iter().filter_map(|rect| user_share(page_info, rect)).collect());
     }
 
     pub(crate) fn knows_images(&self, page: usize) -> bool {
@@ -86,7 +92,8 @@ impl Figures {
             return false;
         }
         let images = self.images.get(&page).map_or(&[][..], Vec::as_slice);
-        self.decided.insert(page, decide(images, rgba, width, height));
+        let marks = self.marks.get(&page).map_or(&[][..], Vec::as_slice);
+        self.decided.insert(page, decide(images, marks, rgba, width, height));
         self.early_tiles.remove(&page)
     }
 
@@ -108,9 +115,9 @@ impl Figures {
     }
 }
 
-/// The page box of a user-space image rectangle, as shares; `None` when it is off the page or
+/// The page box of a user-space rectangle, as shares; `None` when it is off the page or
 /// degenerate.
-fn image_share(info: &PageInfo, rect: [f64; 4]) -> Option<Share> {
+fn user_share(info: &PageInfo, rect: [f64; 4]) -> Option<Share> {
     let [x0, y0, x1, y1] = rect.map(|v| v as f32);
     if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) || info.width <= 0.0 || info.height <= 0.0 {
         return None;
@@ -121,13 +128,34 @@ fn image_share(info: &PageInfo, rect: [f64; 4]) -> Option<Share> {
     (share[2] > share[0] && share[3] > share[1]).then_some(share)
 }
 
+/// The boxes (user space) of `page`'s text marks: each quadrilateral's, or the mark's
+/// rectangle when it has none.
+fn mark_rects(info: &DocInfo, page: usize) -> Vec<[f64; 4]> {
+    let mut rects = Vec::new();
+    for a in info.annotations.iter().filter(|a| a.page == page && super::obsidian::is_markup(a)) {
+        if a.quads.is_empty() {
+            rects.push(a.rect.map(f64::from));
+        }
+        rects.extend(a.quads.iter().map(|quad| quad_box(*quad)));
+    }
+    rects
+}
+
+/// The box round a `/QuadPoints` quadrilateral (four x, y corners).
+fn quad_box(quad: [f32; 8]) -> [f64; 4] {
+    let (xs, ys) = ([quad[0], quad[2], quad[4], quad[6]], [quad[1], quad[3], quad[5], quad[7]]);
+    let low = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
+    let high = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
+    [low(xs), low(ys), high(xs), high(ys)].map(f64::from)
+}
+
 fn area(share: Share) -> f32 {
     (share[2] - share[0]) * (share[3] - share[1])
 }
 
-/// The figures of a page whose whole-page raster is `rgba` (`width`×`height`) and which draws
-/// `images` (shares).
-pub(crate) fn decide(images: &[Share], rgba: &[u8], width: usize, height: usize) -> Vec<Share> {
+/// The figures of a page whose whole-page raster is `rgba` (`width`×`height`), which draws
+/// `images` and carries the text marks `marks` (shares).
+pub(crate) fn decide(images: &[Share], marks: &[Share], rgba: &[u8], width: usize, height: usize) -> Vec<Share> {
     let frame = Frame::whole(width, height);
     let mut figures: Vec<Share> = images
         .iter()
@@ -141,9 +169,28 @@ pub(crate) fn decide(images: &[Share], rgba: &[u8], width: usize, height: usize)
         .collect();
     let scanned = images.iter().any(|image| area(*image) >= SCAN_MIN_AREA);
     if images.is_empty() || scanned {
-        figures.extend(pagecolor::detect_figures(rgba, width, height).into_iter().map(|rect| frame.share(rect)));
+        let unmarked = without_marks(rgba, width, &frame, marks);
+        let pixels = unmarked.as_deref().unwrap_or(rgba);
+        figures.extend(pagecolor::detect_figures(pixels, width, height).into_iter().map(|rect| frame.share(rect)));
     }
     figures
+}
+
+/// `rgba` with the text marks painted paper white, for the raster heuristic; `None` (no copy)
+/// when the page has none.
+fn without_marks(rgba: &[u8], width: usize, frame: &Frame, marks: &[Share]) -> Option<Vec<u8>> {
+    if marks.is_empty() {
+        return None;
+    }
+    let mut pixels = rgba.to_vec();
+    for [x0, y0, x1, y1] in frame.all_pixels(marks) {
+        for row in pixels.chunks_exact_mut(width * 4).skip(y0).take(y1 - y0) {
+            if let Some(span) = row.get_mut(x0 * 4..x1 * 4) {
+                span.fill(u8::MAX);
+            }
+        }
+    }
+    Some(pixels)
 }
 
 /// Where a raster's pixels lie in the whole page's pixels at the same scale.
@@ -246,7 +293,7 @@ mod tests {
 
     #[test]
     fn an_embedded_photo_is_kept_by_its_exact_box() {
-        let figures = decide(&[photo_share()], &page(1, true), W, H);
+        let figures = decide(&[photo_share()], &[], &page(1, true), W, H);
         assert_eq!(figures.len(), 1);
         let got = Frame::whole(W, H).pixels(figures[0]);
         assert_eq!(got, Some(PHOTO));
@@ -254,20 +301,52 @@ mod tests {
 
     #[test]
     fn a_line_drawing_and_a_scan_flip_with_the_page() {
-        assert!(decide(&[photo_share()], &page(1, false), W, H).is_empty(), "two-tone drawing");
+        assert!(decide(&[photo_share()], &[], &page(1, false), W, H).is_empty(), "two-tone drawing");
         // A page-sized image of text: the heuristic finds nothing photo-like in it.
         let mut scan = page(1, false);
         for px in scan.as_chunks_mut::<4>().0 {
             let rgb: [u8; 3] = if px[0] < 128 { [20, 20, 20] } else { [240, 238, 235] };
             px[..3].copy_from_slice(&rgb);
         }
-        assert!(decide(&[[0.0, 0.0, 1.0, 1.0]], &scan, W, H).is_empty(), "scanned text");
+        assert!(decide(&[[0.0, 0.0, 1.0, 1.0]], &[], &scan, W, H).is_empty(), "scanned text");
+    }
+
+    /// The highlighted lines of [`highlighted_text`]: text rows 40..70, across the text width.
+    const HIGHLIGHT: [usize; 4] = [16, 40, 184, 70];
+
+    /// A page of text (black bars on white, no images) with highlighter yellow under
+    /// [`HIGHLIGHT`]'s lines, the antialiased edges of its letters in between.
+    fn highlighted_text() -> Vec<u8> {
+        let mut rgba = vec![u8::MAX; W * H * 4];
+        for (y, row) in rgba.as_chunks_mut::<{ W * 4 }>().0.iter_mut().enumerate() {
+            for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let ink = (20..100).contains(&y) && y % 10 < 3 && (16..184).contains(&x);
+                let marked = (HIGHLIGHT[0]..HIGHLIGHT[2]).contains(&x) && (HIGHLIGHT[1]..HIGHLIGHT[3]).contains(&y);
+                let edge = (x * 7 + y * 3) % 11;
+                let rgb: [u8; 3] = match (ink, marked) {
+                    (true, true) => [40 + edge as u8 * 9, 34 + edge as u8 * 8, 0],
+                    (true, false) => [0, 0, 0],
+                    (false, true) => [0xff, 0xd0, 0x00],
+                    (false, false) => [0xff, 0xff, 0xff],
+                };
+                px[..3].copy_from_slice(&rgb);
+            }
+        }
+        rgba
+    }
+
+    #[test]
+    fn a_highlight_is_not_a_figure() {
+        let page = highlighted_text();
+        assert!(!decide(&[], &[], &page, W, H).is_empty(), "unmasked, the heuristic takes the highlighted lines for a figure");
+        let mark = [HIGHLIGHT[0] as f32 / W as f32, HIGHLIGHT[1] as f32 / H as f32, HIGHLIGHT[2] as f32 / W as f32, HIGHLIGHT[3] as f32 / H as f32];
+        assert_eq!(decide(&[], &[mark], &page, W, H), Vec::<Share>::new(), "the mark's lines flip with the page");
     }
 
     #[test]
     fn tiles_and_the_whole_page_agree_at_any_zoom() {
         // Decided once from a 1× raster, applied to a 3× page and to a tile of it.
-        let figures = decide(&[photo_share()], &page(1, true), W, H);
+        let figures = decide(&[photo_share()], &[], &page(1, true), W, H);
         let scale = 3;
         let (fw, fh) = (W * scale, H * scale);
         let mut whole = page(scale, true);

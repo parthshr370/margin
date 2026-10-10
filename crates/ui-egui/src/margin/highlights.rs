@@ -6,7 +6,8 @@
 //! (extracted by the renderer's text layer, the text a callout quotes) and its note. Clicking a
 //! card selects the comment and shows it on the page; double-clicking opens its note for typing,
 //! as PdfCraft's Comments panel does. Hovering shows its actions (Copy callout, Open in Obsidian,
-//! Change colour across `notes.colors`, Delete); right-clicking lists the same. The keymap ids
+//! Change colour across `notes.colors`, Delete); right-clicking lists the same, and turns a
+//! highlight into an underline or back ([`change_kind`]). The keymap ids
 //! [`DELETE_ID`] and [`COLOR_ID`] act on the selected comment, picked here or on the page. Every
 //! change is an engine [`Edit`] applied through `PdfCraftApp::apply_edit`, so it lands on the
 //! document's undo stack and Undo brings it back.
@@ -19,7 +20,7 @@ use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Align, Color32, Layout, Sense, Stroke, UiBuilder, vec2};
-use pdfcraft_engine::Edit;
+use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape};
 use pdfcraft_render::{Annotation, DocInfo, PageText};
 use serde_json::Value;
 
@@ -27,7 +28,7 @@ use super::look::{self, BUTTON_HEIGHT, ColorDot, GAP, GAP_LARGE};
 use super::motion;
 use super::obsidian::{self, Notes, Request};
 use crate::canvas::DocView;
-use crate::comments::color32;
+use crate::comments::{CommentTool, color32};
 use crate::comments_panel::{kind_label, subtype_icon};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
@@ -37,6 +38,8 @@ use crate::{PdfCraftApp, icons};
 pub const DELETE_ID: &str = "annotation.delete";
 /// Give the selected comment a `notes.colors` colour, by name: `{ "color": "red" }`.
 pub const COLOR_ID: &str = "annotation.color";
+/// Said when the PDF refuses comment changes.
+pub(crate) const NOT_ALLOWED: &str = "This PDF doesn't allow changes to its comments.";
 
 /// Space between neighbouring cards: their hover fills nearly touch, so the list reads as one.
 const CARD_SPACING: f32 = 2.0;
@@ -111,6 +114,8 @@ pub(crate) fn want_text(view: &DocView, pages: &mut Vec<usize>) {
 #[derive(Default)]
 struct Outcome {
     edit: Option<Edit>,
+    /// Turn the comment at (page, index) into this kind ([`change_kind`]).
+    kind_change: Option<(usize, usize, Markup)>,
     nav: Option<Nav>,
 }
 
@@ -121,6 +126,8 @@ enum Action {
     OpenInObsidian,
     /// The `notes.colors` entry at this index.
     Color(usize),
+    /// Make a highlight an underline, or an underline a highlight.
+    ChangeKind(Markup),
     EditNote,
     Delete,
 }
@@ -148,6 +155,8 @@ pub(crate) fn color_args(name: &str) -> Value {
 struct CardInput<'a> {
     t: &'a Tokens,
     a: &'a Annotation,
+    /// The document's comments, `a`'s replies among them.
+    info: &'a DocInfo,
     quote: &'a str,
     page_label: &'a str,
     notes: &'a Notes,
@@ -191,6 +200,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
             let input = CardInput {
                 t,
                 a,
+                info,
                 quote: &quote,
                 page_label: &page_label,
                 notes: &app.notes,
@@ -206,6 +216,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     });
     if let Some(edit) = out.edit {
         apply(app, edit);
+    }
+    if let Some((page, at, kind)) = out.kind_change {
+        change_kind(app, index, page, at, kind);
     }
     out.nav
 }
@@ -227,7 +240,7 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str, args: &Value) -> bool {
         return true;
     }
     if !doc.allows_annotation() {
-        app.notify("This PDF doesn't allow changes to its comments.");
+        app.notify(NOT_ALLOWED);
         return true;
     }
     let edit = if id == DELETE_ID {
@@ -251,6 +264,86 @@ fn apply(app: &mut PdfCraftApp, edit: Edit) {
     if deleting && let Some((_, doc)) = app.active_ids() {
         super::toast::undoable(app, "Highlight deleted", doc);
     }
+}
+
+/// The subtype and comment tool of the text marks a reader can switch between.
+fn kind_parts(kind: Markup) -> Option<(&'static str, CommentTool)> {
+    match kind {
+        Markup::Highlight => Some(("Highlight", CommentTool::Highlight)),
+        Markup::Underline => Some(("Underline", CommentTool::Underline)),
+        Markup::StrikeOut | Markup::Squiggly => None,
+    }
+}
+
+/// The other kind a highlight or an underline can become; `None` for any other comment.
+fn other_kind(a: &Annotation) -> Option<Markup> {
+    match a.subtype.as_str() {
+        "Highlight" => Some(Markup::Underline),
+        "Underline" => Some(Markup::Highlight),
+        _ => None,
+    }
+}
+
+/// Why text mark `a` can't change kind, if it can't: its replies would go with it, or it is
+/// locked.
+fn kind_change_refused(info: &DocInfo, a: &Annotation) -> Option<&'static str> {
+    let has_replies = a.name.as_deref().is_some_and(|name| info.annotations.iter().any(|r| r.in_reply_to.as_deref() == Some(name)));
+    if has_replies {
+        Some("it has replies, which would be lost with it")
+    } else if a.locked {
+        Some("it is locked")
+    } else {
+        None
+    }
+}
+
+/// Turn text mark `(page, index)` of view `i` into a `kind` mark, a highlight into an underline
+/// or back: the same text, colour, note and author, as one undo step (the mark deleted and added
+/// again in one `Batch`). The new mark is selected; returns its index (the same index when it is
+/// that kind already). Refused, with a message, when the PDF takes no comment changes or the
+/// mark has replies or is locked.
+pub(crate) fn change_kind(app: &mut PdfCraftApp, i: usize, page: usize, index: usize, kind: Markup) -> Option<usize> {
+    let (subtype, tool) = kind_parts(kind)?;
+    let doc = app.session.get(app.views.get(i)?.id)?;
+    let a = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && obsidian::is_markup(a))?;
+    if a.subtype == subtype {
+        return Some(index);
+    }
+    other_kind(a)?;
+    if !doc.allows_annotation() {
+        app.notify(NOT_ALLOWED);
+        return None;
+    }
+    if let Some(why) = kind_change_refused(&doc.info, a) {
+        let message = format!("Can't change this {}: {why}.", kind_label(a).to_lowercase());
+        app.notify(message);
+        return None;
+    }
+    let mut style = app.comment_prefs.style(tool);
+    if let Some(color) = a.color {
+        style.color = color.map(f64::from);
+    }
+    let mark = NewAnnotation {
+        page,
+        shape: Shape::TextMarkup { kind, quads: a.quads.iter().map(|quad| quad.map(f64::from)).collect() },
+        style,
+        contents: a.contents.clone().unwrap_or_default(),
+        author: a.author.clone().unwrap_or_else(|| app.comment_prefs.author.clone()),
+    };
+    let edit = Edit::Batch {
+        label: format!("Change to {}", subtype.to_lowercase()),
+        edits: vec![Edit::DeleteAnnotation { page, index }, Edit::AddAnnotation(mark)],
+    };
+    if !app.apply_edit(edit) {
+        return None;
+    }
+    // Added last, so the page's last comment.
+    let view = app.views.get_mut(i)?;
+    let doc = app.session.get(view.id)?;
+    let new = doc.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max()?;
+    view.comments.selected = Some((page, new));
+    view.comments.reveal = true;
+    Some(new)
 }
 
 /// One comment's card. The whole card is one click target under its own widgets.
@@ -313,6 +406,7 @@ fn act(ctx: &egui::Context, action: Action, input: &CardInput<'_>, view: &mut Do
             }
         }
         Action::EditNote => view.comments.editing = Some((page, index, a.contents.clone().unwrap_or_default())),
+        Action::ChangeKind(kind) => out.kind_change = Some((page, index, kind)),
         Action::Delete => out.edit = Some(Edit::DeleteAnnotation { page, index }),
     }
 }
@@ -336,46 +430,67 @@ fn color_name(notes: &Notes, color: Option<[f32; 3]>) -> String {
 
 /// Swatch, type icon, page and a short date ("10 Oct"); then the actions, faded in by
 /// `actions_shown` (they keep their place, so nothing beside them moves on hover). A date that
-/// doesn't fit beside the page label is left out rather than cut; the page label's tooltip has
-/// the full metadata, the date's its full timestamp.
+/// doesn't fit beside the page label (the 240-pt sidebar, a long label) goes on a line of its
+/// own under the label, never cut or left out; the page label's tooltip has the full metadata,
+/// the date's its full timestamp.
 fn meta_row(ui: &mut egui::Ui, input: &CardInput<'_>, actions_shown: f32) -> Option<Action> {
     let (t, a) = (input.t, input.a);
-    ui.allocate_ui_with_layout(vec2(ui.available_width(), META_ROW), Layout::left_to_right(Align::Center), |ui| {
-        let (rect, swatch) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
-        let colour = color_name(input.notes, a.color);
-        swatch.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Colour: {colour}")));
-        let edge = Stroke::new(1.0, Color32::from_black_alpha(SWATCH_EDGE_ALPHA));
-        ui.painter().circle(rect.center(), SWATCH / 2.0, shown_color(input.notes, a.color), edge);
-        look::tooltip(ui.add(icons::image(subtype_icon(&a.subtype), KIND_ICON, t.text_muted)), kind_label(a), None);
-        let actions_width = ACTION_COUNT * ACTION + (ACTION_COUNT - 1.0) * ACTION_GAP;
-        let room = (ui.available_width() - actions_width - GAP).max(0.0);
-        let font = theme::regular(META_TEXT);
-        let page = format!("p. {}", input.page_label);
-        let date =
-            a.modified.as_deref().and_then(|full| ui.ctx().memory_mut(|m| m.caches.cache::<ShortDates>().get((full, input.this_year)).clone()));
-        let width = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x;
-        let date = date.filter(|date| width(&page) + GAP + width(date) <= room);
-        ui.allocate_ui_with_layout(vec2(room, META_ROW), Layout::left_to_right(Align::Center), |ui| {
-            ui.set_width(room);
-            let label = ui.add(egui::Label::new(egui::RichText::new(&page).font(font.clone()).color(t.text_muted)).truncate().selectable(false));
-            let full = match &a.modified {
-                Some(modified) => format!("Page {} · {} · {modified}", input.page_label, kind_label(a)),
-                None => format!("Page {} · {}", input.page_label, kind_label(a)),
+    let font = theme::regular(META_TEXT);
+    let date = a.modified.as_deref().and_then(|full| ui.ctx().memory_mut(|m| m.caches.cache::<ShortDates>().get((full, input.this_year)).clone()));
+    let (action, date_below) = ui
+        .allocate_ui_with_layout(vec2(ui.available_width(), META_ROW), Layout::left_to_right(Align::Center), |ui| {
+            let (rect, swatch) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
+            let colour = color_name(input.notes, a.color);
+            swatch.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Colour: {colour}")));
+            let edge = Stroke::new(1.0, Color32::from_black_alpha(SWATCH_EDGE_ALPHA));
+            ui.painter().circle(rect.center(), SWATCH / 2.0, shown_color(input.notes, a.color), edge);
+            look::tooltip(ui.add(icons::image(subtype_icon(&a.subtype), KIND_ICON, t.text_muted)), kind_label(a), None);
+            let actions_width = ACTION_COUNT * ACTION + (ACTION_COUNT - 1.0) * ACTION_GAP;
+            let room = (ui.available_width() - actions_width - GAP).max(0.0);
+            let page = format!("p. {}", input.page_label);
+            let width = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x;
+            let (date_beside, date_below) = match date {
+                Some(date) if width(&page) + GAP + width(&date) <= room => (Some(date), None),
+                other => (None, other),
             };
-            look::tooltip(label, &full, None);
-            if let (Some(date), Some(modified)) = (date, &a.modified) {
-                let shown = ui.add(egui::Label::new(egui::RichText::new(date).font(font).color(t.text_faint)).selectable(false));
-                look::tooltip(shown, modified, None);
-            }
-        });
-        ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.x = ACTION_GAP;
-            ui.multiply_opacity(actions_shown);
-            actions(ui, input)
+            ui.allocate_ui_with_layout(vec2(room, META_ROW), Layout::left_to_right(Align::Center), |ui| {
+                ui.set_width(room);
+                let label = ui.add(egui::Label::new(egui::RichText::new(&page).font(font.clone()).color(t.text_muted)).truncate().selectable(false));
+                let full = match &a.modified {
+                    Some(modified) => format!("Page {} · {} · {modified}", input.page_label, kind_label(a)),
+                    None => format!("Page {} · {}", input.page_label, kind_label(a)),
+                };
+                look::tooltip(label, &full, None);
+                if let Some(date) = date_beside {
+                    date_label(ui, input, date, font.clone());
+                }
+            });
+            let action = ui
+                .scope(|ui| {
+                    ui.spacing_mut().item_spacing.x = ACTION_GAP;
+                    ui.multiply_opacity(actions_shown);
+                    actions(ui, input)
+                })
+                .inner;
+            (action, date_below)
         })
-        .inner
-    })
-    .inner
+        .inner;
+    if let Some(date) = date_below {
+        ui.horizontal(|ui| {
+            // Under the page label: past the swatch and the type icon.
+            ui.add_space(SWATCH + GAP + KIND_ICON + GAP);
+            date_label(ui, input, date, font);
+        });
+    }
+    action
+}
+
+/// A card's short date, its full timestamp in the tooltip.
+fn date_label(ui: &mut egui::Ui, input: &CardInput<'_>, date: String, font: egui::FontId) {
+    let shown = ui.add(egui::Label::new(egui::RichText::new(date).font(font).color(input.t.text_faint)).selectable(false));
+    if let Some(modified) = &input.a.modified {
+        look::tooltip(shown, modified, None);
+    }
 }
 
 /// The hover actions, left to right: Copy callout, Open in Obsidian, Change colour, Delete.
@@ -428,8 +543,8 @@ fn color_row(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<usize> {
     look::color_dots(ui, &dots)
 }
 
-/// The right-click menu: what the comment is, its colours, the notes actions, its note and
-/// Delete with its keys.
+/// The right-click menu: what the comment is, its colours, Change to underline (or highlight),
+/// the notes actions, its note and Delete with its keys.
 fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     let (t, a) = (input.t, input.a);
     ui.set_min_width(MENU_WIDTH);
@@ -440,6 +555,18 @@ fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
         && let Some(i) = color_row(ui, input)
     {
         action = Some(Action::Color(i));
+    }
+    if let Some(kind) = other_kind(a) {
+        let refused = if input.allowed { kind_change_refused(input.info, a) } else { Some(NOT_ALLOWED) };
+        let label = if kind == Markup::Underline { "Change to underline" } else { "Change to highlight" };
+        let change = ui.add_enabled(refused.is_none(), egui::Button::new(label));
+        let change = match refused {
+            Some(why) => look::tooltip(change, &format!("{label}: {why}"), None),
+            None => change,
+        };
+        if change.clicked() {
+            action = Some(Action::ChangeKind(kind));
+        }
     }
     ui.separator();
     if input.notes_on {
@@ -499,6 +626,10 @@ fn text_block(ui: &mut egui::Ui, text: &str, format: TextFormat, rows: usize) {
 /// The note being typed into this card, with Cancel and Save under it on the right.
 fn editor(ui: &mut egui::Ui, t: &Tokens, key: (usize, usize), view: &mut DocView, out: &mut Outcome) {
     let Some((_, _, text)) = view.comments.editing.as_mut() else { return };
+    let id = ui.make_persistent_id(("margin-highlight-note", key));
+    // Focus it when it appears, not every frame: a press on the page takes the keys back, so a
+    // note left open never swallows V, H or 1-4 meant for the reader.
+    let appearing = ui.ctx().read_response(id).is_none();
     let field = egui::TextEdit::multiline(text)
         .desired_rows(EDITOR_ROWS)
         .desired_width(ui.available_width())
@@ -506,10 +637,9 @@ fn editor(ui: &mut egui::Ui, t: &Tokens, key: (usize, usize), view: &mut DocView
         .font(theme::regular(NOTE_TEXT))
         .text_color(t.text)
         .hint_text("Add a note")
-        .id_salt(("margin-highlight-note", key));
+        .id(id);
     let resp = ui.add(field);
-    // A new highlight opens its note for typing, as in PdfCraft.
-    if !resp.has_focus() && !ui.memory(|m| m.focused().is_some()) {
+    if appearing {
         resp.request_focus();
     }
     let (save, cancel) = ui

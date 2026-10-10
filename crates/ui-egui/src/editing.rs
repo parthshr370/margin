@@ -58,8 +58,11 @@ impl PdfCraftApp {
                         view.comments.selected = newest.map(|n| (a.page, n));
                         view.comments.reveal = true;
                         // A new highlight opens its note for typing straight away, as in Acrobat,
-                        // unless a note typed into another card is still unsaved.
+                        // unless a note typed into another card is still unsaved. Not in Margin:
+                        // its note editor would take the keys (V, H, 1-4) from the next mark;
+                        // Comment, Add note or a double-click on the card opens it there.
                         if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
+                            && self.flavor != crate::Flavor::Margin
                             && a.contents.is_empty()
                             && view.comments.editing.as_ref().is_none_or(|(_, _, text)| text.is_empty())
                         {
@@ -530,7 +533,8 @@ impl PdfCraftApp {
     }
 }
 
-/// The page a comment edit changes (`None` for other edits).
+/// The page a comment edit changes (`None` for other edits). A batch of comment edits on one
+/// page (Margin's highlight-to-underline) changes that page.
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
@@ -542,6 +546,11 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
+        Edit::Batch { edits, .. } => {
+            let mut pages = edits.iter().map(comment_page);
+            let first = pages.next()??;
+            pages.all(|page| page == Some(first)).then_some(first)
+        }
         _ => None,
     }
 }

@@ -1441,6 +1441,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let tag = scale_tag(scale);
     let hand = app.quick_tool == QuickTool::Hand;
     let tool = app.quick_tool;
+    let flavor = app.flavor;
     // Text selection runs for the Select tool and for the markup tools (highlight…).
     let selects_text = match tool {
         QuickTool::Comment(t) => t.markup().is_some() || t == comments::CommentTool::ReplaceText,
@@ -1772,8 +1773,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             } else {
                 tool == QuickTool::Select && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
             };
-            // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
-            let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
+            // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat),
+            // except in Margin, where a highlight follows the text wherever the drag starts.
+            let highlight_boxes = tool == QuickTool::Comment(comments::CommentTool::Highlight)
+                && allowed
+                && (flavor != crate::Flavor::Margin || crate::margin::rail::highlight_boxes(view.page_text(i).as_deref()));
+            let area_tool = tool == QuickTool::Redact && can_modify || highlight_boxes;
             let boxing = area_tool && {
                 let text = view.page_text(i);
                 let over_text = |p: Pos2| {

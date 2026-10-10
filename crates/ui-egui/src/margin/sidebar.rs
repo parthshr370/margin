@@ -40,16 +40,19 @@ const ROW_BUTTON: f32 = 22.0;
 /// The sidebar, sliding open and closed with `margin_chrome.sidebar_open` over
 /// [`motion::SLIDE`]: while it moves, its width eases between zero and the width the reader set
 /// and the panes keep their full width, clipped, so nothing reflows inside it. In a window
-/// narrower than `ui.sidebar.overlay_below_px` it floats over the page instead ([`overlay`]).
+/// narrower than `ui.sidebar.overlay_below_px` it floats over the page instead ([`overlay`]),
+/// and starts closed ([`super::ReaderChrome::start_narrow`]).
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("margin_sidebar");
+    let window = ui.ctx().content_rect();
+    let narrow = window.width() < app.margin_keys.settings().ui.sidebar.overlay_below_px as f32;
+    app.margin_chrome.start_narrow(narrow);
     let shown = motion::toggle(ui.ctx(), id.with("open"), app.margin_chrome.sidebar_open, motion::SLIDE);
     if shown <= 0.0 {
         return;
     }
-    let window = ui.ctx().content_rect();
-    if window.width() < app.margin_keys.settings().ui.sidebar.overlay_below_px as f32 {
+    if narrow {
         overlay(app, ui.ctx(), &t, id, shown, window);
         return;
     }

@@ -736,8 +736,9 @@ fn display_and_sidebar_tabs_work_from_the_keyboard() {
     assert_eq!(h.state().margin_chrome.tab, SidebarTab::Pages);
 }
 
-/// R8 item 20: below `ui.sidebar.overlay_below_px` the sidebar floats over the page, so the
-/// page keeps its width; a press on the page closes it, and a wide window docks it again.
+/// R8 item 20: below `ui.sidebar.overlay_below_px` the sidebar starts closed (still saved as
+/// open, the reader's choice) and opens over the page, so the page keeps its width; a press on
+/// the page closes it, and a wide window docks it again.
 #[test]
 fn a_narrow_window_gets_the_sidebar_over_the_page() {
     let mut h = Harness::builder().with_size(egui::vec2(1024.0, 640.0)).build_eframe(|_cc| {
@@ -750,6 +751,11 @@ fn a_narrow_window_gets_the_sidebar_over_the_page() {
     h.run_steps(4);
     settle(&mut h);
     h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(30);
+    assert!(!h.state().margin_chrome.sidebar_open && h.query_by_label("Library").is_none(), "a narrow window starts with it closed");
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["margin_chrome"]["sidebar_open"], true, "the reader's choice is what is saved");
+    click(&mut h, "Sidebar");
     h.run_steps(30);
     assert!(h.state().margin_chrome.sidebar_open && h.query_by_label("Library").is_some(), "the sidebar shows, over the page");
     let zoom_open = h.state().views[0].zoom;

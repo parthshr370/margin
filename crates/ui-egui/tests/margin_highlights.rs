@@ -139,8 +139,8 @@ fn a_deletion_offers_undo_in_a_toast_above_the_footer() {
 }
 
 /// R8 QoL 25: a card's date is short ("10 Oct" this year), 8 points after the page label, never
-/// a cut timestamp, at the sidebar's narrowest, default and widest; hovering the card moves
-/// neither.
+/// a cut timestamp, at the sidebar's narrowest, default and widest; at the narrowest it has a
+/// line of its own under the page label instead; hovering the card moves neither.
 #[test]
 fn highlight_dates_are_short_and_never_squeezed() {
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -157,16 +157,18 @@ fn highlight_dates_are_short_and_never_squeezed() {
         let actions_end = h.get_by_label("Delete highlight").rect().right();
         assert!(actions_end <= width && actions_end > width - 40.0, "the sidebar is {width} wide: actions end at {actions_end}");
         assert_eq!(h.query_all_by_label_contains(&format!("{year}-")).count(), 0, "no raw timestamp at {width}");
-        // At the narrowest the date gives way to the reserved actions (the page label's tooltip
-        // still has it); wider, it sits 8 points after the page label.
-        let date = h.query_by_label(&today).map(|node| node.rect());
-        assert!(date.is_some() || width <= 240.0, "the date shows at {width}");
-        if let Some(date) = date {
+        // Wide enough, it sits 8 points after the page label; at the narrowest, where the
+        // reserved actions leave it no room, it starts the next line under the label.
+        let date = h.get_by_label(&today).rect();
+        if width <= 240.0 {
+            assert!(date.top() >= page.bottom(), "the date goes under the page label at {width}: {page:?} {date:?}");
+            assert!((date.left() - page.left()).abs() <= 0.5, "lined up with the page label at {width}: {page:?} {date:?}");
+        } else {
             assert!(date.left() >= page.right() + 7.5, "the date sits 8 points after the page label at {width}: {page:?} {date:?}");
             assert!(date.right() <= actions_end - 90.0, "and clear of the actions at {width}: {date:?}");
         }
         hover_card(&mut h);
-        let hovered = (h.get_by_label("p. 1").rect(), h.query_by_label(&today).map(|node| node.rect()));
+        let hovered = (h.get_by_label("p. 1").rect(), h.get_by_label(&today).rect());
         assert_eq!(hovered, (page, date), "hover moves nothing at {width}");
         h.hover_at(egui::pos2(width + 400.0, 450.0));
         h.run_steps(3);

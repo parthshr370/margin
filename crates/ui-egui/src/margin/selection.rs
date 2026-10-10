@@ -4,9 +4,10 @@
 //!
 //! Copy and Copy callout work on the selection alone. The first colour or Underline writes one
 //! real mark (PdfCraft's `AddAnnotation`, one undo step); while the bar stays open, later colours
-//! restyle that same mark (`StyleAnnotation`), so a choice never duplicates it. The bar follows
-//! the selection as the page scrolls, stays inside the reading area and hides while its text is
-//! scrolled out of view, without closing.
+//! restyle that same mark (`StyleAnnotation`), so a choice never duplicates it, and Underline
+//! turns it from a highlight into an underline and back (`highlights::change_kind`). The bar
+//! follows the selection as the page scrolls, stays inside the reading area and hides while its
+//! text is scrolled out of view, without closing.
 //!
 //! It is an [`egui::Area`], not an egui popup: `margin::ui` keeps a click that closes a popup
 //! from reaching the page, and a click on the page has to close this bar and start a new
@@ -19,6 +20,7 @@ use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape};
 use serde_json::Value;
 
+use super::highlights::NOT_ALLOWED;
 use super::{SidebarTab, highlights, look, obsidian};
 use crate::PdfCraftApp;
 use crate::canvas::DocView;
@@ -37,9 +39,6 @@ const BAR_HEIGHT: f32 = BUTTON + 2.0 * PADDING as f32;
 /// The divider between groups of buttons: its height and the space either side.
 const DIVIDER_HEIGHT: f32 = 16.0;
 const DIVIDER_SPACE: f32 = 4.0;
-
-/// Shown when the PDF refuses comment changes.
-const NOT_ALLOWED: &str = "This PDF doesn't allow changes to its comments.";
 
 /// The bar's state, per document (in `DocReading`).
 #[derive(Debug, Default)]
@@ -213,17 +212,14 @@ fn draw(app: &PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) -> Opt
                             if let Some(index) = look::color_dots(ui, &dots) {
                                 clicked = Some(Action::Color(index));
                             }
-                            // A highlight can't become an underline; Undo takes it back first.
-                            let underline_free = mark.is_none() || underlined;
-                            let (label, keys) = if underline_free {
-                                ("Underline".to_string(), look::shortcut(app, "comment.underline"))
+                            // A toggle: it underlines the selection, turns the bar's highlight
+                            // into an underline, and an underline back into a highlight.
+                            let (label, keys) = if underlined {
+                                ("Underline: on, click for a highlight", None)
                             } else {
-                                ("Underline: undo the highlight first (Ctrl+Z)".to_string(), None)
+                                ("Underline", look::shortcut(app, "comment.underline"))
                             };
-                            let underline = ui
-                                .add_enabled_ui(underline_free, |ui| look::icon_button(ui, "underline", BUTTON, underlined, &label, keys.as_deref()))
-                                .inner;
-                            if underline.clicked() && !underlined {
+                            if look::icon_button(ui, "underline", BUTTON, underlined, label, keys.as_deref()).clicked() {
                                 clicked = Some(Action::Underline);
                             }
                             if look::icon_button(ui, "message-square-plus", BUTTON, false, "Comment", None).clicked() {
@@ -277,9 +273,7 @@ fn run(app: &mut PdfCraftApp, ctx: &egui::Context, i: usize, action: Action) {
             let Some(color) = app.notes.colors.get(index).map(obsidian::NoteColor::rgb_f64) else { return };
             color_mark(app, i, color);
         }
-        Action::Underline => {
-            mark(app, i, Markup::Underline, None);
-        }
+        Action::Underline => toggle_underline(app, i),
         Action::Comment => {
             let Some(index) = ensure_mark(app, i) else { return };
             let Some(page) = bar(app, i).map(|bar| bar.page) else { return };
@@ -365,6 +359,26 @@ fn color_mark(app: &mut PdfCraftApp, i: usize, color: [f64; 3]) {
     }
 }
 
+/// The bar's Underline: underline the selection, or turn the bar's mark from a highlight into an
+/// underline or back (`highlights::change_kind`, one undo step); the bar keeps the new mark.
+fn toggle_underline(app: &mut PdfCraftApp, i: usize) {
+    let Some((page, mark_index)) = bar(app, i).map(|bar| (bar.page, bar.mark)) else { return };
+    let Some(index) = mark_index else {
+        mark(app, i, Markup::Underline, None);
+        return;
+    };
+    let underlined = app
+        .views
+        .get(i)
+        .and_then(|view| app.session.get(view.id))
+        .is_some_and(|doc| doc.info.annotations.iter().any(|a| a.page == page && a.index == index && a.subtype == "Underline"));
+    let kind = if underlined { Markup::Highlight } else { Markup::Underline };
+    let Some(new) = highlights::change_kind(app, i, page, index, kind) else { return };
+    if let Some(bar) = app.views.get_mut(i).and_then(|view| view.margin.selection.open.as_mut()) {
+        bar.mark = Some(new);
+    }
+}
+
 /// The bar's mark, highlighting the selection in the tool's colour first when there is none.
 fn ensure_mark(app: &mut PdfCraftApp, i: usize) -> Option<usize> {
     match bar(app, i)?.mark {
@@ -396,10 +410,6 @@ fn mark(app: &mut PdfCraftApp, i: usize, kind: Markup, color: Option<[f64; 3]>) 
     }
     let view = app.views.get_mut(i)?;
     let index = view.comments.selected.filter(|(selected_page, _)| *selected_page == page).map(|(_, index)| index)?;
-    // PdfCraft opens a new highlight's note for typing; from the bar only Comment does.
-    if view.comments.editing.as_ref().is_some_and(|(p, n, typed)| (*p, *n) == (page, index) && typed.is_empty()) {
-        view.comments.editing = None;
-    }
     view.clear_selection();
     if let Some(bar) = view.margin.selection.open.as_mut() {
         bar.mark = Some(index);

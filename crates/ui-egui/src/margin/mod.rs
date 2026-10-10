@@ -63,6 +63,11 @@ pub struct ReaderChrome {
     before_find: Option<(SidebarTab, bool)>,
     /// Nothing was restored from a previous run: the first `sync` applies `ui.sidebar`.
     first_start: bool,
+    /// The sidebar has been drawn once this run ([`Self::start_narrow`] decided).
+    start_seen: bool,
+    /// A narrow window closed the sidebar at start, not the reader: it is saved as open, and
+    /// forgotten once the sidebar opens.
+    closed_for_narrow_start: bool,
     /// Undo offers and held failures the toast shows (`margin::toast`); never saved.
     pub notices: toast::Notices,
 }
@@ -77,6 +82,8 @@ impl Default for ReaderChrome {
             synced_doc: None,
             before_find: None,
             first_start: true,
+            start_seen: false,
+            closed_for_narrow_start: false,
             notices: toast::Notices::default(),
         }
     }
@@ -91,7 +98,24 @@ impl ReaderChrome {
             Some(before) if self.tab == SidebarTab::Find => before,
             _ => (self.tab, self.sidebar_open),
         };
+        let open = open || self.closed_for_narrow_start;
         serde_json::json!({ "sidebar_open": open, "tab": tab.key().filter(|_| tab != SidebarTab::Find) })
+    }
+
+    /// Called each time the sidebar is drawn. The first time, a window narrower than
+    /// `ui.sidebar.overlay_below_px` (`narrow`) starts with it closed (CUSTOMIZATION's "closed
+    /// at start"): open, its overlay would cover the page until dismissed.
+    pub(crate) fn start_narrow(&mut self, narrow: bool) {
+        if !self.start_seen {
+            self.start_seen = true;
+            if narrow && self.sidebar_open {
+                self.sidebar_open = false;
+                self.closed_for_narrow_start = true;
+            }
+        }
+        if self.sidebar_open {
+            self.closed_for_narrow_start = false;
+        }
     }
 
     /// Restore what [`Self::to_json`] wrote. Malformed or missing values keep the defaults.
