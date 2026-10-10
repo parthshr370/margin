@@ -199,6 +199,10 @@ const SUB_TEXT: f32 = 11.5;
 const BODY_TEXT: f32 = 12.0;
 /// Space between a switch label and the line under it.
 const SUB_GAP: f32 = 2.0;
+/// The body's least height when the window is too short for it: a few control rows still show.
+const MIN_BODY: f32 = 4.0 * CONTROL_ROW;
+/// The scroll bar's own column right of the body, while the body scrolls.
+const SCROLL_GUTTER: f32 = 12.0;
 
 /// The trim editor's page previews.
 const TRIM_PREVIEW_WIDTH: f32 = 96.0;
@@ -227,29 +231,60 @@ pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(i18n::t("Open a document to change how it shows.")).font(theme::regular(LABEL_TEXT)).color(t.text_muted));
         return;
     };
+    // Never taller than the window under the popover's top: in a short window (Two-up's cover
+    // row, Manual trim's previews) the body scrolls, its frame padding and a section step clear
+    // of the window's edge, so no lower control is out of reach. The popup's area offers only
+    // last frame's size, so the body asks for the room itself (as its least scrolled height) and
+    // still shrinks to its content. While it scrolls, its bar gets a gutter of its own instead
+    // of covering the values and switches. Wheel and scroll bar only: a drag in the body belongs
+    // to its sliders and trim previews.
+    let room = (ui.ctx().content_rect().bottom() - ui.cursor().top() - 2.0 * GAP_SECTION).max(MIN_BODY);
+    let overflow_id = egui::Id::new("margin-display-body-overflows");
+    let overflows = ui.data(|d| d.get_temp::<bool>(overflow_id)).unwrap_or(false);
+    ui.set_width(POPOVER_WIDTH + if overflows { SCROLL_GUTTER } else { 0.0 });
+    let sources = egui::scroll_area::ScrollSource::SCROLL_BAR | egui::scroll_area::ScrollSource::MOUSE_WHEEL;
+    let output = egui::ScrollArea::vertical()
+        .id_salt("margin-display-body")
+        .scroll_source(sources)
+        .auto_shrink([false, true])
+        .max_height(room)
+        .min_scrolled_height(room)
+        .show(ui, |ui| {
+            ui.set_width(POPOVER_WIDTH);
+            body(app, index, ui, &t);
+        });
+    let overflowing = output.content_size.y > output.inner_rect.height() + 1.0;
+    if overflowing != overflows {
+        ui.data_mut(|d| d.insert_temp(overflow_id, overflowing));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// [`popover_contents`] for the document `index`.
+fn body(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, t: &Tokens) {
     let mut default_row = None;
-    if section_header(ui, &t, "Page color") {
+    if section_header(ui, t, "Page color") {
         default_row = Some(DefaultRow::PageColor);
     }
-    page_color_rows(&mut app.views[index].margin.display, ui, &t);
-    section_divider(ui, &t);
-    if section_header(ui, &t, "Layout") {
+    page_color_rows(&mut app.views[index].margin.display, ui, t);
+    section_divider(ui, t);
+    if section_header(ui, t, "Layout") {
         default_row = Some(DefaultRow::Layout);
     }
     let reading_width = app.margin_keys.settings().view.reading_width_px;
-    if let Some(id) = layout_rows(&mut app.views[index], reading_width, ui, &t) {
+    if let Some(id) = layout_rows(&mut app.views[index], reading_width, ui, t) {
         app.execute(id);
     }
     let pages = app.session.get(app.views[index].id).map(|doc| doc.info.pages.iter().map(|p| (p.width, p.height)).collect::<Vec<_>>());
-    trim_rows(&mut app.views[index], &pages.unwrap_or_default(), ui, &t);
-    section_divider(ui, &t);
+    trim_rows(&mut app.views[index], &pages.unwrap_or_default(), ui, t);
+    section_divider(ui, t);
     let state = &mut app.views[index].margin.display;
     let follow_sub = if state.follow_system {
         i18n::t("Night when the system is dark, Paper when light")
     } else {
         i18n::t("Off: the page color stays as you set it")
     };
-    if switch_row(ui, &t, i18n::t("Follow system dark mode"), Some(follow_sub), state.follow_system) {
+    if switch_row(ui, t, i18n::t("Follow system dark mode"), Some(follow_sub), state.follow_system) {
         state.follow_system = !state.follow_system;
     }
     if let Some(row) = default_row {
@@ -276,12 +311,13 @@ fn section_header(ui: &mut egui::Ui, t: &Tokens, title: &str) -> bool {
     clicked
 }
 
-/// The line between sections, across the whole popover (into the frame's padding), with the
-/// section step on both sides.
+/// The line between sections, across the whole popover (into the frame's padding, past the
+/// scrolling body's clip), with the section step on both sides.
 fn section_divider(ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(GAP_SECTION);
     let (rect, _) = ui.allocate_exact_size(vec2(POPOVER_WIDTH, 1.0), Sense::hover());
-    ui.painter().hline((rect.left() - GAP_SECTION)..=(rect.right() + GAP_SECTION), rect.center().y, Stroke::new(1.0, t.divider));
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().expand2(vec2(GAP_SECTION, 0.0)));
+    painter.hline((rect.left() - GAP_SECTION)..=(rect.right() + GAP_SECTION), rect.center().y, Stroke::new(1.0, t.divider));
     ui.add_space(GAP_SECTION);
 }
 
@@ -474,12 +510,14 @@ fn row_label(ui: &mut egui::Ui, t: &Tokens, label: &str) {
     });
 }
 
-/// A control row: the label column, then a segmented control against the right edge. Returns
-/// the clicked segment.
+/// A control row: the label column, then a segmented control from the controls' shared start
+/// (where [`slider_row`]'s slider starts), so Pages, Fit and Trim line up whatever their
+/// choices' widths. Returns the clicked segment.
 fn choice_row(ui: &mut egui::Ui, t: &Tokens, label: &str, segments: &[Segment<'_>]) -> Option<usize> {
     ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = GAP_LARGE;
         row_label(ui, t, label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| look::segmented(ui, segments)).inner
+        look::segmented(ui, segments)
     })
     .inner
 }

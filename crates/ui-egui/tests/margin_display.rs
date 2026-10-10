@@ -185,3 +185,62 @@ fn popover_sets_two_up_with_a_cover_and_a_manual_trim() {
     h.run_steps(2);
     assert!(!h.state().0.views[0].margin.trim.on);
 }
+
+/// R8 QoL 12's narrow window: the default the review measured, 1024 × 640.
+const SHORT_WINDOW: egui::Vec2 = egui::vec2(1024.0, 640.0);
+/// A rect edge this close is the same column.
+const SAME_COLUMN: f32 = 0.5;
+
+/// R8 QoL 12: Pages, Fit and Trim start their choices on one x, the sliders from the same
+/// start; in a short window the expanded popover (Two-up's cover row, Manual trim) stays inside
+/// the window and its body scrolls, so the last switch can be reached and used.
+#[test]
+fn display_rows_line_up_and_scroll_in_a_short_window() {
+    let mut h = Harness::builder().with_size(SHORT_WINDOW).build_eframe(|_cc| {
+        let mut app = margin_app("short");
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Page colour and layout").click();
+    h.run_steps(3);
+    h.get_by_label("Two-up").click();
+    h.run_steps(2);
+    h.get_by_label("Manual").click();
+    h.run_steps(4);
+    let starts = ["Scroll", "Width", "Off"].map(|label| h.get_by_label(label).rect().left());
+    assert!(starts.iter().all(|x| (x - starts[0]).abs() < SAME_COLUMN), "choice starts {starts:?}");
+    // Brightness and contrast, above the Pages row (the footer's scrubber is a slider too).
+    let pages_row = h.get_by_label("Scroll").rect().top();
+    let sliders: Vec<egui::Rect> =
+        h.get_all_by_role(egui::accesskit::Role::Slider).map(|node| node.rect()).filter(|r| r.bottom() < pages_row).collect();
+    assert_eq!(sliders.len(), 2, "{sliders:?}");
+    assert!(sliders.iter().all(|r| (r.left() - sliders[0].left()).abs() < SAME_COLUMN), "slider starts {sliders:?}");
+    assert!(sliders[0].left() <= starts[0] && starts[0] - sliders[0].left() < SEGMENT_SLACK, "sliders {sliders:?}, choices {starts:?}");
+
+    let follow = |h: &Harness<'static, PdfCraftApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").rect()
+    };
+    assert!(follow(&h).bottom() > SHORT_WINDOW.y, "the expanded popover is taller than the window: {:?}", follow(&h));
+    h.hover_at(h.get_by_label("Width").rect().center());
+    for _ in 0..20 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -200.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(10);
+    assert!(follow(&h).bottom() < SHORT_WINDOW.y, "the body scrolled its last switch into the window: {:?}", follow(&h));
+    let following = h.state().views[0].margin.display.follow_system;
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").click();
+    h.run_steps(3);
+    assert_ne!(h.state().views[0].margin.display.follow_system, following, "the switch works");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode");
+}
+
+/// How far a segmented control's first choice sits inside its well (`look::segmented`), plus
+/// slack: the slider's track starts at the well's edge.
+const SEGMENT_SLACK: f32 = 6.0;
