@@ -337,7 +337,11 @@ mod tests {
         let (keymap, registry) = table("[]");
         let sections = sections(&keymap, &registry, false);
         let contexts: Vec<&str> = sections.iter().map(|s| s.context.as_str()).collect();
-        assert_eq!(contexts, [EVERYWHERE, "Library", "Reader", "Find > TextInput", "Selection", "AnnotateMode", "Annotation"]);
+        let single = "Reader && layout == single";
+        assert_eq!(contexts, [EVERYWHERE, "Library", "Reader", single, "Find > TextInput", "Selection", "AnnotateMode", "Annotation"]);
+        // Single's own j/k (R8 QoL 13) are listed apart from Reader's, which they win over there.
+        let single = sections.iter().find(|section| section.context == single).unwrap();
+        assert_eq!(single.rows[0], Row { keys: "J".to_owned(), title: "Next page".to_owned() });
         let rows: usize = sections.iter().map(|s| s.rows.len()).sum();
         assert_eq!(rows, keymap.bindings.len());
         let everywhere = &sections[0].rows;
