@@ -18,6 +18,8 @@ use crate::{DocView, Flavor, LeftPanel, PdfCraftApp, icons};
 const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 440.0;
+/// The overlay sidebar's shadow over the page.
+const OVERLAY_SHADOW_BLUR: u8 = 24;
 const TAB_HEIGHT: f32 = 32.0;
 const TOP_BUTTON: f32 = 30.0;
 pub(super) const ROW_HEIGHT: f32 = 28.0;
@@ -37,12 +39,18 @@ const ROW_BUTTON: f32 = 22.0;
 
 /// The sidebar, sliding open and closed with `margin_chrome.sidebar_open` over
 /// [`motion::SLIDE`]: while it moves, its width eases between zero and the width the reader set
-/// and the panes keep their full width, clipped, so nothing reflows inside it.
+/// and the panes keep their full width, clipped, so nothing reflows inside it. In a window
+/// narrower than `ui.sidebar.overlay_below_px` it floats over the page instead ([`overlay`]).
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("margin_sidebar");
     let shown = motion::toggle(ui.ctx(), id.with("open"), app.margin_chrome.sidebar_open, motion::SLIDE);
     if shown <= 0.0 {
+        return;
+    }
+    let window = ui.ctx().content_rect();
+    if window.width() < app.margin_keys.settings().ui.sidebar.overlay_below_px as f32 {
+        overlay(app, ui.ctx(), &t, id, shown, window);
         return;
     }
     if shown < 1.0 {
@@ -79,6 +87,40 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.expand_to_include_rect(rect);
         },
     );
+}
+
+/// The sidebar over the page, between the header and the footer, so a narrow window keeps its
+/// page width: the same sections and the reader's width (the docked panel's), sliding in from
+/// the left edge with a shadow. A press on the page outside it closes it; while it closes it
+/// takes no clicks and no keyboard focus. It docks again once the window is wide enough.
+fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id, shown: f32, window: Rect) {
+    let open = app.margin_chrome.sidebar_open;
+    let width = egui::PanelState::load(ctx, id).map_or(DEFAULT_WIDTH, |s| s.size().x).clamp(MIN_WIDTH, MAX_WIDTH).min(window.width());
+    let (top, bottom) = (window.top() + super::header::HEIGHT, (window.bottom() - super::footer::HEIGHT).max(window.top() + super::header::HEIGHT));
+    let left = window.left() - (1.0 - shown) * width;
+    let rect = Rect::from_min_max(egui::pos2(left, top), egui::pos2(left + width, bottom));
+    let visible = Rect::from_min_max(egui::pos2(window.left(), top), rect.right_bottom());
+    egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).show(ctx, |ui| {
+        let painter = ui.painter();
+        painter.add(
+            egui::epaint::Shadow { offset: [0, 0], blur: OVERLAY_SHADOW_BLUR, spread: 0, color: t.page_shadow }.as_shape(visible, CornerRadius::ZERO),
+        );
+        painter.rect(visible, CornerRadius::ZERO, t.panel, egui::Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
+        let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+        body.set_clip_rect(visible);
+        if !open {
+            body.disable();
+            body.set_opacity(ui.opacity());
+        }
+        sections(app, &mut body, t);
+        // The area covers all of it, so a press on its background never reaches the page.
+        ui.expand_to_include_rect(visible);
+    });
+    let pressed_outside =
+        ctx.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| p.y > top && p.y < bottom && !visible.contains(p)));
+    if open && pressed_outside && !egui::Popup::is_any_open(ctx) {
+        app.margin_chrome.sidebar_open = false;
+    }
 }
 
 /// The sidebar's three parts: buttons and the document card, the pane, the tab strip.

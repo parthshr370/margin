@@ -14,6 +14,8 @@ pub const HEIGHT: f32 = 44.0;
 const BUTTON: f32 = 30.0;
 /// Space kept between the centred title and the button clusters.
 const TITLE_GAP: f32 = 16.0;
+/// Below this header width the Tools button drops its word, leaving the title more room.
+const COMPACT_BELOW: f32 = 760.0;
 
 /// The document menu, top to bottom; `None` is a separator, `Some("export")` the Export submenu.
 const DOCUMENT_MENU: &[Option<&str>] = &[
@@ -84,7 +86,13 @@ fn left_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     ui.add_space(4.0);
     let tools_open = open && app.margin_chrome.tab == SidebarTab::Tools;
-    if look::text_button(ui, "wrench", "Tools", BUTTON, tools_open, "All tools").clicked() {
+    let compact = ui.max_rect().width() < COMPACT_BELOW;
+    let tools = if compact {
+        look::icon_button(ui, "wrench", BUTTON, tools_open, "Tools", None)
+    } else {
+        look::text_button(ui, "wrench", "Tools", BUTTON, tools_open, "All tools")
+    };
+    if tools.clicked() {
         if tools_open {
             app.margin_chrome.sidebar_open = false;
         } else {

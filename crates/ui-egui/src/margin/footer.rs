@@ -72,7 +72,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 command = zoom_group(ui, &t, view, &steps, &keys);
                 ui.add_space(GAP_LARGE);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.allocate_ui(vec2(STATUS_WIDTH, HEIGHT), |ui| {
+                    // Optional detail yields first: the scrubber takes what is left (and hides
+                    // under its least width), then the status narrows, clipped; the page field
+                    // and zoom never move.
+                    let status_width = STATUS_WIDTH.min(ui.available_width()).max(0.0);
+                    ui.allocate_ui(vec2(status_width, HEIGHT), |ui| {
+                        ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                         save_command = super::saving::show(ui, &t, &save_line);
                     });
                     ui.add_space(GAP_LARGE);

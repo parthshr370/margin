@@ -319,11 +319,17 @@ pub struct Sidebar {
     pub visible: bool,
     /// the first start's tab; later starts reopen the last tab used (never Find)
     pub tab: SidebarTab,
+    /// windows narrower than this get the sidebar over the page instead of beside it; 0 = always beside
+    #[schemars(range(max = 10_000))]
+    pub overlay_below_px: u32,
 }
+
+/// The window width under which the sidebar floats over the page (CUSTOMIZATION §1).
+const DEFAULT_OVERLAY_BELOW_PX: u32 = 1100;
 
 impl Default for Sidebar {
     fn default() -> Self {
-        Self { visible: true, tab: SidebarTab::Contents }
+        Self { visible: true, tab: SidebarTab::Contents, overlay_below_px: DEFAULT_OVERLAY_BELOW_PX }
     }
 }
 
