@@ -33,6 +33,7 @@ pub mod saving;
 pub mod scroll_step;
 pub mod scrubber;
 pub mod selection;
+pub mod settings;
 pub mod settings_watch;
 pub mod sidebar;
 #[cfg(not(target_arch = "wasm32"))]

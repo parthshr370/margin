@@ -365,6 +365,15 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
     report(app, &problems, true);
 }
 
+/// Margin itself just wrote `settings.jsonc` (the Settings window): read it again now, so what
+/// that window shows and the next document opened follow at once. Problems are reported as on
+/// any reload. The watch still sees the save and reloads once more after the debounce.
+pub(crate) fn reload_now(app: &mut PdfCraftApp) {
+    let Some(loaded) = app.margin_keys.loaded.as_mut() else { return };
+    let problems = loaded.reload();
+    report(app, &problems, false);
+}
+
 /// Resolves this frame's key presses against the keymap and runs what they bind, then gives the
 /// page this frame's share of a screen step (`margin::scroll_step`). A matched key (and the text
 /// it types) is taken out of the input, so nothing else acts on it; Escape stays in for the

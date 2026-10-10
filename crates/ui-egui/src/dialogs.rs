@@ -19,6 +19,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.view_draft = None;
         return;
     };
+    if crate::margin::settings::owns(app, dialog) {
+        crate::margin::settings::show(app, ctx);
+        return;
+    }
     // Seed the editable Description fields from the document when the dialog opens.
     if let (Dialog::Properties(_), Some((_, id))) = (dialog, app.active_ids())
         && app.props_draft.as_ref().is_none_or(|(d, _)| *d != id)
