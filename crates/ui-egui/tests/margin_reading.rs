@@ -455,6 +455,8 @@ fn a_highlight_autosaves_within_two_seconds() {
     let id = h.state().views[0].id;
     assert!(h.state().session.get(id).unwrap().dirty, "the highlight is an unsaved change");
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saving);
+    h.run_steps(1);
+    assert_eq!(h.state().window_title, "• text.pdf — Margin", "the window marks unsaved edits");
     let mut waited = 0.0;
     while h.state().session.get(id).unwrap().dirty && waited < 2.0 {
         wait(&mut h, STEP_SECS);
@@ -462,6 +464,8 @@ fn a_highlight_autosaves_within_two_seconds() {
     }
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: true }, "saved within 2 s");
     h.get_by_label("Saved");
+    h.run_steps(1);
+    assert_eq!(h.state().window_title, "text.pdf — Margin", "the mark clears after the save");
     let bytes = std::fs::read(place.doc()).unwrap();
     assert!(bytes.windows(10).any(|w| w == b"/Highlight"), "the highlight is in the file");
     assert!(h.state().toast.as_ref().is_none_or(|t| !t.0.starts_with("Saved")), "no toast for an autosave");

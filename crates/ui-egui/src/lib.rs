@@ -1799,6 +1799,7 @@ impl eframe::App for PdfCraftApp {
             .map(|d| d.display_name())
             .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
             .map_or_else(|| self.flavor.app_name().to_owned(), |name| format!("{name} — {}", self.flavor.app_name()));
+        let title = if self.flavor == Flavor::Margin { margin::header::window_title(self, title) } else { title };
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;

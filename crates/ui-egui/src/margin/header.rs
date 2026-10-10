@@ -16,6 +16,8 @@ const BUTTON: f32 = 30.0;
 const TITLE_GAP: f32 = 16.0;
 /// Below this header width the Tools button drops its word, leaving the title more room.
 const COMPACT_BELOW: f32 = 760.0;
+/// The header title's tooltip wraps at this width, so a long path stays a readable block.
+const TOOLTIP_WIDTH: f32 = 360.0;
 
 /// The document menu, top to bottom; `None` is a separator, `Some("export")` the Export submenu,
 /// `Some("recent")` the Recent submenu.
@@ -142,8 +144,17 @@ fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The window's title in Margin: PdfCraft's `name — Margin` (`fallback`, built from the
+/// document's display name or title preference), with a leading `•` while the active document has
+/// unsaved edits. Only the dirty flag adds to it, so scrolling never changes it.
+pub(crate) fn window_title(app: &PdfCraftApp, fallback: String) -> String {
+    let dirty = app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|doc| doc.dirty);
+    if dirty { format!("• {fallback}") } else { fallback }
+}
+
 /// Title and current section, centred on `full` and clipped to the space the buttons leave
-/// (also the full-screen bar's, `margin::focus`).
+/// (also the full-screen bar's, `margin::focus`). Hovering it shows the whole name, the file's
+/// location and the section, which the clipped line may hide.
 pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui::Rect, left_end: f32, right_start: f32) {
     let center = full.center().x;
     let half = (center - left_end).min(right_start - center) - TITLE_GAP;
@@ -152,25 +163,56 @@ pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui
     }
     let mut job = egui::text::LayoutJob::default();
     let format = |size: f32, color| egui::TextFormat { font_id: theme::regular(size), color, ..Default::default() };
+    let mut identity = None;
     match app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) {
         Some((view, doc)) => {
             let name = doc.info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
             job.append(&name, 0.0, format(12.5, t.text_muted));
-            let section = current_section(&doc.info.outline, view.current).and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.clone()));
-            if let Some(section) = section {
+            let section = current_section(&doc.info.outline, view.current).and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.trim().to_owned()));
+            if let Some(section) = &section {
                 job.append("  ·  ", 0.0, format(12.5, t.text_faint));
-                job.append(section.trim(), 0.0, format(12.5, t.text));
+                job.append(section, 0.0, format(12.5, t.text));
             }
             if doc.dirty {
                 job.append("  •", 0.0, format(12.5, t.accent));
             }
+            identity = Some(Identity { name, file: doc.path.clone().unwrap_or_else(|| doc.name.clone()), section, unsaved: doc.dirty });
         }
         None => job.append("Margin", 0.0, format(12.5, t.text_muted)),
     }
     job.wrap = egui::text::TextWrapping::truncate_at_width(half * 2.0);
     let galley = ui.painter().layout_job(job);
     let pos = egui::pos2(center - galley.size().x / 2.0, full.center().y - galley.size().y / 2.0);
+    let rect = egui::Rect::from_min_size(pos, galley.size());
     ui.painter().galley(pos, galley, t.text);
+    if let Some(identity) = identity {
+        let resp = ui.interact(rect, ui.id().with("margin-header-title"), egui::Sense::hover());
+        look::tooltip_ui(&resp, |ui| identity.show(ui));
+    }
+}
+
+/// What the header title's tooltip says about the active document.
+struct Identity {
+    name: String,
+    /// The file's path, or its name when it has no file yet.
+    file: String,
+    section: Option<String>,
+    unsaved: bool,
+}
+
+impl Identity {
+    fn show(self, ui: &mut egui::Ui) {
+        let t = Tokens::get(ui.ctx());
+        ui.set_max_width(TOOLTIP_WIDTH);
+        ui.label(egui::RichText::new(self.name).color(t.text));
+        ui.label(egui::RichText::new(self.file).color(t.text_muted).size(11.5));
+        if let Some(section) = self.section {
+            ui.label(egui::RichText::new(section).color(t.text_muted));
+        }
+        if self.unsaved {
+            ui.label(egui::RichText::new("Unsaved changes").color(t.accent));
+        }
+    }
 }
 
 /// One registered command as a menu row: its live label, shortcut and enabled state.
