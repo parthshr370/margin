@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, TextureOptions, pos2, vec2};
 use serde_json::{Map, Value};
 
+use super::figures::{Figures, Frame, Raster};
 use super::look::{self, CONTROL_ROW, GAP, GAP_LARGE, GAP_SECTION, Segment};
 use super::motion;
 use super::pagecolor::{BRIGHTNESS_RANGE, CONTRAST_RANGE, NEUTRAL_PERCENT, PageColor, PageMode};
@@ -104,11 +105,13 @@ pub fn page_color_for(app: &PdfCraftApp, index: usize, ctx: &egui::Context) -> O
 /// Pages within this distance of the current page keep their source pixels for recolouring.
 pub(crate) const SOURCE_NEAR: usize = 2;
 
-/// One document view's recolouring: the colour in effect and the source pixels of nearby pages.
+/// One document view's recolouring: the colour in effect, the source pixels of nearby pages and
+/// each page's figures.
 #[derive(Default)]
 pub struct PageColorCache {
     color: Option<PageColor>,
     sources: HashMap<usize, Source>,
+    figures: Figures,
 }
 
 struct Source {
@@ -143,27 +146,54 @@ impl PageColorCache {
         Color32::from_rgb(r, g, b)
     }
 
-    /// Turn a rendered raster into a texture image in the current colour. For a whole page
-    /// (`page` is `Some`) near `current`, keep the source pixels to recolour it later.
-    pub fn image(&mut self, page: Option<usize>, current: usize, size: [usize; 2], mut rgba: Vec<u8>) -> egui::ColorImage {
-        let Some(color) = self.color else { return egui::ColorImage::from_rgba_premultiplied(size, &rgba) };
-        if let Some(page) = page {
+    /// Turn a rendered raster into a texture image in the current colour. A whole page near
+    /// `current` keeps its source pixels to recolour later; a whole page also settles the page's
+    /// figures when the colour wants them (`margin::figures`). The flag: this page's tiles were
+    /// coloured before its figures were known and are out of date.
+    pub(crate) fn image(&mut self, doc: &pdfcraft_engine::Document, raster: Raster, current: usize) -> (egui::ColorImage, bool) {
+        let Some(color) = self.color else { return (egui::ColorImage::from_rgba_premultiplied(raster.size, &raster.rgba), false) };
+        let info = doc.info.pages.get(raster.page);
+        let frame = Frame::of(&raster, info);
+        let Raster { page, tile, size, mut rgba, .. } = raster;
+        if tile.is_none() {
             if page.abs_diff(current) <= SOURCE_NEAR {
                 self.sources.insert(page, Source { size, rgba: rgba.clone() });
             } else {
                 self.sources.remove(&page);
             }
         }
-        color.apply(&mut rgba, size[0], size[1]);
-        egui::ColorImage::from_rgba_premultiplied(size, &rgba)
+        let mut stale_tiles = false;
+        let figures = if !color.wants_figures() {
+            &[][..]
+        } else if tile.is_some() {
+            self.figures.sync_generation(doc.edit_generation());
+            self.figures.for_tile(page)
+        } else {
+            self.figures.sync_generation(doc.edit_generation());
+            self.figures.learn_images(page, info, || doc.page_images(page).into_iter().map(|image| image.rect).collect());
+            stale_tiles = self.figures.decide(page, &rgba, size[0], size[1]);
+            self.figures.decided(page)
+        };
+        color.apply(&mut rgba, size[0], size[1], &frame.all_pixels(figures));
+        (egui::ColorImage::from_rgba_premultiplied(size, &rgba), stale_tiles)
     }
 
-    /// Recolour `page`'s texture in place from its kept source. False when there is no source
-    /// (the page must be rendered again).
-    pub fn recolor(&self, page: usize, tex: &mut TextureHandle) -> bool {
+    /// Recolour `page`'s texture in place from its kept source. False when there is no source,
+    /// or its figures are wanted and its images not looked up yet (the page must be rendered
+    /// again).
+    pub fn recolor(&mut self, page: usize, tex: &mut TextureHandle) -> bool {
         let (Some(color), Some(source)) = (self.color, self.sources.get(&page)) else { return false };
+        let [width, height] = source.size;
+        if color.wants_figures() && !self.figures.is_decided(page) {
+            if !self.figures.knows_images(page) {
+                return false;
+            }
+            // A colour change clears every tile already (`canvas`), so no tile is out of date.
+            self.figures.decide(page, &source.rgba, width, height);
+        }
+        let figures = if color.wants_figures() { Frame::whole(width, height).all_pixels(self.figures.decided(page)) } else { Vec::new() };
         let mut rgba = source.rgba.clone();
-        color.apply(&mut rgba, source.size[0], source.size[1]);
+        color.apply(&mut rgba, width, height, &figures);
         tex.set(egui::ColorImage::from_rgba_premultiplied(source.size, &rgba), TextureOptions::LINEAR);
         true
     }
@@ -342,7 +372,7 @@ fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
     });
     ui.add_space(GAP);
     if shown.mode.offers_keep_hues() {
-        let sub = i18n::t("Ink and Mono only: figures get Night colors, not two-tone");
+        let sub = i18n::t("Ink and Mono only: photos the page embeds keep their colours; drawings stay two-tone");
         if switch_row(ui, t, i18n::t("Keep figure hues"), Some(sub), state.color.keep_hues) {
             state.color.keep_hues = !state.color.keep_hues;
         }
@@ -643,22 +673,37 @@ mod tests {
         assert!(s.set_option("purple").is_err());
     }
 
+    /// A blank one-page PDF.
+    const BLANK: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    fn whole_page(page: usize) -> Raster {
+        Raster { page, tile: None, scale: 1.0, size: [1, 1], rgba: vec![255; 4] }
+    }
+
     #[test]
     fn cache_keeps_sources_near_the_current_page_only() {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open("blank.pdf", None, std::sync::Arc::new(BLANK.to_vec()), None).expect("opens");
+        let doc = session.get(id).expect("open");
         let mut cache = PageColorCache::default();
         assert!(!cache.configure(None));
         let night = PageColor { mode: PageMode::Night, ..PageColor::default() };
         assert!(cache.configure(Some(night)));
         assert!(!cache.configure(Some(night)));
-        let img = cache.image(Some(3), 3, [1, 1], vec![255, 255, 255, 255]);
+        let (img, _) = cache.image(doc, whole_page(3), 3);
         assert_eq!(img.pixels[0], Color32::from_rgb(0x14, 0x13, 0x12));
-        let _ = cache.image(Some(9), 3, [1, 1], vec![255; 4]);
+        let _ = cache.image(doc, whole_page(9), 3);
         assert!(cache.sources.contains_key(&3) && !cache.sources.contains_key(&9));
         cache.retain_near(8);
         assert!(cache.sources.is_empty());
         // PdfCraft: pixels pass through and nothing is kept.
         assert!(cache.configure(None));
-        let img = cache.image(Some(0), 0, [1, 1], vec![255; 4]);
+        let (img, _) = cache.image(doc, whole_page(0), 0);
         assert_eq!(img.pixels[0], Color32::WHITE);
         assert!(cache.sources.is_empty());
     }

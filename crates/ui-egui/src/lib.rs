@@ -1776,7 +1776,7 @@ impl eframe::App for PdfCraftApp {
         // Pull finished renders into textures for every open document.
         for view in &mut self.views {
             if let Some(doc) = self.session.get(view.id) {
-                view.receive(ctx, &doc.renderer);
+                view.receive(ctx, doc);
             }
         }
         // Margin: keep the reader's place, save reading state and autosave (after renders, which

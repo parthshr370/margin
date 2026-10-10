@@ -138,7 +138,7 @@ pub struct View {
     pub page_color: PageColor,
     /// night when the OS is dark, paper when light; a manual pick sets false for that document
     pub follow_system: bool,
-    /// ink and mono: figure regions get night colours instead of two-tone (ImageOps.figures, PERF-O2)
+    /// ink and mono: photos the page embeds (and photo-like areas of scans) keep their colours as in night instead of two-tone; vector drawings stay two-tone
     pub keep_figures: bool,
     /// percent; 70..115 (ImageOps.brightness = value / 100)
     #[schemars(range(min = 70, max = 115))]

@@ -10,6 +10,7 @@
 
 pub mod contents;
 pub mod display;
+pub mod figures;
 pub mod find;
 pub mod focus;
 pub mod footer;

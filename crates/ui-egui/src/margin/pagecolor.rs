@@ -5,15 +5,17 @@
 //! - Paper: the page as rendered.
 //! - Sepia: white becomes `#f1e8d0`, ink stays dark (a multiply).
 //! - Night: invert, then rotate the hue by 180°, so lightness flips and hue stays (blue boxes stay
-//!   blue). Black maps to `#141312`, white to `#ebe6e1`. Photo-like regions are left as they are.
+//!   blue). Black maps to `#141312`, white to `#ebe6e1`. Figures are left as they are.
 //! - Ink: two-tone on luma, `#121212` paper and `#ebe6e1` text.
 //! - Mono: black and white with a cut-off (the contrast slider), into the same palette. The cut-off
 //!   is a short ramp, not a step, so glyph edges keep their antialiasing.
 //!
 //! Brightness and contrast apply after the mode, like CSS `brightness()` and `contrast()`. In Ink
-//! and Mono, "keep figure hues" draws photo-like regions as Night does (unchanged) instead of
-//! two-tone. Figures are found per block by colourfulness and by how spread out the block's
-//! lightness is (text is two levels, paper and ink; photos are many); see [`FigureMask`].
+//! and Mono, "keep figure hues" draws figures as Night does (unchanged) instead of two-tone.
+//! Which parts of a page are figures is decided per page by `margin::figures` and handed to
+//! [`PageColor::apply`]; this module supplies its raster tests: blocks found by colourfulness and
+//! by how spread out their lightness is (text is two levels, paper and ink; photos are many), see
+//! [`detect_figures`] and [`is_photo_like`].
 //!
 //! Input is the renderer's premultiplied RGBA. Every size comes from the renderer, so nothing
 //! here indexes with an unchecked position: rows and pixels are walked with `chunks_exact`.
@@ -50,7 +52,7 @@ impl PageMode {
         match self {
             PageMode::Paper => "The page as printed. Brightness and contrast still apply.",
             PageMode::Sepia => "Warm paper for daylight. White becomes #f1e8d0 and ink stays dark.",
-            PageMode::Night => "Light flips to dark, hue stays. Blue boxes stay blue, and photos stay as they are.",
+            PageMode::Night => "Light flips to dark, hue stays, so blue boxes stay blue. Photos the page embeds keep their colours.",
             PageMode::Ink => "Pure two-tone: #121212 paper, #ebe6e1 text. Color is gone, except figures if kept.",
             PageMode::Mono => "Hard black and white with a cut-off slider. Best for scans and faint print.",
         }
@@ -152,6 +154,16 @@ impl PageColor {
         c.mode == PageMode::Paper && c.brightness == NEUTRAL_PERCENT && c.contrast == NEUTRAL_PERCENT
     }
 
+    /// Whether figures are drawn apart from the page: always in Night, in Ink and Mono when their
+    /// hues are kept.
+    pub fn wants_figures(self) -> bool {
+        match self.mode {
+            PageMode::Night => true,
+            PageMode::Ink | PageMode::Mono => self.keep_hues,
+            PageMode::Paper | PageMode::Sepia => false,
+        }
+    }
+
     /// Identifies the pixels this choice produces: equal keys give equal output, so a texture
     /// recoloured under one key is current for every choice with the same key. 0 is the identity.
     pub fn key(self) -> u64 {
@@ -164,19 +176,17 @@ impl PageColor {
         mode | (u64::from(c.brightness) << 8) | (u64::from(c.contrast) << 24) | (keep << 40)
     }
 
-    /// Recolour premultiplied RGBA pixels of a `width`×`height` raster in place. A buffer whose
-    /// length doesn't match the size is left as it is.
-    pub fn apply(self, rgba: &mut [u8], width: usize, height: usize) {
+    /// Recolour premultiplied RGBA pixels of a `width`×`height` raster in place, leaving the
+    /// `figures` (pixel rectangles `[x0, y0, x1, y1)` of this raster) to brightness and contrast
+    /// when the mode [wants figures](Self::wants_figures). A buffer whose length doesn't match
+    /// the size is left as it is.
+    pub fn apply(self, rgba: &mut [u8], width: usize, height: usize, figures: &[[usize; 4]]) {
         let c = self.clamped();
         if c.is_identity() || width == 0 || height == 0 || width.checked_mul(height).and_then(|n| n.checked_mul(4)) != Some(rgba.len()) {
             return;
         }
         let lut = Luts::new(c);
-        let figures = match c.mode {
-            PageMode::Night => FigureMask::detect(rgba, width, height),
-            PageMode::Ink | PageMode::Mono if c.keep_hues => FigureMask::detect(rgba, width, height),
-            PageMode::Paper | PageMode::Sepia | PageMode::Ink | PageMode::Mono => FigureMask::default(),
-        };
+        let figures = if c.wants_figures() { FigureMask::new(figures) } else { FigureMask::default() };
         for_row_bands(rgba, width, |first_row, band| {
             let mut segments = Vec::new();
             for (dy, row) in band.chunks_exact_mut(width * 4).enumerate() {
@@ -340,13 +350,24 @@ const PAPER_MAX_CHROMA: u8 = 16;
 /// that merely touch a photo (paper, or a line of text beside it) are left out.
 const FIGURE_MIN_ROW_INK: f32 = 0.5;
 
-/// Photo-like regions of a raster, as pixel rectangles `[x0, y0, x1, y1)` sorted by `x0`.
+/// Figure regions of a raster, as pixel rectangles `[x0, y0, x1, y1)` sorted by `x0`.
 #[derive(Debug, Default)]
 struct FigureMask {
     rects: Vec<[usize; 4]>,
 }
 
+/// The raster heuristic's figures of a whole-page raster: pixel rectangles `[x0, y0, x1, y1)`.
+pub(super) fn detect_figures(rgba: &[u8], width: usize, height: usize) -> Vec<[usize; 4]> {
+    FigureMask::detect(rgba, width, height).rects
+}
+
 impl FigureMask {
+    fn new(rects: &[[usize; 4]]) -> Self {
+        let mut rects = rects.to_vec();
+        rects.sort_unstable();
+        Self { rects }
+    }
+
     /// Split row `y` of a `width`-pixel raster into runs of page and figure pixels.
     fn row_segments(&self, y: usize, width: usize, out: &mut Vec<(usize, usize, Op)>) {
         out.clear();
@@ -420,45 +441,68 @@ impl FigureMask {
     }
 }
 
+/// Colour and lightness statistics of some pixels.
+#[derive(Clone, Copy, Default)]
+struct Tally {
+    chroma: u64,
+    bins: [u32; LUMA_BINS],
+}
+
+impl Tally {
+    fn add(&mut self, px: &[u8; 4]) {
+        let Some((rgb, alpha)) = opaque_rgb(px) else { return };
+        let [r, g, b] = unpremultiply(rgb, alpha);
+        self.chroma += u64::from(r.max(g).max(b) - r.min(g).min(b));
+        if let Some(bin) = self.bins.get_mut(usize::from(luma(r, g, b)) * LUMA_BINS / 256) {
+            *bin += 1;
+        }
+    }
+
+    /// Colourful, or lightness spread over many levels (a photo, not text on paper).
+    fn photo_like(&self) -> bool {
+        let pixels: u32 = self.bins.iter().sum();
+        if pixels == 0 {
+            return false;
+        }
+        let mut sorted = self.bins;
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        let top_two = sorted.iter().take(2).sum::<u32>();
+        let spread = (pixels - top_two) as f32 / pixels as f32;
+        self.chroma / u64::from(pixels) >= u64::from(FIGURE_MIN_CHROMA) || spread > FIGURE_MIN_SPREAD
+    }
+}
+
 /// Per `block`×`block` cell (row-major, `cells` of them): is it colourful or photo-like?
 fn photo_like_blocks(rgba: &[u8], width: usize, block: usize, cells: usize) -> Vec<bool> {
     let cols = width.div_ceil(block);
-    let mut chroma = vec![0u32; cells];
-    let mut bins = vec![[0u32; LUMA_BINS]; cells];
+    let mut tallies = vec![Tally::default(); cells];
     for (y, row) in rgba.chunks_exact(width * 4).enumerate() {
         let base = (y / block) * cols;
         for (x, px) in row.as_chunks::<4>().0.iter().enumerate() {
-            let Some((rgb, alpha)) = opaque_rgb(px) else { continue };
-            let [r, g, b] = unpremultiply(rgb, alpha);
-            let i = base + x / block;
-            if let (Some(c), Some(h)) = (chroma.get_mut(i), bins.get_mut(i)) {
-                *c += u32::from(r.max(g).max(b) - r.min(g).min(b));
-                if let Some(bin) = h.get_mut(usize::from(luma(r, g, b)) * LUMA_BINS / 256) {
-                    *bin += 1;
-                }
+            if let Some(tally) = tallies.get_mut(base + x / block) {
+                tally.add(px);
             }
         }
     }
-    chroma
-        .iter()
-        .zip(&bins)
-        .map(|(c, h)| {
-            let n: u32 = h.iter().sum();
-            if n == 0 {
-                return false;
-            }
-            let mut sorted = *h;
-            sorted.sort_unstable_by(|a, b| b.cmp(a));
-            let top_two = sorted.iter().take(2).sum::<u32>();
-            let spread = (n - top_two) as f32 / n as f32;
-            c / n >= FIGURE_MIN_CHROMA || spread > FIGURE_MIN_SPREAD
-        })
-        .collect()
+    tallies.iter().map(Tally::photo_like).collect()
+}
+
+/// Whether the pixels of `[x0, y0, x1, y1)` in a `width`-pixel raster are, taken together,
+/// colourful or photo-like.
+pub(super) fn is_photo_like(rgba: &[u8], width: usize, [x0, y0, x1, y1]: [usize; 4]) -> bool {
+    let mut tally = Tally::default();
+    for row in rgba.chunks_exact(width * 4).skip(y0).take(y1.saturating_sub(y0)) {
+        let Some(run) = row.get(x0 * 4..x1 * 4) else { continue };
+        for px in run.as_chunks::<4>().0 {
+            tally.add(px);
+        }
+    }
+    tally.photo_like()
 }
 
 /// Shrink `[x0, y0, x1, y1)` to its first and last rows, then columns, that are mostly not
 /// blank paper. `None` when no row is.
-fn inked_bounds(rgba: &[u8], width: usize, [x0, y0, x1, y1]: [usize; 4]) -> Option<[usize; 4]> {
+pub(super) fn inked_bounds(rgba: &[u8], width: usize, [x0, y0, x1, y1]: [usize; 4]) -> Option<[usize; 4]> {
     let inked = |x: usize, y: usize| {
         let px = rgba.as_chunks::<4>().0.get(y * width + x)?;
         let (rgb, alpha) = opaque_rgb(px)?;
@@ -520,10 +564,16 @@ mod tests {
         PageColor { mode: PageMode::Night, ..PageColor::default() }
     }
 
+    /// `color` with the raster heuristic's figures, as a page without image boxes gets.
+    fn apply_detected(color: PageColor, rgba: &mut [u8], width: usize, height: usize) {
+        let figures = detect_figures(rgba, width, height);
+        color.apply(rgba, width, height, &figures);
+    }
+
     #[test]
     fn paper_at_neutral_is_untouched() {
         let mut rgba = page();
-        PageColor::default().apply(&mut rgba, W, H);
+        PageColor::default().apply(&mut rgba, W, H, &[]);
         assert_eq!(rgba, page());
         assert_eq!(PageColor::default().key(), 0);
     }
@@ -531,7 +581,7 @@ mod tests {
     #[test]
     fn night_inverts_text_and_keeps_the_saturated_block() {
         let mut rgba = page();
-        night().apply(&mut rgba, W, H);
+        apply_detected(night(), &mut rgba, W, H);
         assert_eq!(at(&rgba, 4, 4), NIGHT_DARK, "white paper becomes the dark night paper");
         assert_eq!(at(&rgba, 30, 25), LIGHT_INK, "black text becomes light ink");
         assert_eq!(at(&rgba, 88, 208), [0xD0, 0x20, 0x30], "the photo-like block is not inverted");
@@ -549,7 +599,7 @@ mod tests {
                 px[..3].copy_from_slice(&[0xCF, 0xE0, 0xF3]);
             }
         }
-        night().apply(&mut rgba, W, H);
+        apply_detected(night(), &mut rgba, W, H);
         let [r, g, b] = at(&rgba, 4, 4);
         assert!(b > r && b > g && u32::from(r) + u32::from(g) + u32::from(b) < 3 * 128, "dark and blue: {r} {g} {b}");
     }
@@ -557,13 +607,13 @@ mod tests {
     #[test]
     fn ink_is_two_tone_unless_figures_are_kept() {
         let mut flat = page();
-        PageColor { mode: PageMode::Ink, keep_hues: false, ..PageColor::default() }.apply(&mut flat, W, H);
+        apply_detected(PageColor { mode: PageMode::Ink, keep_hues: false, ..PageColor::default() }, &mut flat, W, H);
         let [r, g, b] = at(&flat, 88, 208);
         assert!(r.abs_diff(g) < 12 && g.abs_diff(b) < 12, "the block turned grey: {r} {g} {b}");
         assert_eq!(at(&flat, 4, 4), INK_DARK);
 
         let mut kept = page();
-        PageColor { mode: PageMode::Ink, keep_hues: true, ..PageColor::default() }.apply(&mut kept, W, H);
+        apply_detected(PageColor { mode: PageMode::Ink, keep_hues: true, ..PageColor::default() }, &mut kept, W, H);
         assert_eq!(at(&kept, 88, 208), [0xD0, 0x20, 0x30]);
         let [pr, pg, pb] = at(&kept, 4, 4);
         assert!(pr < 0x20 && pg < 0x20 && pb < 0x20, "paper is dark: {pr} {pg} {pb}");
@@ -573,7 +623,7 @@ mod tests {
     fn mono_cutoff_moves_with_contrast() {
         let grey = |contrast| {
             let mut px = vec![0x80, 0x80, 0x80, 0xFF];
-            PageColor { mode: PageMode::Mono, contrast, keep_hues: false, ..PageColor::default() }.apply(&mut px, 1, 1);
+            PageColor { mode: PageMode::Mono, contrast, keep_hues: false, ..PageColor::default() }.apply(&mut px, 1, 1, &[]);
             px[0]
         };
         // Mid grey is (almost) paper at the lowest cut-off and ink at the highest.
@@ -586,7 +636,7 @@ mod tests {
         // A glyph edge: black ink, three coverage levels, white paper.
         let levels = [0x00u8, 0x60, 0x80, 0xA0, 0xFF];
         let mut row: Vec<u8> = levels.iter().flat_map(|&v| [v, v, v, 0xFF]).collect();
-        PageColor { mode: PageMode::Mono, keep_hues: false, ..PageColor::default() }.apply(&mut row, levels.len(), 1);
+        PageColor { mode: PageMode::Mono, keep_hues: false, ..PageColor::default() }.apply(&mut row, levels.len(), 1, &[]);
         let out: Vec<u8> = row.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
         assert_eq!(out.first(), Some(&LIGHT_INK[0]), "ink is light");
         assert_eq!(out.last(), Some(&MONO_DARK[0]), "paper is dark");
@@ -596,24 +646,24 @@ mod tests {
     #[test]
     fn brightness_and_contrast_apply_to_paper() {
         let mut px = vec![200, 100, 50, 255];
-        PageColor { brightness: 80, ..PageColor::default() }.apply(&mut px, 1, 1);
+        PageColor { brightness: 80, ..PageColor::default() }.apply(&mut px, 1, 1, &[]);
         assert_eq!(px, vec![160, 80, 40, 255]);
         let mut px = vec![200, 100, 50, 255];
-        PageColor { contrast: 150, ..PageColor::default() }.apply(&mut px, 1, 1);
+        PageColor { contrast: 150, ..PageColor::default() }.apply(&mut px, 1, 1, &[]);
         assert_eq!(px, vec![236, 86, 11, 255]);
     }
 
     #[test]
     fn sepia_tints_white_and_keeps_black() {
         let mut px = vec![255, 255, 255, 255, 0, 0, 0, 255];
-        PageColor { mode: PageMode::Sepia, ..PageColor::default() }.apply(&mut px, 2, 1);
+        PageColor { mode: PageMode::Sepia, ..PageColor::default() }.apply(&mut px, 2, 1, &[]);
         assert_eq!(px, vec![0xF1, 0xE8, 0xD0, 255, 0, 0, 0, 255]);
     }
 
     #[test]
     fn transparent_and_premultiplied_pixels_survive() {
         let mut px = vec![0, 0, 0, 0, 128, 128, 128, 128];
-        night().apply(&mut px, 2, 1);
+        night().apply(&mut px, 2, 1, &[]);
         assert_eq!(&px[..4], &[0, 0, 0, 0]);
         // Half-transparent white: night paper at half alpha, still premultiplied.
         assert_eq!(&px[4..], &[10, 10, 9, 128]);
@@ -622,11 +672,11 @@ mod tests {
     #[test]
     fn bad_sizes_are_ignored() {
         let mut px = vec![1, 2, 3, 4, 5];
-        night().apply(&mut px, 1, 1);
+        night().apply(&mut px, 1, 1, &[]);
         assert_eq!(px, vec![1, 2, 3, 4, 5]);
         let mut empty = Vec::new();
-        night().apply(&mut empty, 0, 0);
-        night().apply(&mut empty, usize::MAX, 2);
+        night().apply(&mut empty, 0, 0, &[]);
+        night().apply(&mut empty, usize::MAX, 2, &[]);
     }
 
     #[test]
@@ -657,7 +707,7 @@ mod tests {
             }
         }
         let mut serial = big.clone();
-        night().apply(&mut big, w, h);
+        apply_detected(night(), &mut big, w, h);
         let lut = Luts::new(night());
         let mask = FigureMask::detect(&serial, w, h);
         assert_eq!(mask.rects, vec![[50, 300, 150, 500]]);

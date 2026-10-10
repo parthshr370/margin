@@ -911,8 +911,9 @@ impl DocView {
         }
     }
 
-    /// Pull finished renders into textures.
-    pub fn receive(&mut self, ctx: &egui::Context, pool: &RenderPool) {
+    /// Pull finished renders of `doc` into textures.
+    pub fn receive(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document) {
+        let pool = &doc.renderer;
         let mut got = false;
         // Inline (single-threaded, e.g. web) rendering happens inside try_recv: one page per frame.
         let budget = if pool.is_inline() { 1 } else { usize::MAX };
@@ -947,8 +948,14 @@ impl DocView {
             let img = if r.request.tag & THUMB_TAG != 0 {
                 egui::ColorImage::from_rgba_premultiplied(size, &r.rgba)
             } else {
-                // Margin page colour; whole pages keep their source pixels to recolour later.
-                self.page_color.image(r.request.tile.is_none().then_some(page), self.current, size, r.rgba)
+                // Margin page colour; whole pages keep their source pixels to recolour later and
+                // settle the page's figures, which can put its earlier tiles out of date.
+                let raster = crate::margin::figures::Raster { page, tile: r.request.tile, scale: r.request.scale, size, rgba: r.rgba };
+                let (img, stale_tiles) = self.page_color.image(doc, raster, self.current);
+                if stale_tiles {
+                    self.tiles.retain(|(tile_page, _, _), _| *tile_page != page);
+                }
+                img
             };
             if let Some(t) = r.request.tile {
                 let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
