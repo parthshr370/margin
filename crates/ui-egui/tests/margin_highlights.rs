@@ -110,6 +110,34 @@ fn the_delete_button_removes_the_highlight_and_undo_restores_it() {
     h.get_by_label_contains("highlight, p. 1: quick brown");
 }
 
+/// R8 QoL 23: deleting a mark says so with Undo, on a card inside the reading area above the
+/// footer; Undo restores the mark, and a routine message expires and lets the window go idle.
+#[test]
+fn a_deletion_offers_undo_in_a_toast_above_the_footer() {
+    let mut h = harness("highlight");
+    mark(&mut h, 4, 14);
+    hover_card(&mut h);
+    h.get_by_label("Delete highlight").click();
+    h.run_steps(3);
+    assert_eq!(markup_count(&h), 0);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Highlight deleted"));
+    assert!(h.state().margin_chrome.notices.offers_undo());
+    // The rail's Undo sits halfway down the page; the toast's is the lowest.
+    let page = h.state().views[0].viewport_rect();
+    let undo = h.get_all_by_label("Undo").max_by(|a, b| a.rect().bottom().total_cmp(&b.rect().bottom())).expect("the toast's Undo");
+    assert!(page.contains_rect(undo.rect()), "the toast ({:?}) is inside the reading area ({page:?}), above the footer", undo.rect());
+    undo.click();
+    h.run_steps(3);
+    assert_eq!(markup_count(&h), 1, "Undo restores the mark");
+    let after = h.state().toast.as_ref().map(|t| t.0.clone());
+    assert!(after.as_deref() != Some("Highlight deleted") && !h.state().margin_chrome.notices.offers_undo(), "{after:?}");
+    h.state_mut().notify("Copied");
+    h.run_steps(16);
+    assert!(h.state().toast.is_none(), "a routine message expires");
+    h.try_run().expect("idle");
+    assert_eq!(h.try_run().expect("idle"), 1, "nothing repaints once it has gone");
+}
+
 #[test]
 fn changing_the_colour_updates_the_swatch() {
     let mut h = harness("highlight");

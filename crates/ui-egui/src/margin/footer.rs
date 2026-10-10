@@ -162,7 +162,7 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
     }
     ui.data_mut(|d| match hint {
         Some(message) => _ = d.insert_temp(hint_id, message),
-        None => _ = d.remove::<String>(hint_id),
+        None => d.remove::<String>(hint_id),
     });
     // Read after a refused Enter asked for the focus back: the edit goes on next frame.
     let editing = ui.memory(|m| m.has_focus(id));

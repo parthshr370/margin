@@ -25,7 +25,7 @@ fn fixture() -> Vec<u8> {
          3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
         kids.join(" "),
     );
-    let line = vec![WORD; PER_LINE].join(" ");
+    let line = [WORD; PER_LINE].join(" ");
     for i in 0..PAGES {
         let (page, content) = (page_obj(i), page_obj(i) + 1);
         let lines: String = (0..LINES).map(|_| format!("({line}) Tj T* ")).collect();

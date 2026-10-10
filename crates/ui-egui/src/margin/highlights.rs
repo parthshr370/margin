@@ -201,7 +201,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         }
     });
     if let Some(edit) = out.edit {
-        app.apply_edit(edit);
+        apply(app, edit);
     }
     out.nav
 }
@@ -236,8 +236,17 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str, args: &Value) -> bool {
         };
         Edit::StyleAnnotation { page, index: annot, color: Some(color.rgb_f64()), opacity: None, width: None }
     };
-    app.apply_edit(edit);
+    apply(app, edit);
     true
+}
+
+/// Applies a card's or key's edit; a deletion says so with Undo (`edit.undo`).
+fn apply(app: &mut PdfCraftApp, edit: Edit) {
+    let deleting = matches!(edit, Edit::DeleteAnnotation { .. });
+    app.apply_edit(edit);
+    if deleting && let Some((_, doc)) = app.active_ids() {
+        super::toast::undoable(app, "Highlight deleted", doc);
+    }
 }
 
 /// One comment's card. The whole card is one click target under its own widgets.

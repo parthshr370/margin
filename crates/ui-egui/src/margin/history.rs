@@ -17,13 +17,14 @@ use crate::theme::{self, Tokens};
 
 /// How long the Back pill stays after a jump (the mockup's 6 s).
 const PILL_SECS: f64 = 6.0;
-/// The pill's bottom edge above the page area's (the mockup's 56 px less its 36 px footer).
-const PILL_LIFT: f32 = 20.0;
+/// The pill's bottom edge above the page area's (the mockup's 56 px less its 36 px footer);
+/// Margin's toasts sit on the same line.
+pub(crate) const PILL_LIFT: f32 = 20.0;
 /// The pill's padding around its button, and the shortcut's text size.
 const PILL_PAD: f32 = 4.0;
 const SHORTCUT_TEXT: f32 = 11.0;
-/// The pill floats: the mockup's `0 8px 30px rgba(0,0,0,.5)`.
-const PILL_SHADOW: egui::Shadow = egui::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(128) };
+/// The pill floats: the mockup's `0 8px 30px rgba(0,0,0,.5)` (Margin's toasts share it).
+pub(crate) const PILL_SHADOW: egui::Shadow = egui::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(128) };
 
 /// The exact place a history entry returns to: the reading spot, and the zoom and fit it was
 /// read at.
@@ -81,8 +82,9 @@ pub(crate) fn search_jump(view: &mut DocView) {
 }
 
 /// Every Margin frame, after the page is drawn: the mouse's back/forward buttons, the end of a
-/// search, and the Back pill.
-pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+/// search, and the Back pill. Returns the pill's top edge while it shows, so a toast can sit
+/// above it.
+pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) -> Option<f32> {
     let now = ctx.input(|i| i.time);
     for view in &mut app.views {
         if view.find.is_none() {
@@ -96,7 +98,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         (history.seen_len, history.seen_top) = (len, top);
     }
-    let Some(index) = app.active else { return };
+    let index = app.active?;
     let unobstructed = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open;
     let (back_pressed, forward_pressed) =
         ctx.input(|i| (i.pointer.button_pressed(PointerButton::Extra1), i.pointer.button_pressed(PointerButton::Extra2)));
@@ -107,14 +109,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             view.view_history(true);
         }
     }
-    pill(app, ctx, index, now);
+    pill(app, ctx, index, now)
 }
 
 /// "‹ Back to p. N  Alt+←" above the footer, for [`PILL_SECS`] after a jump; it fades in and out.
-fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) {
+/// Returns its top edge while it shows.
+fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> Option<f32> {
     let key = look::shortcut(app, "reader.back");
-    let Some(view) = app.views.get_mut(index) else { return };
-    let Some(doc) = app.session.get(view.id) else { return };
+    let view = app.views.get_mut(index)?;
+    let doc = app.session.get(view.id)?;
     let left = view.margin.history.pill_since.map_or(0.0, |since| PILL_SECS - (now - since));
     let showing = left > 0.0 && !view.back.is_empty();
     if !showing {
@@ -123,9 +126,9 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) {
     let id = egui::Id::new(("margin-back-pill", view.id));
     let shown = motion::toggle(ctx, id, showing, motion::FADE);
     let area = view.viewport_rect();
-    let Some(place) = view.back.last() else { return };
+    let place = view.back.last()?;
     if shown <= 0.0 || !area.is_positive() {
-        return;
+        return None;
     }
     if showing {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
@@ -141,7 +144,7 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) {
     let t = Tokens::get(ctx);
     let anchor = pos2(area.center().x, area.bottom() - PILL_LIFT + (1.0 - shown) * motion::RISE);
     let mut back = false;
-    egui::Area::new(id).pivot(Align2::CENTER_BOTTOM).fixed_pos(anchor).interactable(showing).show(ctx, |ui| {
+    let drawn = egui::Area::new(id).pivot(Align2::CENTER_BOTTOM).fixed_pos(anchor).interactable(showing).show(ctx, |ui| {
         ui.set_opacity(shown);
         egui::Frame::NONE
             .fill(t.card)
@@ -163,4 +166,5 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) {
     if back && let Some(view) = app.views.get_mut(index) {
         view.view_history(false);
     }
+    Some(drawn.response.rect.top())
 }

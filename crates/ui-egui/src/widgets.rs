@@ -143,6 +143,16 @@ pub struct ProgressNotice {
 
 /// Where the progress notice keeps its height this frame, for placing the toast above it.
 const PROGRESS_HEIGHT: &str = "progress-notice-height";
+/// The progress notice's bottom edge above the window's.
+const PROGRESS_BOTTOM: f32 = 28.0;
+
+/// The top edge of the progress notice drawn this frame, if one is showing, so another notice can
+/// sit above it (Margin's toasts).
+pub(crate) fn progress_notice_top(app: &PdfCraftApp, ctx: &egui::Context) -> Option<f32> {
+    app.progress_notice.as_ref()?;
+    let height = ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_HEIGHT)))?;
+    Some(ctx.content_rect().bottom() - PROGRESS_BOTTOM - height)
+}
 
 /// Draw [`PdfCraftApp::progress_notice`]: the label, a bar that eases towards the fraction with
 /// a light sweeping across it, the percentage and Cancel. Returns true when Cancel was clicked.
@@ -163,7 +173,7 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
     let area = egui::Area::new(egui::Id::new("progress-notice"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(screen.center_bottom() - vec2(0.0, 28.0))
+        .fixed_pos(screen.center_bottom() - vec2(0.0, PROGRESS_BOTTOM))
         .show(ctx, |ui| {
             egui::Frame::NONE.fill(fill).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
                 let width = 340.0_f32.min(screen.width() - 64.0).max(160.0);

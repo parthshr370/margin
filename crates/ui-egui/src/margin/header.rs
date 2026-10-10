@@ -168,7 +168,8 @@ pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui
         Some((view, doc)) => {
             let name = doc.info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
             job.append(&name, 0.0, format(12.5, t.text_muted));
-            let section = current_section(&doc.info.outline, view.current).and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.trim().to_owned()));
+            let section =
+                current_section(&doc.info.outline, view.current).and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.trim().to_owned()));
             if let Some(section) = &section {
                 job.append("  ·  ", 0.0, format(12.5, t.text_faint));
                 job.append(section, 0.0, format(12.5, t.text));

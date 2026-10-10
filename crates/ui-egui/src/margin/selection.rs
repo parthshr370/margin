@@ -307,7 +307,7 @@ fn run(app: &mut PdfCraftApp, ctx: &egui::Context, i: usize, action: Action) {
                     app.notify("Copied callout");
                     close(app, i);
                 }
-                Err(why) => app.notify(why),
+                Err(why) => super::toast::failed(app, why, None),
             }
         }
         Action::OpenInObsidian => {

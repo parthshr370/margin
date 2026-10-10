@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use egui::Pos2;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::margin::obsidian::{self, Request};
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
@@ -142,6 +143,8 @@ fn writing_to_the_note_twice_adds_one_entry() {
     assert!(note.ends_with(&format!(" -->\n{CALLOUT}")), "{note}");
 }
 
+/// A note path leaving the vault is refused; the failure stays on screen (R8 QoL 23) with Retry
+/// until it is dismissed, and a routine message doesn't replace it.
 #[test]
 fn a_note_path_leaving_the_vault_is_refused_with_a_toast() {
     let vault = Vault::new("escape");
@@ -151,8 +154,16 @@ fn a_note_path_leaving_the_vault_is_refused_with_a_toast() {
     // A path that got in some other way (a hand-edited settings file) is refused at write time.
     h.state_mut().notes.note_template = "reading/../../escape.md".into();
     ask(&mut h, Request::Write);
-    assert!(toast(&h).contains("must stay inside the vault"), "{}", toast(&h));
+    let held = h.state().margin_chrome.notices.held().unwrap_or_default().to_owned();
+    assert!(held.contains("must stay inside the vault"), "{held}");
     assert!(!vault.0.join("escape.md").exists() && !vault.dir().join("escape.md").exists());
+    h.state_mut().notify("Copied");
+    h.run_steps(20);
+    assert_eq!(h.state().margin_chrome.notices.held(), Some(held.as_str()), "kept past routine messages");
+    h.get_by_label("Retry");
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.state().margin_chrome.notices.held().is_none());
 }
 
 #[test]

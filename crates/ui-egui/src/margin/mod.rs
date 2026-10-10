@@ -38,6 +38,7 @@ pub mod sidebar;
 pub mod stats;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stats_sheet;
+pub mod toast;
 pub mod trim;
 
 use crate::{PdfCraftApp, RightPanel};
@@ -61,6 +62,8 @@ pub struct ReaderChrome {
     before_find: Option<(SidebarTab, bool)>,
     /// Nothing was restored from a previous run: the first `sync` applies `ui.sidebar`.
     first_start: bool,
+    /// Undo offers and held failures the toast shows (`margin::toast`); never saved.
+    pub notices: toast::Notices,
 }
 
 impl Default for ReaderChrome {
@@ -73,6 +76,7 @@ impl Default for ReaderChrome {
             synced_doc: None,
             before_find: None,
             first_start: true,
+            notices: toast::Notices::default(),
         }
     }
 }
@@ -340,9 +344,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         }
     });
     app.process_pending_edits();
-    if app.active.is_some() {
-        history::show(app, ctx);
-    }
+    let pill_top = if app.active.is_some() { history::show(app, ctx) } else { None };
     drop::hint(app, ctx);
     crate::palette::show(app, ctx);
     crate::dialogs::show(app, ctx);
@@ -352,7 +354,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         stats_sheet::show(app, ctx);
     }
     app.show_progress(ctx);
-    crate::widgets::toast(app, ctx);
+    toast::show(app, ctx, pill_top);
 }
 
 /// The deepest outline entry at or before `page`, in reading order: the section being read.

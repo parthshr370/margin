@@ -427,6 +427,11 @@ pub(crate) fn plain_button(ui: &mut egui::Ui, label: &str) -> Response {
     resp
 }
 
+/// How wide a [`plain_button`] showing `label` is, for laying out what sits beside it.
+pub(crate) fn plain_button_width(ui: &egui::Ui, label: &str) -> f32 {
+    ui.painter().layout_no_wrap(label.to_owned(), theme::medium(BUTTON_TEXT), Color32::PLACEHOLDER).size().x + 2.0 * GAP_LARGE
+}
+
 /// A bordered button `width` wide with an icon and a word, both centred ("Copy all"): the
 /// hover fill when hovered, muted when disabled. Rows of them share the width equally.
 pub(crate) fn chip_button(ui: &mut egui::Ui, icon: &str, label: &str, width: f32) -> Response {

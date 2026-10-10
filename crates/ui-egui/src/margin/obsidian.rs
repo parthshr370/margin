@@ -854,7 +854,12 @@ fn run(app: &mut PdfCraftApp, i: usize, request: Request) {
         Request::ToggleAutoadd => toggle_autoadd(app, i),
     };
     match result {
-        Ok(message) | Err(message) => app.notify(message),
+        Ok(message) => app.notify(message),
+        // A failure stays until dismissed; a failed write offers to write again.
+        Err(message) => {
+            let retry = app.views.get(i).filter(|_| request == Request::Write).map(|v| super::toast::Action::WriteNote(v.id));
+            super::toast::failed(app, message, retry);
+        }
     }
 }
 
@@ -1091,8 +1096,12 @@ fn autoadd(app: &mut PdfCraftApp, i: usize) {
     match write_note(app, i, Some(&ready)) {
         Ok((rel, added)) if added > 0 => app.notify(format!("Added to {rel}")),
         Ok(_) => {}
-        // A failed write is shown once; the highlight stays in the PDF and Write to note retries it.
-        Err(e) => app.notify(e),
+        // A failed write stays on screen until dismissed; the highlight stays in the PDF and Retry
+        // (Write to note) writes it.
+        Err(e) => {
+            let retry = app.views.get(i).map(|v| super::toast::Action::WriteNote(v.id));
+            super::toast::failed(app, e, retry);
+        }
     }
 }
 
