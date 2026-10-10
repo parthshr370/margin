@@ -169,7 +169,7 @@ pub struct View {
     pub scroll_screen: f64,
     /// after a screen step, mark where the previous screen ended (KOReader)
     pub overlap_marker: bool,
-    /// animate screen steps; forced off when the OS asks for reduced motion
+    /// animate screen steps (Space, Page Down); off under ui.reduce_motion
     pub smooth_scroll: bool,
 }
 
@@ -304,7 +304,7 @@ impl Default for Reader {
 pub struct Ui {
     /// annotate rail, visible in annotate mode (mockup:1685)
     pub rail: Rail,
-    /// true = no animation: the sidebar, rail, popovers, hover fills and progress bars change at once
+    /// true = no animation: the sidebar, rail, popovers, hover fills, progress bars and screen steps change at once
     pub reduce_motion: bool,
 }
 

@@ -67,6 +67,8 @@ pub struct DocReading {
     pub(crate) history: super::history::History,
     /// The selection bar: Copy, colours, Underline, Comment, callout (R8 QoL 8).
     pub(crate) selection: super::selection::SelectionBar,
+    /// Space / Page Down gliding by a screen (R8 QoL 15).
+    pub(crate) screen_step: super::scroll_step::ScreenStep,
     /// Fit "read": the widest page `reading_width_px` wide, narrower windows permitting. Ends
     /// when the reader zooms or picks another fit.
     read_fit: Option<ReadFit>,

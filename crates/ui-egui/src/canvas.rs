@@ -31,6 +31,17 @@ const TILE: u32 = 1024;
 /// Longest side of the low-resolution backdrop drawn under tiles.
 const BASE_SIDE: f32 = 2048.0;
 const THUMB_W: f32 = 132.0;
+/// The longest side of a thumbnail raster, in device pixels: well under any GPU's texture limit
+/// (egui panics past it), so a page far taller than wide still gets a (narrower) thumbnail.
+const THUMB_MAX_SIDE: f32 = 1024.0;
+
+/// The render scale of a document's thumbnails: [`THUMB_W`] across its widest page, less when
+/// that would make a page's thumbnail longer than [`THUMB_MAX_SIDE`].
+fn thumb_scale(info: &DocInfo, ppp: f32) -> f32 {
+    let widest = info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
+    let longest = info.pages.iter().map(|p| p.width.max(p.height)).fold(1.0, f32::max);
+    (THUMB_W * ppp / widest).min(THUMB_MAX_SIDE / longest)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fit {
@@ -2069,7 +2080,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     crate::margin::highlights::want_text(view, &mut text_pages);
     queue.extend(text_pages.into_iter().map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: TEXT_TAG }));
     if thumb_pages > 0 {
-        let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
+        let s = thumb_scale(info, ppp);
         for page in 0..thumb_pages {
             if (!view.thumbs.contains_key(&page) || view.stale_thumbs.contains(&page)) && !view.errors.contains_key(&page) {
                 queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG });
@@ -3026,7 +3037,7 @@ fn organize_grid(
         }
     }
     view.auto_scroll.paint(ui, viewport);
-    let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
+    let s = thumb_scale(info, ppp);
     let queue: Vec<RenderRequest> = (0..info.pages.len())
         .filter(|p| (!view.thumbs.contains_key(p) || view.stale_thumbs.contains(p)) && !view.errors.contains_key(p))
         .map(|page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG })

@@ -4,8 +4,9 @@
 //! while a value is still moving, so an idle window stays idle.
 //!
 //! `ui.reduce_motion` in `settings.jsonc` sets every duration to zero (egui's own fades too).
-//! Page rendering and scrolling are never animated, and neither is a page colour switch (a
-//! crossfade would keep two textures per page on screen).
+//! Page rendering is never animated, nor is a page colour switch (a crossfade would keep two
+//! textures per page on screen). Of scrolling, only a screen step moves over time
+//! (`margin::scroll_step`, [`STEP`]); the wheel, touch and drags scroll as they come.
 
 use egui::{Context, Id};
 
@@ -19,9 +20,11 @@ pub const SLIDE: f32 = 0.16;
 pub const RISE: f32 = 4.0;
 /// How far the rail travels from the window edge while it fades in.
 pub const RAIL_SHIFT: f32 = 12.0;
+/// A screen step (Space, Page Down) gliding to its place.
+pub const STEP: f32 = 0.18;
 
 /// Ease out: quick to respond, gentle to land. egui mirrors it on the way back.
-fn ease(t: f32) -> f32 {
+pub(crate) fn ease(t: f32) -> f32 {
     egui::emath::easing::cubic_out(t)
 }
 
@@ -41,7 +44,12 @@ pub(crate) fn sync(ctx: &Context, reduce: bool) {
 
 /// `duration`, or zero when motion is reduced.
 fn time(ctx: &Context, duration: f32) -> f32 {
-    if ctx.data(|d| d.get_temp::<bool>(reduced_id())).unwrap_or(false) { 0.0 } else { duration }
+    if reduced(ctx) { 0.0 } else { duration }
+}
+
+/// Whether `ui.reduce_motion` is on this frame.
+pub(crate) fn reduced(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(reduced_id())).unwrap_or(false)
 }
 
 /// 0 → 1 as `on` turns true over `duration`, eased; back to 0 when it turns false. The first

@@ -22,7 +22,7 @@ use margin_config::{CompileOptions, Compiled, CompiledKeymap, ContextNode, Keyma
 use pdfcraft_engine::commands::{self, CommandSpec, Shortcut};
 use serde_json::Value;
 
-use super::reading;
+use super::{reading, scroll_step};
 use super::settings_watch::SettingsWatch;
 use crate::canvas::{DocView, Fit, PageLayout};
 use crate::{PdfCraftApp, QuickTool};
@@ -365,10 +365,16 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
     report(app, &problems, true);
 }
 
-/// Resolves this frame's key presses against the keymap and runs what they bind. A matched key
-/// (and the text it types) is taken out of the input, so nothing else acts on it; Escape stays in
-/// for the widgets that close on it, as in PdfCraft.
+/// Resolves this frame's key presses against the keymap and runs what they bind, then gives the
+/// page this frame's share of a screen step (`margin::scroll_step`). A matched key (and the text
+/// it types) is taken out of the input, so nothing else acts on it; Escape stays in for the
+/// widgets that close on it, as in PdfCraft.
 pub(crate) fn dispatch(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    resolve_keys(app, ctx);
+    scroll_step::drive(app, ctx);
+}
+
+fn resolve_keys(app: &mut PdfCraftApp, ctx: &egui::Context) {
     ensure_loaded(app, ctx);
     poll(app, ctx);
     let stack = context_stack(app, ctx);
@@ -643,6 +649,11 @@ fn view_command(view: &mut DocView, id: &str, args: &Value, settings: &margin_co
     // Scroll steps in view pixels; settings bound them (1..2000 px, 0.1..1 screens).
     let line = settings.scroll_line_px as f32;
     let screen = (view.viewport_h * settings.scroll_screen as f32).max(line);
+    // Anything but scrolling moves the page elsewhere: what is left of a screen step must not
+    // carry on from there.
+    if !id.starts_with("reader.scroll.") && !id.starts_with("reader.screen.") {
+        view.margin.screen_step.stop();
+    }
     match id {
         "view.zoom.in" => zoom_stop(view, &settings.zoom_steps, true),
         "view.zoom.out" => zoom_stop(view, &settings.zoom_steps, false),
@@ -667,10 +678,15 @@ fn view_command(view: &mut DocView, id: &str, args: &Value, settings: &margin_co
         "reader.scroll.up" => view.key_scroll -= line,
         "reader.screen.down" | "reader.screen.up" => {
             let down = id == "reader.screen.down";
-            if view.layout == PageLayout::Single {
-                view.step_page(down);
-            } else {
-                view.key_scroll += if down { screen } else { -screen };
+            let by = if down { screen } else { -screen };
+            // Single pans an enlarged page to its edge first, then turns the page.
+            let pan = if view.layout == PageLayout::Single { scroll_step::single_pan(view, by) } else { Some(by) };
+            match pan {
+                Some(pan) => view.margin.screen_step.request(pan),
+                None => {
+                    view.margin.screen_step.stop();
+                    view.step_page(down);
+                }
             }
         }
         "reader.page.next" => view.step_page(true),

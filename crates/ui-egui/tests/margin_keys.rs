@@ -20,10 +20,15 @@ fn pdf(pages: usize) -> Vec<u8> {
 
 /// `pages` blank 200×300 pages, with `catalog` (more catalog entries, such as `/PageLabels`).
 fn pdf_with(pages: usize, catalog: &str) -> Vec<u8> {
+    pdf_sized(pages, 300, catalog)
+}
+
+/// `pages` blank pages 200 points wide and `height` tall, with `catalog` entries.
+fn pdf_sized(pages: usize, height: u32, catalog: &str) -> Vec<u8> {
     let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();
     let mut objs = vec![
         format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>"),
-        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 200 300] >>", kids.join(" ")),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 200 {height}] >>", kids.join(" ")),
     ];
     objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_owned()));
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -292,5 +297,128 @@ fn the_page_field_goes_by_label_then_number_and_keeps_what_it_refuses() {
         assert_eq!(page_field_text(&h), "iii", "Esc puts the current label back");
         assert!(h.query_by_label_contains("This PDF has pages").is_none());
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A 60-fps harness over `bytes`, with `settings` written to a fresh config folder first.
+fn realtime_harness(dir: &Path, bytes: Vec<u8>, settings: Option<&str>) -> Harness<'static, PdfCraftApp> {
+    std::fs::create_dir_all(dir).unwrap();
+    if let Some(text) = settings {
+        std::fs::write(dir.join("settings.jsonc"), text).unwrap();
+    }
+    let dir = dir.to_path_buf();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(120).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.set_option("language", "en").unwrap();
+        app.margin_keys.set_config_dir(dir.clone());
+        app.margin_keys.set_data_dir(dir.join("data"));
+        app.open_bytes("doc.pdf", None, bytes.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.try_run().expect("the window goes idle");
+    h
+}
+
+/// The first page's top on screen (it moves up as the document scrolls down).
+fn first_page_top(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    h.state().views[0].page_screen_rect(0).expect("the first page is drawn").top()
+}
+
+/// A screen step: `view.scroll_screen` (0.85 by default) of the document area.
+fn screen(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    h.state().views[0].viewport_rect().height() * 0.85
+}
+
+/// Points within this are the same scroll position.
+const SAME_SPOT: f32 = 1.0;
+
+/// R8 QoL 15: Page Down glides one screen and stops (the idle window asks for no more frames);
+/// held presses add up to exactly one screen each; the reader's own wheel drops what is left of
+/// a step; under `ui.reduce_motion` the step lands at once.
+#[test]
+fn screen_steps_glide_add_up_and_yield_to_the_wheel() {
+    // One page 6000 points tall: every step stays inside it.
+    let tall = || pdf_sized(1, 6000, "");
+    let dir = config_dir("screen-steps");
+    let mut h = realtime_harness(&dir, tall(), None);
+    let (top, step) = (first_page_top(&h), screen(&h));
+    press(&mut h, Key::PageDown);
+    let partway = top - first_page_top(&h);
+    assert!(partway > 0.0 && partway < step - SAME_SPOT, "mid-glide: {partway} of {step}");
+    let frames = h.try_run().expect("the step ends");
+    assert!(frames <= 20, "{frames} frames");
+    assert!((top - first_page_top(&h) - step).abs() < SAME_SPOT, "one screen: {}", top - first_page_top(&h));
+    // The pages the step uncovered render in the background; once they are in, nothing moves.
+    while h.state().render_pending() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+    h.try_run().expect("idle");
+    assert_eq!(h.try_run().expect("idle"), 1, "an idle reader stops repainting");
+
+    let top = first_page_top(&h);
+    for _ in 0..4 {
+        h.key_press(Key::PageDown);
+        h.run_steps(1);
+    }
+    h.try_run().expect("the steps end");
+    assert!((top - first_page_top(&h) - 4.0 * step).abs() < SAME_SPOT, "four presses, four screens: {}", top - first_page_top(&h));
+
+    let top = first_page_top(&h);
+    press(&mut h, Key::PageDown);
+    h.hover_at(h.state().views[0].viewport_rect().center());
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::Vec2::ZERO,
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.try_run().expect("idle");
+    let moved = top - first_page_top(&h);
+    assert!(moved > 0.0 && moved < step - SAME_SPOT, "the wheel stopped the step: {moved} of {step}");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let dir = config_dir("screen-steps-reduced");
+    let mut h = realtime_harness(&dir, tall(), Some("{ \"ui\": { \"reduce_motion\": true } }"));
+    let top = first_page_top(&h);
+    press(&mut h, Key::PageDown);
+    assert!((top - first_page_top(&h) - screen(&h)).abs() < SAME_SPOT, "reduced motion: the step lands at once");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R8 QoL 15: in Single, Page Down turns a page that fits once per press, and pans an enlarged
+/// page to its bottom before it turns.
+#[test]
+fn single_turns_a_fitting_page_and_pans_an_enlarged_one_first() {
+    let dir = config_dir("single-steps");
+    let mut h = realtime_harness(&dir, pdf(3), None);
+    assert!(h.state_mut().execute("view.layout.single"));
+    h.state_mut().views[0].set_fit(pdfcraft_ui_egui::canvas::Fit::Page);
+    h.try_run().expect("idle");
+    press(&mut h, Key::PageDown);
+    h.try_run().expect("idle");
+    assert_eq!(current(&h), 1, "a fitting page turns once");
+    press(&mut h, Key::PageUp);
+    h.try_run().expect("idle");
+    assert_eq!(current(&h), 0);
+
+    h.state_mut().views[0].set_zoom(5.0);
+    h.try_run().expect("idle");
+    let mut pans = 0;
+    while current(&h) == 0 {
+        let page = h.state().views[0].page_screen_rect(0).unwrap();
+        let window = h.state().views[0].viewport_rect();
+        press(&mut h, Key::PageDown);
+        h.try_run().expect("idle");
+        if current(&h) == 0 {
+            pans += 1;
+        } else {
+            assert!(page.bottom() <= window.bottom() + SAME_SPOT, "it turned only with the page's bottom in view: {page:?} {window:?}");
+        }
+        assert!(pans < 10, "the pans reach the bottom");
+    }
+    assert!(pans >= 1, "the enlarged page panned before it turned");
+    assert_eq!(current(&h), 1, "one turn");
     std::fs::remove_dir_all(&dir).ok();
 }
