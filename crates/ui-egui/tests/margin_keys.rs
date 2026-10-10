@@ -15,9 +15,14 @@ fn fixture() -> Vec<u8> {
 
 /// `pages` blank 200×300 pages.
 fn pdf(pages: usize) -> Vec<u8> {
+    pdf_with(pages, "")
+}
+
+/// `pages` blank 200×300 pages, with `catalog` (more catalog entries, such as `/PageLabels`).
+fn pdf_with(pages: usize, catalog: &str) -> Vec<u8> {
     let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();
     let mut objs = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>"),
         format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 200 300] >>", kids.join(" ")),
     ];
     objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_owned()));
@@ -230,5 +235,62 @@ fn page_keys_follow_the_layout() {
     h.run_steps(2);
     type_keys(&mut h, "jk");
     assert_eq!(current(&h), place, "typing in the page field moves nothing");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// What the page field shows (between frames PdfCraft's canvas leaves the page number in
+/// `DocView::page_input`; Margin's field shows the label).
+fn page_field_text(h: &Harness<'static, PdfCraftApp>) -> String {
+    h.get_by_label("Go to page").value().unwrap_or_default()
+}
+
+fn page_field_focused(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.ctx.memory(|m| m.has_focus(egui::Id::new("page-input")))
+}
+
+/// G, then `typed` into the page field (G selects what it holds, so the typing replaces it),
+/// then Enter.
+fn go_to(h: &mut Harness<'static, PdfCraftApp>, typed: &str) {
+    press(h, Key::G);
+    assert!(page_field_focused(h), "G focuses the page field");
+    h.event(egui::Event::Text(typed.to_owned()));
+    h.run_steps(1);
+    press(h, Key::Enter);
+}
+
+/// R8 QoL 14: the footer's page field, named "Go to page", takes a label first, then a page
+/// number; a page the document doesn't have stays in the field with the document's pages on a
+/// card; Esc puts the current label back.
+#[test]
+fn the_page_field_goes_by_label_then_number_and_keeps_what_it_refuses() {
+    // Labels i, ii, iii, iv, 1, 2.
+    let labels = "/PageLabels << /Nums [0 << /S /r >> 4 << /S /D >>] >>";
+    let dir = config_dir("page-field");
+    let mut h = harness_with(&dir, pdf_with(6, labels));
+    assert_eq!(page_field_text(&h), "i", "the field shows the label");
+    h.get_by_label("(1 / 6)");
+
+    for (typed, page) in [("iv", 3), ("1", 4), ("6", 5), ("  iii  ", 2)] {
+        go_to(&mut h, typed);
+        assert_eq!(current(&h), page, "{typed:?}: a label first, else a page number");
+        assert!(!page_field_focused(&h), "Enter hands the keys back to the page");
+    }
+    assert_eq!(page_field_text(&h), "iii");
+    h.get_by_label("(3 / 6)");
+
+    let long = "9".repeat(5000);
+    for typed in ["0", "7", "xyz", long.as_str()] {
+        go_to(&mut h, typed);
+        assert_eq!(current(&h), 2, "{typed:.12}: no jump");
+        assert!(page_field_focused(&h), "the field stays open to fix it");
+        let kept = page_field_text(&h);
+        assert!(kept.chars().count() <= 64, "a long paste is cut");
+        assert!(kept.starts_with(&typed[..1]), "and the typing stays: {kept:?}");
+        h.get_by_label_contains("This PDF has pages 1–6, labelled i to 2");
+        press(&mut h, Key::Escape);
+        assert!(!page_field_focused(&h));
+        assert_eq!(page_field_text(&h), "iii", "Esc puts the current label back");
+        assert!(h.query_by_label_contains("This PDF has pages").is_none());
+    }
     std::fs::remove_dir_all(&dir).ok();
 }

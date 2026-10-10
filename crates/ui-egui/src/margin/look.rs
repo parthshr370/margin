@@ -175,7 +175,21 @@ pub(crate) fn tooltip(resp: Response, label: &str, shortcut: Option<&str>) -> Re
 /// the window and clear of the control), drawn as a dark rounded card with an arrow pointing at
 /// the control.
 pub(crate) fn tooltip_ui(resp: &Response, contents: impl FnOnce(&mut egui::Ui)) {
-    let mut tip = if resp.enabled() { egui::Tooltip::for_enabled(resp) } else { egui::Tooltip::for_disabled(resp) };
+    let tip = if resp.enabled() { egui::Tooltip::for_enabled(resp) } else { egui::Tooltip::for_disabled(resp) };
+    show_card(tip, resp, contents);
+}
+
+/// `message` on the tooltip card at `resp` now, without waiting for a hover: what a field says
+/// about its input (the page field's page range after a page it doesn't have).
+pub(crate) fn note(resp: &Response, message: &str) {
+    let tip = egui::Tooltip::always_open(resp.ctx.clone(), resp.layer_id, resp.id.with("margin-note"), resp.rect);
+    show_card(tip, resp, |ui| {
+        let t = Tokens::get(ui.ctx());
+        ui.label(egui::RichText::new(message).color(t.text));
+    });
+}
+
+fn show_card(mut tip: egui::Tooltip<'_>, resp: &Response, contents: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(&resp.ctx);
     let card = egui::Frame::popup(&resp.ctx.global_style()).fill(TOOLTIP_FILL).corner_radius(CornerRadius::same(t.radius)).inner_margin(TOOLTIP_PAD);
     tip.popup = tip.popup.gap(TOOLTIP_GAP).frame(card);

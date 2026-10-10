@@ -23,6 +23,17 @@ const KNOB_RADIUS: f32 = 5.0;
 const KNOB_RADIUS_HOVER: f32 = 6.0;
 const ZOOM_BUTTON: f32 = 22.0;
 const FIT_BUTTON: f32 = 24.0;
+/// The page field's text size.
+const PAGE_TEXT: f32 = 11.5;
+/// The page field: room around its text, and its narrowest and widest (a longer label scrolls
+/// inside it).
+const PAGE_FIELD_PAD: f32 = 6.0;
+const PAGE_FIELD_MIN: f32 = 34.0;
+const PAGE_FIELD_MAX: f32 = 96.0;
+/// The most the page field holds: more than any page label, and a long paste stops here.
+const PAGE_INPUT_CHARS: usize = 64;
+/// How much of a typed page or a label the field's message repeats.
+const HINT_TEXT_CHARS: usize = 16;
 
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -78,13 +89,37 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// `x / N`: the current page, editable (a page label such as `iv`, or a number).
+/// The page field and what follows it: the current page's label (a page label such as `iv`, or
+/// its number), editable, then `/ N`, or the page's position `(4 / 120)` when its label isn't
+/// its number. G (`view.focus_page_input`) or a click focuses it with its text selected; Enter
+/// goes to the label or number typed (`DocView::go_to_typed`, labels first); Esc puts the
+/// current label back. A page it doesn't have leaves the text there to fix, with the document's
+/// pages on a card over the field.
 fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[String]) {
+    let id = egui::Id::new(PAGE_INPUT);
+    let current = page_label(labels, view.current);
+    // PdfCraft's canvas keeps the number in `page_input` while the field is idle; Margin's field
+    // shows the label, and an edit starts from it, all selected, however the field got focus
+    // (G's command runs before this frame's field, a click inside it).
+    let editing_id = id.with("margin-page-editing");
+    let was_editing = ui.data(|d| d.get_temp::<bool>(editing_id)).unwrap_or(false);
+    let focused = ui.memory(|m| m.has_focus(id));
+    if !(focused && was_editing) {
+        view.page_input.clone_from(&current);
+    }
+    if focused && !was_editing {
+        select_all(ui.ctx(), id, &view.page_input);
+    }
+    let font = theme::regular(PAGE_TEXT);
+    // Sized by the current label and the page count, never by what is being typed.
+    let widest = [current.as_str(), &labels.len().to_string()].map(|text| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x);
+    let width = (widest[0].max(widest[1]) + 2.0 * PAGE_FIELD_PAD).clamp(PAGE_FIELD_MIN, PAGE_FIELD_MAX);
     let edit = egui::TextEdit::singleline(&mut view.page_input)
-        .id(egui::Id::new(PAGE_INPUT))
-        .desired_width(34.0)
+        .id(id)
+        .desired_width(width)
+        .char_limit(PAGE_INPUT_CHARS)
         .horizontal_align(Align::Center)
-        .font(theme::regular(11.5))
+        .font(font.clone())
         .margin(vec2(2.0, 2.0));
     let field = egui::Frame::NONE
         .fill(t.field)
@@ -92,14 +127,78 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
         .corner_radius(CornerRadius::same(t.radius))
         .show(ui, |ui| ui.add(edit))
         .inner;
-    let r = look::tooltip(field, "Go to page: type a number or label and press Enter", None);
-    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-        let typed = view.page_input.clone();
-        if !view.go_to_typed(&typed, labels) {
-            view.page_input = (view.current + 1).to_string();
+    ui.ctx().accesskit_node_builder(field.id, |node| node.set_label("Go to page"));
+    if field.gained_focus() {
+        select_all(ui.ctx(), id, &view.page_input);
+    }
+    let hint_id = id.with("margin-page-hint");
+    let mut hint: Option<String> = ui.data(|d| d.get_temp(hint_id));
+    if field.changed() {
+        hint = None;
+    }
+    if field.lost_focus() {
+        let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        hint = None;
+        if escape {
+            view.page_input.clone_from(&current);
+        } else if enter {
+            let typed = view.page_input.clone();
+            if !view.go_to_typed(&typed, labels) {
+                hint = Some(no_such_page(&typed, labels));
+                ui.memory_mut(|m| m.request_focus(id));
+                select_all(ui.ctx(), id, &typed);
+            }
         }
     }
-    ui.label(egui::RichText::new(format!("/ {}", labels.len())).font(theme::regular(11.5)).color(t.text_muted));
+    match &hint {
+        Some(message) => look::note(&field, message),
+        None => _ = look::tooltip(field, "Go to page: type a label or number and press Enter", None),
+    }
+    ui.data_mut(|d| match hint {
+        Some(message) => _ = d.insert_temp(hint_id, message),
+        None => _ = d.remove::<String>(hint_id),
+    });
+    // Read after a refused Enter asked for the focus back: the edit goes on next frame.
+    let editing = ui.memory(|m| m.has_focus(id));
+    ui.data_mut(|d| d.insert_temp(editing_id, editing));
+    let number = (view.current + 1).to_string();
+    let position = if current == number { format!("/ {}", labels.len()) } else { format!("({number} / {})", labels.len()) };
+    ui.label(egui::RichText::new(position).font(font).color(t.text_muted));
+}
+
+/// Page `index`'s label, or its 1-based number when it has none.
+fn page_label(labels: &[String], index: usize) -> String {
+    labels.get(index).map(|label| label.trim()).filter(|label| !label.is_empty()).map_or_else(|| (index + 1).to_string(), str::to_owned)
+}
+
+/// Selects all of the field `id`'s `text`, so typing replaces it.
+fn select_all(ctx: &egui::Context, id: egui::Id, text: &str) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+    state.cursor.set_char_range(Some(all));
+    state.store(ctx, id);
+}
+
+/// What the page field says about `typed`, a page the document doesn't have: its pages by
+/// number, and by label when the labels aren't the numbers.
+fn no_such_page(typed: &str, labels: &[String]) -> String {
+    let count = labels.len();
+    let numbered = (0..count).all(|index| page_label(labels, index) == (index + 1).to_string());
+    let range = format!("This PDF has pages 1–{count}");
+    if numbered || count == 0 {
+        return range;
+    }
+    let shown = |text: &str| clipped(text.trim(), HINT_TEXT_CHARS);
+    let (first, last) = (page_label(labels, 0), page_label(labels, count.saturating_sub(1)));
+    format!("No page “{}”. {range}, labelled {} to {}", shown(typed), shown(&first), shown(&last))
+}
+
+/// `text`, cut to `max` characters with an ellipsis when longer.
+fn clipped(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => format!("{}…", text.get(..end).unwrap_or(text)),
+        None => text.to_owned(),
+    }
 }
 
 /// The keys of the zoom group's buttons, from Margin's keymap.
