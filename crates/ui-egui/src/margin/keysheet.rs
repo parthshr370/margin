@@ -337,7 +337,7 @@ mod tests {
         let (keymap, registry) = table("[]");
         let sections = sections(&keymap, &registry, false);
         let contexts: Vec<&str> = sections.iter().map(|s| s.context.as_str()).collect();
-        assert_eq!(contexts, [EVERYWHERE, "Library", "Reader", "Find > TextInput", "Selection", "AnnotateMode"]);
+        assert_eq!(contexts, [EVERYWHERE, "Library", "Reader", "Find > TextInput", "Selection", "AnnotateMode", "Annotation"]);
         let rows: usize = sections.iter().map(|s| s.rows.len()).sum();
         assert_eq!(rows, keymap.bindings.len());
         let everywhere = &sections[0].rows;

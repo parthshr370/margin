@@ -1,6 +1,6 @@
 // Margin's own command ids, checked against the commands schema (schema::commands_schema).
 // PdfCraft's ids come from pdfcraft_engine::commands::COMMANDS and catalog::TOOL_GROUPS and are
-// never repeated here. Margin adds ids only under app.*, view.*, reader.*, library.* and note.*,
+// never repeated here. Margin adds ids only under app.*, view.*, reader.*, library.*, note.* and annotation.*,
 // and only ids the egui app runs (crates/ui-egui/src/margin/keys.rs `run`, which hands the reader
 // chrome's ids to margin::run): a keymap binding to an id that is not listed here is dropped with a
 // message.
@@ -41,5 +41,9 @@
   { "id": "reader.page.last", "title": "Last page", "group": "Go", "when": "Reader" },
   { "id": "reader.tool.select", "title": "Select", "group": "Mark", "when": "Reader" },
   { "id": "reader.bookmark.toggle", "title": "Bookmark this page", "icon": "bookmark", "group": "Go", "when": "Reader && format == pdf" },
-  { "id": "view.trim.toggle", "title": "Trim margins", "icon": "crop", "group": "View", "when": "Reader && format == pdf" }
+  { "id": "view.trim.toggle", "title": "Trim margins", "icon": "crop", "group": "View", "when": "Reader && format == pdf" },
+
+  { "id": "annotation.delete", "title": "Delete comment", "icon": "trash-2", "group": "Mark", "when": "Annotation" },
+  { "id": "annotation.color", "title": "Comment colour", "icon": "palette", "group": "Mark", "when": "Annotation",
+    "args": { "type": "object", "required": ["color"], "properties": { "color": { "type": "string", "description": "A notes.colors name" } } } }
 ]

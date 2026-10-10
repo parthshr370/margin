@@ -647,7 +647,7 @@ impl Default for NotesUi {
     }
 }
 
-const EXTERNAL_TIP: &str =
+pub(crate) const EXTERNAL_TIP: &str =
     "This PDF isn't in the vault, so the link opens its file at #page=N (file:// form). Move the PDF into the vault for PDF++ links.";
 
 /// "Copy callout" and "Open in Obsidian" in a text-markup comment's menus.

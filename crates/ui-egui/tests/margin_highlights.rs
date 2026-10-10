@@ -1,4 +1,5 @@
-//! Margin's Highlights tab in the real shell (egui_kittest): cards quote the page text they mark.
+//! Margin's Highlights tab in the real shell (egui_kittest): cards quote the page text they mark,
+//! and their actions (delete, colour) go through the undo stack and the keymap.
 
 use egui::Pos2;
 use egui_kittest::Harness;
@@ -85,4 +86,62 @@ fn an_underline_card_quotes_the_text_it_marks() {
     // The card reads "<colour> <kind>, p. <page>: <quote>", the quote painted under its header,
     // not the word "Underline".
     h.get_by_label_contains("underline, p. 1: quick brown");
+}
+
+/// Point at the only card, so its hover actions show.
+fn hover_card(h: &mut Harness<'static, PdfCraftApp>) {
+    h.get_by_label_contains("highlight, p. 1: quick brown").hover();
+    h.run_steps(3);
+}
+
+#[test]
+fn the_delete_button_removes_the_highlight_and_undo_restores_it() {
+    let mut h = harness("highlight");
+    mark(&mut h, 4, 14);
+    assert_eq!(markup_count(&h), 1);
+    hover_card(&mut h);
+    h.get_by_label("Delete highlight").click();
+    h.run_steps(3);
+    assert_eq!(markup_count(&h), 0);
+    h.get_by_label("No highlights yet.");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(markup_count(&h), 1);
+    h.get_by_label_contains("highlight, p. 1: quick brown");
+}
+
+#[test]
+fn changing_the_colour_updates_the_swatch() {
+    let mut h = harness("highlight");
+    mark(&mut h, 4, 14);
+    h.get_by_label("Colour: Yellow");
+    hover_card(&mut h);
+    h.get_by_label("Change colour").click();
+    h.run_steps(3);
+    h.get_by_label("Red").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let color = h.state().session.get(id).unwrap().info.annotations[0].color.expect("a colour");
+    assert!((color[0] - 0xea as f32 / 255.0).abs() < 0.01 && (color[1] - 0x52 as f32 / 255.0).abs() < 0.01, "{color:?}");
+    h.get_by_label("Colour: Red");
+    assert!(h.query_by_label("Colour: Yellow").is_none());
+}
+
+#[test]
+fn delete_and_number_keys_act_on_the_selected_highlight() {
+    let mut h = harness("highlight");
+    mark(&mut h, 4, 14);
+    h.get_by_label_contains("highlight, p. 1: quick brown").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    // `4` is Important in the built-in keymap's Annotation context.
+    h.key_press(egui::Key::Num4);
+    h.run_steps(3);
+    h.get_by_label("Colour: Important");
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(3);
+    assert_eq!(markup_count(&h), 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(markup_count(&h), 1);
 }

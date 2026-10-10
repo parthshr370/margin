@@ -10,7 +10,7 @@
 //! Context stack, outermost first: `App os=…`, then one of `Dialog` (a modal, the keyboard sheet),
 //! `Palette`, or `Reader format=pdf layout=…` with `AnnotateMode tool=…` while the annotate rail
 //! shows or a comment tool is on, then `Find > TextInput` in the find bar, `TextInput` in any other text field, or `Page`
-//! with `Selection` while text is selected.
+//! with `Selection` while text is selected and `Annotation` while a comment is selected.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -508,6 +508,10 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         if view.selected_text().is_some() {
             stack.push(node("Selection", &[("selection", "text")]));
         }
+        // A comment picked on the page or in the Highlights tab: its delete and colour keys.
+        if view.comments.selected.is_some() {
+            stack.push(node("Annotation", &[]));
+        }
     }
     stack
 }
@@ -729,7 +733,7 @@ mod tests {
     }
 
     /// The ids `margin::run` (the reader chrome, reading state and library) handles.
-    const CHROME_COMMANDS: [&str; 8] = [
+    const CHROME_COMMANDS: [&str; 10] = [
         "view.sidebar.toggle",
         "view.sidebar.tab",
         "reader.annotate.toggle",
@@ -738,6 +742,8 @@ mod tests {
         "library.open",
         "library.search",
         "app.stats",
+        "annotation.delete",
+        "annotation.color",
     ];
 
     /// Every id the built-in keymap binds is one the app runs.

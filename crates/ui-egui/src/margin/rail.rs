@@ -1,13 +1,17 @@
 //! The annotate rail: a floating strip at the left of the page area with the reading tools.
 //! It takes the place of PdfCraft's quick-action bar in the Margin flavor. Each button runs an
-//! existing command; the selected comment tool's colour and width controls follow underneath.
+//! existing command; the selected comment tool's controls follow underneath: keep it picked,
+//! its colour, opacity and (for lines) thickness, each in a popover on the spacing scale.
+
+use std::ops::RangeInclusive;
 
 use egui::{Color32, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::commands;
 
-use crate::comments::CommentTool;
-use crate::margin::{look, motion};
-use crate::theme::Tokens;
+use crate::comments::{CommentPrefs, CommentTool, SWATCHES, color32};
+use crate::margin::look::{self, ColorDot};
+use crate::margin::{display, motion};
+use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool};
 
 /// One rail entry.
@@ -136,7 +140,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         }
                         if let QuickTool::Comment(tool) = app.quick_tool {
                             divider(ui, &t);
-                            crate::comments::quick_bar_controls(ui, tool, &mut app.comment_prefs);
+                            tool_controls(ui, &t, tool, &mut app.comment_prefs);
                         }
                     });
                 });
@@ -146,4 +150,100 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
 fn divider(ui: &mut egui::Ui, t: &Tokens) {
     let (r, _) = ui.allocate_exact_size(vec2(BUTTON, 9.0), Sense::hover());
     ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
+}
+
+/// The tool popovers' width (inside their 16 px frame) and row height, and their text size.
+const POPOVER_WIDTH: f32 = 200.0;
+const POPOVER_ROW: f32 = 36.0;
+const POPOVER_TEXT: f32 = 12.5;
+/// Opacity in percent and line thickness in points: their ranges and steps (PdfCraft's).
+const OPACITY_PERCENT: RangeInclusive<f64> = 10.0..=100.0;
+const OPACITY_STEP: f64 = 5.0;
+const PERCENT: f64 = 100.0;
+const THICKNESS_PT: RangeInclusive<f64> = 0.5..=12.0;
+const THICKNESS_STEP: f64 = 0.5;
+/// Two channels within this much (0–1) are the same swatch colour.
+const SAME_COLOR: f64 = 0.02;
+
+/// The picked comment tool's controls, PdfCraft's quick-bar ones in the rail's look: keep the
+/// tool picked, its colour (the `notes.colors` palette), its opacity and, for lines, thickness.
+fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut CommentPrefs) {
+    let style = prefs.style(tool);
+    let pin = if prefs.pinned { "Keep tool selected: on" } else { "Keep tool selected" };
+    if look::rail_button(ui, "pin", BUTTON, prefs.pinned, pin, None).clicked() {
+        prefs.pinned = !prefs.pinned;
+    }
+    let colour = look::color_button(ui, BUTTON, color32(style.color), true, "Colour", None);
+    popover(&colour, |ui| {
+        let palette = crate::margin::obsidian::swatches(ui.ctx()).unwrap_or_else(|| SWATCHES.iter().map(|(n, c)| ((*n).to_string(), *c)).collect());
+        let dots: Vec<ColorDot<'_>> = palette
+            .iter()
+            .map(|(name, c)| ColorDot {
+                name,
+                color: color32(*c),
+                selected: c.iter().zip(style.color).all(|(a, b)| (a - b).abs() < SAME_COLOR),
+                shortcut: None,
+            })
+            .collect();
+        if let Some((_, c)) = look::color_dots(ui, &dots).and_then(|i| palette.get(i)) {
+            prefs.set_color(tool, *c);
+            ui.close();
+        }
+    });
+    let opacity = look::rail_button(ui, "blend", BUTTON, false, "Opacity", None);
+    popover(&opacity, |ui| {
+        let mut percent = (style.opacity * PERCENT).round();
+        if value_slider(ui, t, "Opacity", &mut percent, OPACITY_PERCENT, OPACITY_STEP, |v| format!("{v:.0} %")) {
+            prefs.set_opacity(tool, percent / PERCENT);
+        }
+    });
+    if tool.has_width() {
+        let thickness = look::rail_button(ui, "sliders-horizontal", BUTTON, false, "Line thickness", None);
+        popover(&thickness, |ui| {
+            let mut width = style.width;
+            if value_slider(ui, t, "Line thickness", &mut width, THICKNESS_PT, THICKNESS_STEP, |v| format!("{v:.1} pt")) {
+                prefs.set_width(tool, width);
+            }
+        });
+    }
+}
+
+/// A popover to the right of a rail button, in the Display popover's frame; stays open while
+/// its slider is dragged.
+fn popover(button: &egui::Response, contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Popup::menu(button)
+        .align(egui::RectAlign::RIGHT_START)
+        // Clear of the rail's own padding, then the small step.
+        .gap(f32::from(PADDING) + look::GAP)
+        .frame(display::popover_frame(&button.ctx.global_style()))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(contents);
+}
+
+/// A value with its slider: the label and the value (right-aligned) on one row, the slider across
+/// the full width on the next, both [`POPOVER_ROW`] tall. True when the slider moved.
+fn value_slider(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    label: &str,
+    value: &mut f64,
+    range: RangeInclusive<f64>,
+    step: f64,
+    show: impl Fn(f64) -> String,
+) -> bool {
+    ui.set_width(POPOVER_WIDTH);
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let row = vec2(POPOVER_WIDTH, POPOVER_ROW);
+    ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(label).font(theme::regular(POPOVER_TEXT)).color(t.text_muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(show(*value)).font(theme::regular(POPOVER_TEXT)).color(t.text));
+        });
+    });
+    ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        look::slider_style(ui, t);
+        ui.spacing_mut().slider_width = POPOVER_WIDTH;
+        ui.add(egui::Slider::new(value, range).step_by(step).show_value(false)).changed()
+    })
+    .inner
 }

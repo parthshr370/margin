@@ -47,6 +47,18 @@ const BUTTON_ICON: f32 = 14.0;
 /// colour while pressed.
 const ACCENT_HOVER_LIGHTEN: f32 = 0.08;
 const ACCENT_PRESSED_SHADE: f32 = 0.85;
+/// A colour row's cells (the mockup's `.cdot`: 30 px, 14 px dots), the gap between them, and
+/// the ring around the current colour (its width and its gap from the dot).
+const COLOR_CELL: f32 = 30.0;
+const COLOR_CELL_GAP: f32 = 2.0;
+const COLOR_DOT: f32 = 14.0;
+const COLOR_RING: f32 = 1.5;
+const COLOR_RING_GAP: f32 = 2.5;
+/// How dark a colour dot's edge is.
+const DOT_EDGE_ALPHA: u8 = 40;
+/// The slider's rail thickness and its idle knob's ring.
+const SLIDER_RAIL_HEIGHT: f32 = 3.0;
+const SLIDER_KNOB_RING: f32 = 1.5;
 
 /// How a list marks the row under the pointer and its selected row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -159,6 +171,70 @@ fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str,
     ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, on), stroke, egui::StrokeKind::Inside);
     icons::paint(ui, rect, icon, (size * ICON_SHARE).round(), icon_tint(&t, on, resp.hovered()));
     tooltip(resp, label, shortcut)
+}
+
+/// A button showing a colour instead of an icon (a comment tool's or a highlight's colour):
+/// [`icon_button`]'s states, a hairline border when `bordered` (the rail's buttons have one).
+pub(crate) fn color_button(ui: &mut egui::Ui, size: f32, color: Color32, bordered: bool, label: &str, shortcut: Option<&str>) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    let stroke = if bordered { Stroke::new(1.0, t.border) } else { Stroke::NONE };
+    ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false), stroke, egui::StrokeKind::Inside);
+    paint_dot(ui, rect.center(), color);
+    tooltip(resp, label, shortcut)
+}
+
+/// A colour dot with a faint edge, so light colours show on light fills.
+fn paint_dot(ui: &egui::Ui, center: egui::Pos2, color: Color32) {
+    ui.painter().circle(center, COLOR_DOT / 2.0, color, Stroke::new(1.0, Color32::from_black_alpha(DOT_EDGE_ALPHA)));
+}
+
+/// One choice of a [`color_dots`] row.
+pub(crate) struct ColorDot<'a> {
+    pub name: &'a str,
+    pub color: Color32,
+    pub selected: bool,
+    pub shortcut: Option<&'a str>,
+}
+
+/// The mockup's colour row (`.cdot`): dots in square cells with the hover fill, a ring in the
+/// dot's colour around the current one. Screen readers and tests see a button per colour named
+/// after it; the tooltip adds its keys. Returns the clicked index.
+pub(crate) fn color_dots(ui: &mut egui::Ui, dots: &[ColorDot<'_>]) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = COLOR_CELL_GAP;
+        for (i, dot) in dots.iter().enumerate() {
+            let (rect, resp) = ui.allocate_exact_size(Vec2::splat(COLOR_CELL), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), dot.selected, dot.name));
+            ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
+            paint_dot(ui, rect.center(), dot.color);
+            if dot.selected {
+                ui.painter().circle_stroke(rect.center(), COLOR_DOT / 2.0 + COLOR_RING_GAP, Stroke::new(COLOR_RING, dot.color));
+            }
+            if tooltip(resp, dot.name, dot.shortcut).clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
+}
+
+/// Margin's slider (the mockup's range input): a thin rail in the divider colour and a round
+/// knob. egui fills the idle knob with the rail's colour, so the idle knob is a light ring;
+/// hovered and dragged it fills. Call before adding the slider.
+pub(crate) fn slider_style(ui: &mut egui::Ui, t: &Tokens) {
+    ui.spacing_mut().slider_rail_height = SLIDER_RAIL_HEIGHT;
+    ui.visuals_mut().handle_shape = egui::style::HandleShape::Circle;
+    let widgets = &mut ui.visuals_mut().widgets;
+    widgets.inactive.bg_fill = t.divider;
+    widgets.inactive.fg_stroke = Stroke::new(SLIDER_KNOB_RING, t.text_muted);
+    for state in [&mut widgets.hovered, &mut widgets.active] {
+        state.bg_fill = t.text;
+        state.fg_stroke = Stroke::NONE;
+    }
 }
 
 /// An icon and a word ("Tools") with [`icon_button`]'s states; `tip` is its tooltip.

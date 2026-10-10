@@ -40,6 +40,10 @@
       "v": "reader.tool.select", "c": "edit.snapshot", "h": "comment.highlight", "u": "comment.underline",
       "s": "comment.strikeout", "q": "comment.squiggly", "n": "comment.note", "p": "comment.ink",
       "t": "comment.freetext", "r": "comment.square", "e": "comment.eraser" } },
+  { "context": "Annotation", "bindings": {
+      "delete": "annotation.delete", "backspace": "annotation.delete",
+      "1": ["annotation.color", { "color": "yellow" }], "2": ["annotation.color", { "color": "red" }],
+      "3": ["annotation.color", { "color": "note" }], "4": ["annotation.color", { "color": "important" }] } },
   { "$pdfcraft_ignored": {
       "view.fit_visible": "Ctrl+3 shows the Pages sidebar tab in Margin (mockup keys); Fit visible stays in the palette" } }
 ]

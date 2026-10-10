@@ -19,8 +19,9 @@ pub const MARGIN_COMMANDS: &str = include_str!("../data/commands.jsonc");
 /// The repository path of [`MARGIN_COMMANDS`], for messages.
 pub const MARGIN_COMMANDS_FILE: &str = "crates/margin-config/data/commands.jsonc";
 
-/// Namespaces Margin may add ids to (CU-CMD-1, ADR-0005).
-pub const MARGIN_NAMESPACES: &[&str] = &["app", "view", "reader", "library", "note"];
+/// Namespaces Margin may add ids to (CU-CMD-1, ADR-0005), plus `annotation` (the owner's ids for
+/// acting on the selected comment; PdfCraft has no such namespace, its comment ids are `comment.*`).
+pub const MARGIN_NAMESPACES: &[&str] = &["app", "view", "reader", "library", "note", "annotation"];
 
 /// Longest command id, in bytes (STD-RS-05).
 const MAX_ID_BYTES: usize = 128;

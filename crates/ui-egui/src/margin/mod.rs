@@ -164,6 +164,7 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
             let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
             reading::toggle_trim(view);
         }
+        highlights::DELETE_ID | highlights::COLOR_ID => return highlights::run(app, id, args),
         #[cfg(not(target_arch = "wasm32"))]
         "library.open" | "library.search" | "app.stats" => return library::run(app, id),
         _ => return false,

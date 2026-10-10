@@ -88,6 +88,7 @@ const FIRST_RUN_KEYMAP_HEADER: &str = "// Margin keymap. Margin reloads this fil
 //\n\
 // Contexts, outermost first:\n\
 //   App > Reader > AnnotateMode > Page > Selection   reading; AnnotateMode while a markup tool is on\n\
+//   App > Reader > Page > Annotation                 a comment is selected (on the page or in Highlights)\n\
 //   App > Reader > Find > TextInput                  typing in the find bar\n\
 //   App > Palette > TextInput                        the command palette\n\
 //   App > Dialog > TextInput                         a dialog\n\

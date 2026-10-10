@@ -190,8 +190,6 @@ const VALUE_WIDTH: f32 = 36.0;
 const LINK_ROW: f32 = 24.0;
 /// The section header row (small caps label and "Set as default").
 const SECTION_HEADER: f32 = 16.0;
-const SLIDER_RAIL_HEIGHT: f32 = 3.0;
-const SLIDER_KNOB_RING: f32 = 1.5;
 /// The mode description keeps room for this many lines, so the rows under it stay put when the
 /// mode (and its description's length) changes.
 const DESCRIPTION_LINES: f32 = 2.0;
@@ -552,18 +550,7 @@ fn slider_row(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut u16, range
         ui.spacing_mut().item_spacing.x = GAP_LARGE;
         row_label(ui, t, label);
         ui.spacing_mut().slider_width = POPOVER_WIDTH - LABEL_WIDTH - VALUE_WIDTH - 2.0 * GAP_LARGE;
-        ui.spacing_mut().slider_rail_height = SLIDER_RAIL_HEIGHT;
-        // The mockup's range input: a thin rail in the divider colour, a round knob. egui fills
-        // the idle knob with the rail's colour, so the idle knob is a light ring; hovered and
-        // dragged it fills.
-        ui.visuals_mut().handle_shape = egui::style::HandleShape::Circle;
-        let widgets = &mut ui.visuals_mut().widgets;
-        widgets.inactive.bg_fill = t.divider;
-        widgets.inactive.fg_stroke = Stroke::new(SLIDER_KNOB_RING, t.text_muted);
-        for state in [&mut widgets.hovered, &mut widgets.active] {
-            state.bg_fill = t.text;
-            state.fg_stroke = Stroke::NONE;
-        }
+        look::slider_style(ui, t);
         // A slider senses drags, not clicks, so its response never reports a double-click.
         let resp = ui.add(egui::Slider::new(value, range).show_value(false)).on_hover_text(i18n::t("Double-click to reset"));
         let on_slider = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| resp.rect.contains(p));
