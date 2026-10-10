@@ -7,7 +7,8 @@
 //! - Night: invert, then rotate the hue by 180°, so lightness flips and hue stays (blue boxes stay
 //!   blue). Black maps to `#141312`, white to `#ebe6e1`. Photo-like regions are left as they are.
 //! - Ink: two-tone on luma, `#121212` paper and `#ebe6e1` text.
-//! - Mono: black and white with a cut-off (the contrast slider), into the same palette.
+//! - Mono: black and white with a cut-off (the contrast slider), into the same palette. The cut-off
+//!   is a short ramp, not a step, so glyph edges keep their antialiasing.
 //!
 //! Brightness and contrast apply after the mode, like CSS `brightness()` and `contrast()`. In Ink
 //! and Mono, "keep figure hues" draws photo-like regions as Night does (unchanged) instead of
@@ -103,8 +104,10 @@ const MONO_DARK: [u8; 3] = [0x0E, 0x0E, 0x0E];
 /// Mono cut-off at contrast 70 % and how far it moves up to 160 % (mockup `setMonoThreshold`).
 const MONO_CUTOFF_LOW: f32 = 0.30;
 const MONO_CUTOFF_SPAN: f32 = 0.45;
-/// The mockup's Mono table has 32 discrete steps.
-const MONO_STEPS: f32 = 32.0;
+/// Half the width of Mono's ramp from light ink to dark paper, in luma. A hard step (the mockup's
+/// 32-entry `discrete` table) snaps every antialiased glyph edge to ink or paper, so text looks
+/// jagged and hairlines break up; a ramp keeps the edge levels while page and ink stay flat.
+const MONO_RAMP_HALF_WIDTH: f32 = 0.25;
 
 /// Rec. 709 luma weights in parts per 10 000 (the weights of SVG `saturate(0)`).
 const LUMA_R: u32 = 2126;
@@ -229,9 +232,9 @@ impl Luts {
                     // `v` is luma: black ink → light, white paper → dark.
                     PageMode::Ink => to_u8(tone_f(light + v * (dark - light))),
                     PageMode::Mono => {
-                        let step = (v * MONO_STEPS).floor().min(MONO_STEPS - 1.0) / (MONO_STEPS - 1.0);
-                        let bit = if step < mono_cutoff { light } else { dark };
-                        to_u8((bit * brightness).clamp(0.0, 1.0))
+                        // `v` is luma: darker than the ramp → light ink, lighter → dark paper.
+                        let paper_share = ((v - mono_cutoff) / (2.0 * MONO_RAMP_HALF_WIDTH) + 0.5).clamp(0.0, 1.0);
+                        to_u8(((light + paper_share * (dark - light)) * brightness).clamp(0.0, 1.0))
                     }
                 }
             })
@@ -573,9 +576,21 @@ mod tests {
             PageColor { mode: PageMode::Mono, contrast, keep_hues: false, ..PageColor::default() }.apply(&mut px, 1, 1);
             px[0]
         };
-        // Mid grey is paper at the lowest cut-off and ink at the highest.
-        assert!(grey(70) < 0x20);
+        // Mid grey is (almost) paper at the lowest cut-off and ink at the highest.
+        assert!(grey(70) < 0x40);
         assert!(grey(160) > 0xC0);
+    }
+
+    #[test]
+    fn mono_keeps_antialiased_edges() {
+        // A glyph edge: black ink, three coverage levels, white paper.
+        let levels = [0x00u8, 0x60, 0x80, 0xA0, 0xFF];
+        let mut row: Vec<u8> = levels.iter().flat_map(|&v| [v, v, v, 0xFF]).collect();
+        PageColor { mode: PageMode::Mono, keep_hues: false, ..PageColor::default() }.apply(&mut row, levels.len(), 1);
+        let out: Vec<u8> = row.chunks_exact(4).map(|px| px[0]).collect();
+        assert_eq!(out.first(), Some(&LIGHT_INK[0]), "ink is light");
+        assert_eq!(out.last(), Some(&MONO_DARK[0]), "paper is dark");
+        assert!(out.windows(2).all(|pair| pair[0] > pair[1]), "edge levels stay distinct and ordered: {out:?}");
     }
 
     #[test]
