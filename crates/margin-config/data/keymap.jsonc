@@ -35,7 +35,9 @@
   { "context": "Find > TextInput", "bindings": {
       "enter": "reader.find.next", "shift-enter": "reader.find.prev", "down": "reader.find.next", "up": "reader.find.prev" } },
   { "context": "Selection", "bindings": {
-      "h": "comment.highlight", "u": "comment.underline", "s": "comment.strikeout", "q": "comment.squiggly" } },
+      "h": "comment.highlight", "u": "comment.underline", "s": "comment.strikeout", "q": "comment.squiggly",
+      "1": ["annotation.color", { "color": "yellow" }], "2": ["annotation.color", { "color": "red" }],
+      "3": ["annotation.color", { "color": "note" }], "4": ["annotation.color", { "color": "important" }] } },
   { "context": "AnnotateMode", "bindings": {
       "v": "reader.tool.select", "c": "edit.snapshot", "h": "comment.highlight", "u": "comment.underline",
       "s": "comment.strikeout", "q": "comment.squiggly", "n": "comment.note", "p": "comment.ink",

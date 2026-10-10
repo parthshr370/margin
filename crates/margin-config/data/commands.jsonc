@@ -45,6 +45,6 @@
   { "id": "view.trim.toggle", "title": "Trim margins", "icon": "crop", "group": "View", "when": "Reader && format == pdf" },
 
   { "id": "annotation.delete", "title": "Delete comment", "icon": "trash-2", "group": "Mark", "when": "Annotation" },
-  { "id": "annotation.color", "title": "Comment colour", "icon": "palette", "group": "Mark", "when": "Annotation",
+  { "id": "annotation.color", "title": "Comment colour", "icon": "palette", "group": "Mark", "when": "Annotation || Selection",
     "args": { "type": "object", "required": ["color"], "properties": { "color": { "type": "string", "description": "A notes.colors name" } } } }
 ]

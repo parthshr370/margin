@@ -140,7 +140,7 @@ impl Keys {
 }
 
 /// The arguments of [`COLOR_ID`] for the colour named `name`.
-fn color_args(name: &str) -> Value {
+pub(crate) fn color_args(name: &str) -> Value {
     serde_json::json!({ "color": name.to_lowercase() })
 }
 
@@ -211,6 +211,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
 pub(crate) fn run(app: &mut PdfCraftApp, id: &str, args: &Value) -> bool {
     if id != DELETE_ID && id != COLOR_ID {
         return false;
+    }
+    // A colour key while the selection bar is open marks or restyles the bar's text.
+    if id == COLOR_ID && super::selection::color_key(app, args) {
+        return true;
     }
     let Some((index, doc_id)) = app.active_ids() else { return true };
     let Some((page, annot)) = app.views.get(index).and_then(|v| v.comments.selected) else { return true };

@@ -26,6 +26,7 @@ pub mod pagecolor;
 pub mod rail;
 pub mod reading;
 pub mod saving;
+pub mod selection;
 pub mod settings_watch;
 pub mod sidebar;
 #[cfg(not(target_arch = "wasm32"))]
@@ -273,7 +274,8 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 ui.disable();
                 ui.set_opacity(opacity);
             }
-            crate::canvas::document_area(app, i, ui)
+            crate::canvas::document_area(app, i, ui);
+            selection::show(app, ui.ctx(), i, ui.clip_rect());
         }
     });
     app.process_pending_edits();

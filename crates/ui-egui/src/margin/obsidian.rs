@@ -874,6 +874,17 @@ pub fn callout_for(app: &PdfCraftApp, i: usize, page: usize, index: usize) -> Re
     Ok(callout(&h, &d.link, &d.title))
 }
 
+/// The callout of a fresh text selection on `page` of view `i`, without writing a comment:
+/// `text` quoted in `color` (`None`: the first of `notes.colors`).
+pub fn selection_callout(app: &PdfCraftApp, i: usize, page: usize, text: &str, color: Option<[f32; 3]>) -> Result<String, String> {
+    let view = app.views.get(i).ok_or("No document is open.")?;
+    let doc = app.session.get(view.id).ok_or("No document is open.")?;
+    let d = DocNotes::of(&app.notes, doc);
+    let label = doc.info.pages.get(page).map_or_else(|| page.saturating_add(1).to_string(), |p| p.label.clone());
+    let h = Highlight { key: String::new(), page, label, color: app.notes.color_label(color), text: text.to_string(), note: String::new() };
+    Ok(callout(&h, &d.link, &d.title))
+}
+
 fn copy_callout(app: &mut PdfCraftApp, i: usize, page: usize, index: usize) -> Result<String, String> {
     let text = callout_for(app, i, page, index)?;
     copy_to_clipboard(app, text)?;

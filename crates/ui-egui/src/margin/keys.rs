@@ -597,6 +597,11 @@ fn close_layer(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     }
     let Some(view) = app.active.and_then(|index| app.views.get_mut(index)) else { return };
+    // The selection bar and its selection close together.
+    if view.margin.selection.dismiss() {
+        view.clear_selection();
+        return;
+    }
     if view.selected_text().is_some() {
         view.clear_selection();
     } else {

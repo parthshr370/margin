@@ -65,6 +65,8 @@ pub struct DocReading {
     pub(crate) goto_x: Option<f32>,
     /// Back and Forward to exact places, and the Back pill (R8 QoL 6).
     pub(crate) history: super::history::History,
+    /// The selection bar: Copy, colours, Underline, Comment, callout (R8 QoL 8).
+    pub(crate) selection: super::selection::SelectionBar,
     /// Fit "read": the widest page `reading_width_px` wide, narrower windows permitting. Ends
     /// when the reader zooms or picks another fit.
     read_fit: Option<ReadFit>,

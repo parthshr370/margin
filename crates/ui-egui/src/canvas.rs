@@ -565,6 +565,11 @@ impl DocView {
         self.selection = None;
     }
 
+    /// The text selection as (page, glyph range in reading order): Margin's selection bar.
+    pub(crate) fn selection_range(&self) -> Option<(usize, Range<usize>)> {
+        self.selection.map(|s| (s.page, s.range()))
+    }
+
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
         self.selection = Some(Selection { page, anchor: from, head: to });

@@ -25,6 +25,7 @@ fn main() -> Result<(), String> {
     let mut flavor = Flavor::PdfCraft;
     let mut margin_runs = Vec::new();
     let mut pointer = Vec::new();
+    let mut select_text: Option<(usize, usize, usize)> = None;
     while let Some(a) = args.next() {
         match a.strip_prefix("--") {
             Some("size") => {
@@ -42,6 +43,15 @@ fn main() -> Result<(), String> {
                 }
             }
             Some("margin-run") => margin_runs.push(args.next().ok_or("--margin-run ID")?),
+            Some("select-text") => {
+                // `--select-text PAGE:FROM-TO`: 1-based page, glyph indices in reading order.
+                let v = args.next().unwrap_or_default();
+                let parsed = v.split_once(':').and_then(|(page, glyphs)| {
+                    let (from, to) = glyphs.split_once('-')?;
+                    Some((page.parse::<usize>().ok()?.checked_sub(1)?, from.parse().ok()?, to.parse().ok()?))
+                });
+                select_text = Some(parsed.ok_or("--select-text PAGE:FROM-TO")?);
+            }
             Some(verb @ ("click" | "hover")) => pointer.push((verb == "click", args.next().ok_or("--click/--hover LABEL")?)),
             Some(k) => opts.push((k.to_string(), args.next().unwrap_or_default())),
             None => file = Some(a),
@@ -77,6 +87,13 @@ fn main() -> Result<(), String> {
         if !pdfcraft_ui_egui::margin::run(harness.state_mut(), id, &serde_json::Value::Null) {
             eprintln!("shot: --margin-run {id}: not a Margin id");
         }
+        harness.run_steps(6);
+        settle(&mut harness);
+    }
+    if let Some((page, from, to)) = select_text {
+        let app = harness.state_mut();
+        let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return Err("--select-text: no document".into()) };
+        view.select_text(page, from, to);
         harness.run_steps(6);
         settle(&mut harness);
     }
