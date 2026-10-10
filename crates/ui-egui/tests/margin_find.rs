@@ -152,3 +152,31 @@ fn a_narrow_window_puts_the_field_on_its_own_row() {
     let page = h.state().views[0].viewport_rect();
     assert!(field.bottom() <= page.top(), "the field ({field:?}) is above the page ({page:?})");
 }
+
+/// R8 QoL 6: a search keeps the reader's place once, however many matches it steps through, and
+/// one Back after closing it returns there.
+#[test]
+fn a_search_keeps_the_reading_place_once() {
+    use pdfcraft_ui_egui::margin::reading::{self, Spot};
+    let mut h = harness();
+    reading::go(&mut h.state_mut().views[0], Spot { page: 3, y: 0.4, x: None });
+    h.run_steps(4);
+    let origin = reading::place(&h.state().views[0]);
+    assert!(h.state().views[0].back.is_empty(), "moving the view is not a jump");
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(3);
+    h.event(Event::Text(WORD.into()));
+    search_settles(&mut h);
+    for _ in 0..30 {
+        h.key_press(Key::Enter);
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().views[0].back.len(), 1, "one entry for the whole search");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].find.is_none());
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(4);
+    let back = reading::place(&h.state().views[0]);
+    assert!(back.0 == origin.0 && (back.1 - origin.1).abs() < 0.01, "Back to {back:?}, the search started at {origin:?}");
+}

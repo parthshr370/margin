@@ -14,6 +14,7 @@ pub mod focus;
 pub mod footer;
 pub mod header;
 pub mod highlights;
+pub mod history;
 pub mod keys;
 pub mod keysheet;
 #[cfg(not(target_arch = "wasm32"))]
@@ -275,6 +276,9 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         }
     });
     app.process_pending_edits();
+    if app.active.is_some() {
+        history::show(app, ctx);
+    }
     crate::palette::show(app, ctx);
     crate::dialogs::show(app, ctx);
     keys::show(app, ctx);

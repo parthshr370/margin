@@ -317,6 +317,66 @@ fn zoom_and_fit_entry_points_agree_and_keep_the_line() {
     assert!(right <= view.viewport_rect().right() + 0.5, "the spread's right page ends at {right}, window {:?}", view.viewport_rect());
 }
 
+/// R8 QoL 6: Back returns to the exact place and zoom before a jump; page turns and moving the
+/// view add no history; a jump within the page is reversible; Alt+←/→, the pill and the mouse's
+/// back button share the one history; the pill goes after six seconds.
+#[test]
+fn back_returns_to_the_exact_place_before_a_jump() {
+    let place = Place::new("back", "paper.pdf", &paper(8));
+    let mut h = harness(&place);
+    h.state_mut().set_option("zoom", "150").unwrap();
+    settle(&mut h);
+    h.state_mut().views[0].step_page(true);
+    settle(&mut h);
+    reading::go(&mut h.state_mut().views[0], reading::Spot { page: 2, y: 0.5, x: None });
+    settle(&mut h);
+    assert!(h.state().views[0].back.is_empty(), "page turns and moving the view are not jumps");
+    let origin = line(&h);
+
+    // A link, outline entry, bookmark or the page box: `go_to_page`.
+    h.state_mut().views[0].go_to_page(6);
+    settle(&mut h);
+    assert_eq!(line(&h).0, 6);
+    h.get_by_label("Back to p. 3");
+    // Zoomed after the jump (175 %: the test renderer's textures stop at 2048 px untiled).
+    h.state_mut().set_option("zoom", "175").unwrap();
+    settle(&mut h);
+    h.key_press_modifiers(egui::Modifiers::ALT, Key::ArrowLeft);
+    settle(&mut h);
+    assert!(same_line(line(&h), origin), "Back to {:?}, was {origin:?}", line(&h));
+    assert!((h.state().views[0].zoom - 1.5).abs() < 1e-3, "and its zoom: {}", h.state().views[0].zoom);
+    assert!(h.query_by_label("Back to p. 3").is_none(), "Back takes the pill away");
+    h.key_press_modifiers(egui::Modifiers::ALT, Key::ArrowRight);
+    settle(&mut h);
+    assert_eq!(line(&h).0, 6, "Forward");
+
+    // A jump to the top of the page being read is reversible too; the pill goes back.
+    reading::go(&mut h.state_mut().views[0], reading::Spot { page: 6, y: 0.6, x: None });
+    settle(&mut h);
+    let middle = line(&h);
+    h.state_mut().views[0].go_to_page(6);
+    settle(&mut h);
+    assert!(line(&h).1 < 0.05, "at the page's top: {:?}", line(&h));
+    h.get_by_label("Back to p. 7").click();
+    settle(&mut h);
+    assert!(same_line(line(&h), middle), "the pill: {:?}, was {middle:?}", line(&h));
+
+    // The mouse's back button.
+    h.state_mut().views[0].go_to_page(0);
+    settle(&mut h);
+    let pointer = h.state().views[0].viewport_rect().center();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: pointer, button: egui::PointerButton::Extra1, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    settle(&mut h);
+    assert!(same_line(line(&h), middle), "the mouse's back button: {:?}, was {middle:?}", line(&h));
+    h.state_mut().views[0].go_to_page(4);
+    settle(&mut h);
+    assert!(h.query_by_label("Back to p. 7").is_some());
+    wait(&mut h, 6.5);
+    assert!(h.query_by_label("Back to p. 7").is_none(), "the pill goes after six seconds");
+}
+
 #[test]
 fn auto_trim_fills_the_width_with_the_text_at_fit_width() {
     let place = Place::new("trim", "paper2col.pdf", &paper(3));

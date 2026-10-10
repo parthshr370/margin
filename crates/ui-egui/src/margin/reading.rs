@@ -63,6 +63,8 @@ pub struct DocReading {
     /// The horizontal half of a pending `goto`: the share of the page's width to put at the
     /// window's centre. The canvas takes it with `goto` (R8 QoL 4).
     pub(crate) goto_x: Option<f32>,
+    /// Back and Forward to exact places, and the Back pill (R8 QoL 6).
+    pub(crate) history: super::history::History,
     /// Fit "read": the widest page `reading_width_px` wide, narrower windows permitting. Ends
     /// when the reader zooms or picks another fit.
     read_fit: Option<ReadFit>,
@@ -229,6 +231,7 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     reading.bookmarks.sort_by_key(|bookmark| bookmark_page(bookmark).unwrap_or(usize::MAX));
     reading.autosave = Autosave { opened: generation, seen: generation, ..Autosave::default() };
     reading.pages = pages;
+    reading.history.exact = true;
     let auto_add = file.obsidian.as_ref().is_some_and(|obsidian| obsidian.auto_add);
     let notice = locked.as_ref().map(|reason| format!("This document's reading state won't be saved: {reason}"));
     reading.sidecar = document.map(|document| SidecarFile { document, data, file, path, locked, saved: None, pending: None });
@@ -255,6 +258,17 @@ pub(crate) fn has_saved_place(view: &DocView) -> bool {
 /// Whether fit "read" holds the zoom.
 pub fn reads(view: &DocView) -> bool {
     view.margin.read_fit.is_some()
+}
+
+/// The reading width fit "read" holds, if it holds the zoom.
+pub(crate) fn read_width(view: &DocView) -> Option<f32> {
+    view.margin.read_fit.map(|read| read.width_px)
+}
+
+/// Put back fit "read" at `width_px` for the zoom shown now (a place in the view history), or
+/// end it.
+pub(crate) fn hold_read_width(view: &mut DocView, width_px: Option<f32>) {
+    view.margin.read_fit = width_px.map(|width_px| ReadFit { width_px, zoom: view.zoom });
 }
 
 /// Pick fit "read" (`width_px`: `view.reading_width_px`), keeping the reader's place.

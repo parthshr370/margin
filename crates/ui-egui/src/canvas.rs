@@ -183,6 +183,13 @@ struct PageTex {
     color: u64,
 }
 
+/// A place in the view history: its page and, in Margin, the exact place there (R8 QoL 6).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewPlace {
+    pub page: usize,
+    pub exact: Option<crate::margin::history::Place>,
+}
+
 pub struct DocView {
     pub id: DocId,
     pub zoom: f32,
@@ -197,9 +204,9 @@ pub struct DocView {
     pub notice_dismissed: bool,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
-    /// Previous view / Next view: pages visited before (and after, once going back).
-    pub back: Vec<usize>,
-    pub forward: Vec<usize>,
+    /// Previous view / Next view: places visited before (and after, once going back).
+    pub back: Vec<ViewPlace>,
+    pub forward: Vec<ViewPlace>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
@@ -627,6 +634,8 @@ impl DocView {
     }
 
     fn flash_match(&mut self, page: usize) {
+        // Margin: the first jump of a search keeps where the reader was, once (R8 QoL 6).
+        crate::margin::history::search_jump(self);
         let frac = self
             .find
             .as_ref()
@@ -665,16 +674,33 @@ impl DocView {
 
     pub fn go_to_page(&mut self, page: usize) {
         let page = page.min(self.page_count.saturating_sub(1));
-        if page != self.current {
-            // The view history (Previous view / Next view).
-            if self.back.last() != Some(&self.current) {
-                self.back.push(self.current);
-                if self.back.len() > 200 {
-                    self.back.remove(0);
-                }
-            }
-            self.forward.clear();
+        // The view history (Previous view / Next view). Margin records the exact place, so a
+        // jump within the page counts too (R8 QoL 6).
+        let here = self.here();
+        if page != self.current || here.exact.is_some() {
+            self.remember(here);
         }
+        self.show_page(page);
+    }
+
+    /// Where the reader is, as the view history keeps it.
+    pub(crate) fn here(&self) -> ViewPlace {
+        ViewPlace { page: self.current, exact: crate::margin::history::here(self) }
+    }
+
+    /// Put `here` on the view history before a jump; a new jump ends the way forward.
+    pub(crate) fn remember(&mut self, here: ViewPlace) {
+        if self.back.last() != Some(&here) {
+            self.back.push(here);
+            if self.back.len() > 200 {
+                self.back.remove(0);
+            }
+        }
+        self.forward.clear();
+    }
+
+    /// Show `page` from its top, without touching the view history.
+    fn show_page(&mut self, page: usize) {
         // Partial wheel motion belongs to the old place.
         self.wheel.clear_motion();
         self.goto = Some((page, 0.0));
@@ -700,7 +726,12 @@ impl DocView {
             PageLayout::Continuous | PageLayout::Single if forward => c + 1,
             PageLayout::Continuous | PageLayout::Single => c.saturating_sub(1),
         };
-        self.go_to_page(target);
+        // Margin's page turns are reading, not jumps: they stay out of the history (R8 QoL 6).
+        if crate::margin::history::exact(self) {
+            self.show_page(target.min(self.page_count.saturating_sub(1)));
+        } else {
+            self.go_to_page(target);
+        }
     }
 
     /// Go to the page typed in the page box: a page label (logical page numbers, as Acrobat
@@ -722,13 +753,17 @@ impl DocView {
 
     /// View ▸ Page navigation ▸ Previous view (`false`) / Next view (`true`).
     pub fn view_history(&mut self, forward: bool) -> bool {
+        let here = self.here();
         let (from, to) = if forward { (&mut self.forward, &mut self.back) } else { (&mut self.back, &mut self.forward) };
-        let Some(page) = from.pop() else { return false };
-        to.push(self.current);
-        let page = page.min(self.page_count.saturating_sub(1));
+        let Some(place) = from.pop() else { return false };
+        to.push(here);
+        let page = place.page.min(self.page_count.saturating_sub(1));
         self.goto = Some((page, 0.0));
         self.current = page;
         self.page_input = (page + 1).to_string();
+        if let Some(exact) = place.exact {
+            crate::margin::history::restore(self, exact);
+        }
         true
     }
 
