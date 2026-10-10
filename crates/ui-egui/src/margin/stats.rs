@@ -73,6 +73,11 @@ impl StatsState {
             None => Some(super::stats_sheet::Sheet::default()),
         };
     }
+
+    /// Lets the next read try the database again after opening it failed (the sheet's Retry).
+    pub(crate) fn retry_open(&mut self) {
+        self.failed = false;
+    }
 }
 
 /// Opens `<data>/stats.sqlite` if it isn't yet. False when there is none (no data folder, or it

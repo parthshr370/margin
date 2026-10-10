@@ -1,14 +1,16 @@
-//! Margin's library and reading stats (R6) in the real shell: a folder scan indexes PDFs with
-//! covers on a worker thread, Continue opens a book where it was left, reading logs page times
-//! and a session, and the Stats sheet's calendar shows today.
+//! Margin's library and reading stats (R6, R10 §5) in the real shell: a folder scan indexes
+//! PDFs with covers on a worker thread, Continue opens a book where it was left, reading logs
+//! page times and a session, and the Stats sheet shows the seeded history: today on the
+//! calendar, the cards' totals, the streaks and a sortable table.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use margin_config::library::Cover;
+use margin_config::stats::{Recorder, Showing, StatsDb};
 use pdfcraft_ui_egui::margin::{reading, stats_sheet};
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
@@ -192,19 +194,129 @@ fn reading_logs_page_times_a_session_and_the_calendar_shows_today() {
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::T);
     h.run_steps(3);
     assert!(h.state().margin_stats.sheet_open(), "Ctrl+Shift+T opens the Stats sheet");
-    assert!(h.query_by_label_contains("Today, ").is_some(), "the calendar marks today");
-    assert!(h.query_by_label_contains(": 30s").is_some(), "with today's time");
+    // The day's cell and the calendar's keyboard day (today) both say it.
+    assert!(h.query_all_by_label_contains("Today, ").next().is_some(), "the calendar marks today");
+    assert!(h.query_all_by_label_contains(": 0 min 30 sec · 3 pages · 1 book").next().is_some(), "with today's time");
     let now = h.state().margin_stats.now();
     let data = stats_sheet::load(h.state_mut(), now).unwrap();
     assert_eq!(data.seconds_on(data.today), 30);
 
     let csv = place.0.join("stats.csv");
     h.state_mut().pick_override = Some(vec![csv.to_string_lossy().into_owned()]);
-    h.get_by_label("Export CSV…").click();
+    h.get_by_label("Export CSV").click();
     h.run_steps(4);
     let text = std::fs::read_to_string(&csv).expect("CSV written");
     assert_eq!(text.lines().count(), 4, "{text}");
     assert!(text.lines().nth(1).unwrap().contains(",Paper,1,10"), "{text}");
+}
+
+/// One page visit of `seconds` from `start` (Unix seconds), through the real recorder.
+fn seed_visit(db: &StatsDb, book: &str, page: u32, start: i64, seconds: i64) {
+    let mut recorder = Recorder::default();
+    recorder.step(db, start as f64, Some(Showing { book, page }), true).unwrap();
+    recorder.stop(db, (start + seconds) as f64).unwrap();
+}
+
+/// Scrolls the Stats sheet's body to its end.
+fn scroll_sheet_down(h: &mut Harness<'static, PdfCraftApp>) {
+    h.hover_at(h.get_by_label_contains("Today: ").rect().center());
+    for _ in 0..10 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+}
+
+#[test]
+fn the_stats_sheet_shows_seeded_totals_streaks_and_a_sorted_table() {
+    let place = Place::new("stats-seeded");
+    let noon = {
+        let db = StatsDb::open(&place.data()).unwrap();
+        db.note_book("alpha", "Alpha", 10).unwrap();
+        db.note_book("beta", "Beta", 10).unwrap();
+        let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let today = db.local_day(i64::try_from(wall).unwrap()).unwrap();
+        let at = |day: i64, clock: &str| db.local_unix(day, clock).unwrap();
+        seed_visit(&db, "alpha", 0, at(today, "10:00:00"), 600);
+        seed_visit(&db, "alpha", 1, at(today, "10:30:00"), 300);
+        seed_visit(&db, "beta", 0, at(today - 1, "12:00:00"), 1200);
+        seed_visit(&db, "alpha", 2, at(today - 2, "09:00:00"), 600);
+        // A week ago: one visit before noon, one after (left out of the to-date comparison).
+        seed_visit(&db, "beta", 1, at(today - 7, "09:00:00"), 300);
+        seed_visit(&db, "beta", 2, at(today - 7, "13:00:00"), 600);
+        for day in today - 40..=today - 37 {
+            seed_visit(&db, "alpha", 5, at(day, "08:00:00"), 60);
+        }
+        at(today, "12:00:00")
+    };
+    let mut app = app(&place);
+    app.margin_stats.set_clock(noon as f64);
+    let mut h = harness(app);
+    assert!(pdfcraft_ui_egui::margin::run(h.state_mut(), "app.stats", &serde_json::Value::Null));
+    h.run_steps(4);
+
+    assert!(h.query_by_label_contains("Today: 15m. +10m vs last ").is_some(), "today against the same weekday, up to noon");
+    assert!(h.query_by_label_contains("Last 12 months: 1h 4m. 8 active days").is_some());
+    assert!(h.query_by_label_contains("Books: 2.").is_some());
+    assert!(
+        h.query_all_by_label_contains("Today, ").any(|day| day.rect().width() < 20.0 && day.rect().height() < 20.0),
+        "the calendar has today's cell"
+    );
+    assert!(h.query_all_by_label_contains(": 15 min 0 sec · 2 pages · 1 book").next().is_some(), "with its reading");
+    assert!(h.query_by_label("Current streak 3 days").is_some(), "today and the two days before");
+    assert!(h.query_by_label("Longest streak 4 days, all time").is_some());
+
+    // One tab stop: arrows move the day, Enter pins its card, Esc closes the card, not the sheet.
+    h.get_by_label_contains("Reading calendar.").focus();
+    h.run_steps(2);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    assert!(
+        h.get_by_label_contains("Reading calendar.")
+            .accesskit_node()
+            .label()
+            .is_some_and(|label| label.ends_with(": 20 min 0 sec · 1 page · 1 book"))
+    );
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().margin_stats.sheet_open(), "Esc closed the pinned card only");
+
+    scroll_sheet_down(&mut h);
+    let top = |h: &Harness<'static, PdfCraftApp>, title: &str| h.get_by_label(title).rect().top();
+    assert!(top(&h, "Beta") < top(&h, "Alpha"), "most time first: Beta 45m, Alpha 29m");
+    h.get_by_label("Sort by Title").click_accesskit();
+    h.run_steps(3);
+    assert!(top(&h, "Alpha") < top(&h, "Beta"), "sorted by title");
+    h.get_by_label("Sort by Title").click_accesskit();
+    h.run_steps(3);
+    assert!(top(&h, "Beta") < top(&h, "Alpha"), "and back, Z to A");
+    assert!(!h.get_by_label("Export CSV").accesskit_node().is_disabled(), "visits to export");
+}
+
+#[test]
+fn the_stats_sheet_without_history_and_with_recording_off() {
+    let place = Place::new("stats-empty");
+    let settings = serde_json::json!({ "stats": { "enabled": false } });
+    std::fs::write(place.0.join("config").join("settings.jsonc"), settings.to_string()).unwrap();
+    let mut h = harness(app(&place));
+    assert!(pdfcraft_ui_egui::margin::run(h.state_mut(), "app.stats", &serde_json::Value::Null));
+    h.run_steps(4);
+    assert!(h.query_by_label("Your reading history starts here").is_some(), "the empty state, not an empty chart");
+    assert!(h.query_by_label_contains("Today: 0m.").is_some(), "the cards stay, at zero");
+    assert!(h.query_by_label("Current streak 0 days").is_some());
+    assert!(h.get_by_label("Export CSV").accesskit_node().is_disabled(), "nothing to export");
+    assert!(h.query_by_label("Recording is off").is_some(), "stats.enabled = false says so");
+    h.get_by_label("Open PDF");
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    assert!(!h.state().margin_stats.sheet_open());
 }
 
 #[test]

@@ -23,7 +23,9 @@ pub const IDLE_SECS: f64 = 5.0 * 60.0;
 /// Shorter page visits are not recorded.
 pub const MIN_PAGE_SECS: f64 = 5.0;
 const SCHEMA_VERSION: i64 = 1;
-const SECS_PER_DAY: i64 = 86_400;
+/// A local day's first moment, for [`StatsDb::local_unix`].
+const MIDNIGHT: &str = "00:00:00";
+const MONTHS_PER_YEAR: i64 = 12;
 /// 1970-01-01 was a Thursday: day 0 is weekday 3 counting from Monday.
 const EPOCH_WEEKDAY: i64 = 3;
 const DAYS_PER_WEEK: i64 = 7;
@@ -81,24 +83,114 @@ impl BookSummary {
     }
 }
 
-/// Time read on one local day.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DayTotal {
+/// One local day's reading: its time, the distinct pages read (a page of a book counts once,
+/// however often it was visited) and the time per book.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DayStats {
     /// Days since 1970-01-01 (local calendar).
     pub day: i64,
     pub seconds: i64,
+    pub pages: u32,
+    /// The books read that day, most time first.
+    pub books: Vec<DayBook>,
 }
 
-/// Time read per book, most recent first.
+/// One book's time on one day.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DayBook {
+    pub book: String,
+    pub title: String,
+    pub seconds: i64,
+}
+
+/// The reading of an interval of time: page visits starting in it, each counted only up to the
+/// interval's end, and the distinct books they belong to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Interval {
+    pub seconds: i64,
+    pub books: u32,
+}
+
+/// Runs of consecutive local days with reading, over all history.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Streaks {
+    /// The run ending today, or yesterday while today has no reading yet.
+    pub current: u32,
+    pub longest: u32,
+}
+
+/// One book's reading in a period.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BookTotal {
     pub book: String,
     pub title: String,
     pub seconds: i64,
+    /// Distinct pages read in the period.
     pub pages: u32,
-    /// Last page read (Unix seconds).
+    /// The end of the last page visit (Unix seconds).
     pub last: i64,
+    /// [`Self::last`] as local `YYYY-MM-DD HH:MM:SS`.
+    pub last_local: String,
 }
+
+/// Everything the Stats sheet shows, read at one captured `now` (plan/R10-SURFACES.md §5).
+/// Visits belong to the local date they start on, everywhere: the calendar, the cards, the
+/// table and the CSV.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Overview {
+    /// Unix seconds.
+    pub now: i64,
+    /// Today's day number (local calendar).
+    pub today: i64,
+    /// The period's first day: today minus [`PERIOD_MONTHS`] calendar months.
+    pub first: i64,
+    /// The days from `first` to `today` with reading, oldest first.
+    pub days: Vec<DayStats>,
+    /// Today so far, and the same weekday last week up to the same local clock time.
+    pub today_so_far: Interval,
+    pub today_last_week: Interval,
+    /// This week (from Monday) so far, and last week over the same elapsed local time.
+    pub week_so_far: Interval,
+    pub last_week_to_date: Interval,
+    /// The books read in the period, most time first.
+    pub books: Vec<BookTotal>,
+    /// Over all history, not only the period.
+    pub streaks: Streaks,
+    /// Page visits recorded, all time: zero means there is no history at all.
+    pub visits: usize,
+}
+
+impl Overview {
+    /// The reading on `day`, if any.
+    pub fn day(&self, day: i64) -> Option<&DayStats> {
+        self.days.binary_search_by_key(&day, |stats| stats.day).ok().and_then(|index| self.days.get(index))
+    }
+
+    /// Seconds read on `day`.
+    pub fn seconds_on(&self, day: i64) -> i64 {
+        self.day(day).map_or(0, |stats| stats.seconds)
+    }
+
+    /// Seconds read in the period.
+    pub fn period_seconds(&self) -> i64 {
+        self.days.iter().map(|stats| stats.seconds).sum()
+    }
+
+    /// The most seconds read on one day of the period (0 without reading).
+    pub fn busiest(&self) -> i64 {
+        self.days.iter().map(|stats| stats.seconds).max().unwrap_or(0)
+    }
+
+    /// This week's Monday.
+    pub fn monday(&self) -> i64 {
+        self.today - i64::from(weekday(self.today))
+    }
+}
+
+/// The Stats sheet's period: the last 12 calendar months.
+pub const PERIOD_MONTHS: u32 = 12;
+/// Heat levels above "no reading": a day's share of the period's busiest day, in quarters.
+pub const HEAT_LEVELS: i64 = 4;
 
 /// `<data>/stats.sqlite`, opened.
 pub struct StatsDb {
@@ -183,50 +275,145 @@ impl StatsDb {
         day_number(&date).ok_or_else(|| format!("stats database: unexpected date {date}"))
     }
 
-    /// Time read per local day from `first_day` on (days without reading are left out).
-    pub fn days_since(&self, first_day: i64) -> Result<Vec<DayTotal>, String> {
-        // A day's local midnight is within a day of its UTC midnight: filter wide, then exactly.
-        let from = first_day.saturating_sub(1).saturating_mul(SECS_PER_DAY);
+    /// The Unix time of the local clock time `clock` (`HH:MM:SS`) on `day`. Uses the local
+    /// calendar, so a day across a daylight-saving change is 23 or 25 hours long.
+    pub fn local_unix(&self, day: i64, clock: &str) -> Result<i64, String> {
+        let (year, month, date) = civil(day);
+        let local = format!("{year:04}-{month:02}-{date:02} {clock}");
+        let unix: Option<i64> =
+            self.conn.query_row("SELECT CAST(strftime('%s', ?1, 'utc') AS INTEGER)", [&local], |row| row.get(0)).map_err(db_err)?;
+        unix.ok_or_else(|| format!("stats database: unexpected local time {local}"))
+    }
+
+    /// The local clock time of `unix`, as `HH:MM:SS`.
+    fn local_clock(&self, unix: i64) -> Result<String, String> {
+        self.conn.query_row("SELECT time(?1, 'unixepoch', 'localtime')", [unix], |row| row.get(0)).map_err(db_err)
+    }
+
+    /// The reading of the page visits starting in `from..to` (Unix seconds), each counted only
+    /// up to `to`, so a to-date comparison never includes time after its end.
+    pub fn interval(&self, from: i64, to: i64) -> Result<Interval, String> {
+        let (seconds, books): (i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(MIN(seconds, ?2 - start)), 0), COUNT(DISTINCT book) FROM page_times
+                 WHERE start >= ?1 AND start < ?2",
+                params![from, to],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(db_err)?;
+        Ok(Interval { seconds, books: u32::try_from(books).unwrap_or(u32::MAX) })
+    }
+
+    /// Each local day's reading from `from` (Unix seconds, a local midnight) to `last_day`. A
+    /// day's pages are its distinct (book, page) pairs: each book's distinct pages, summed.
+    fn days_from(&self, from: i64, last_day: i64) -> Result<Vec<DayStats>, String> {
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT date(start, 'unixepoch', 'localtime') AS day, SUM(seconds) FROM page_times
-                 WHERE start >= ?1 GROUP BY day ORDER BY day",
+                "SELECT date(p.start, 'unixepoch', 'localtime') AS day, p.book, COALESCE(b.title, ''), SUM(p.seconds),
+                        COUNT(DISTINCT p.page)
+                 FROM page_times p LEFT JOIN books b ON b.book = p.book
+                 WHERE p.start >= ?1 GROUP BY day, p.book ORDER BY day",
             )
             .map_err(db_err)?;
-        let rows = stmt.query_map([from], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).map_err(db_err)?;
+        let rows = stmt
+            .query_map([from], |row| {
+                let book = DayBook { book: row.get(1)?, title: row.get(2)?, seconds: row.get(3)? };
+                Ok((row.get::<_, String>(0)?, book, row.get::<_, i64>(4)?))
+            })
+            .map_err(db_err)?;
+        let mut days: Vec<DayStats> = Vec::new();
+        for row in rows {
+            let (date, book, pages) = row.map_err(db_err)?;
+            let Some(day) = day_number(&date).filter(|day| *day <= last_day) else { continue };
+            if days.last().is_none_or(|stats| stats.day != day) {
+                days.push(DayStats { day, ..DayStats::default() });
+            }
+            if let Some(stats) = days.last_mut() {
+                stats.seconds = stats.seconds.saturating_add(book.seconds);
+                stats.pages = stats.pages.saturating_add(u32::try_from(pages).unwrap_or(u32::MAX));
+                stats.books.push(book);
+            }
+        }
+        for stats in &mut days {
+            stats.books.sort_by(|a, b| b.seconds.cmp(&a.seconds).then_with(|| a.title.cmp(&b.title)).then_with(|| a.book.cmp(&b.book)));
+        }
+        Ok(days)
+    }
+
+    /// The local days with reading, all history, oldest first.
+    fn active_days(&self) -> Result<Vec<i64>, String> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT DISTINCT date(start, 'unixepoch', 'localtime') AS day FROM page_times WHERE seconds > 0 ORDER BY day")
+            .map_err(db_err)?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(db_err)?;
         let mut days = Vec::new();
         for row in rows {
-            let (date, seconds) = row.map_err(db_err)?;
-            if let Some(day) = day_number(&date).filter(|day| *day >= first_day) {
-                days.push(DayTotal { day, seconds });
+            if let Some(day) = day_number(&row.map_err(db_err)?) {
+                days.push(day);
             }
         }
         Ok(days)
     }
 
-    /// Every book read, most recently read first.
-    pub fn book_totals(&self) -> Result<Vec<BookTotal>, String> {
+    /// The books read from `from` (Unix seconds) on: most time first, then most recently read,
+    /// then by title and key.
+    pub fn book_totals_since(&self, from: i64) -> Result<Vec<BookTotal>, String> {
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT p.book, COALESCE(b.title, ''), SUM(p.seconds), COUNT(DISTINCT p.page), MAX(p.start + p.seconds) AS last
+                "SELECT p.book, COALESCE(b.title, '') AS title, SUM(p.seconds) AS total, COUNT(DISTINCT p.page),
+                        MAX(p.start + p.seconds) AS last, datetime(MAX(p.start + p.seconds), 'unixepoch', 'localtime')
                  FROM page_times p LEFT JOIN books b ON b.book = p.book
-                 GROUP BY p.book ORDER BY last DESC",
+                 WHERE p.start >= ?1
+                 GROUP BY p.book ORDER BY total DESC, last DESC, title, p.book",
             )
             .map_err(db_err)?;
         let rows = stmt
-            .query_map([], |row| {
+            .query_map([from], |row| {
                 Ok(BookTotal {
                     book: row.get(0)?,
                     title: row.get(1)?,
                     seconds: row.get(2)?,
                     pages: u32::try_from(row.get::<_, i64>(3)?).unwrap_or(u32::MAX),
                     last: row.get(4)?,
+                    last_local: row.get(5)?,
                 })
             })
             .map_err(db_err)?;
         rows.map(|row| row.map_err(db_err)).collect()
+    }
+
+    /// Page visits recorded, all books, all time.
+    pub fn visit_count(&self) -> Result<usize, String> {
+        let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM page_times", [], |row| row.get(0)).map_err(db_err)?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+
+    /// The Stats sheet's numbers at `now` (Unix seconds), in one read.
+    pub fn overview(&self, now: i64) -> Result<Overview, String> {
+        let today = self.local_day(now)?;
+        let first = months_back(today, PERIOD_MONTHS);
+        let monday = today - i64::from(weekday(today));
+        let last_week = today - DAYS_PER_WEEK;
+        // Last week's moment matching now: the same local clock time, seven calendar days back.
+        let last_week_now = self.local_unix(last_week, &self.local_clock(now)?)?;
+        let period_start = self.local_unix(first, MIDNIGHT)?;
+        Ok(Overview {
+            now,
+            today,
+            first,
+            days: self.days_from(period_start, today)?,
+            today_so_far: self.interval(self.local_unix(today, MIDNIGHT)?, now)?,
+            today_last_week: self.interval(self.local_unix(last_week, MIDNIGHT)?, last_week_now)?,
+            week_so_far: self.interval(self.local_unix(monday, MIDNIGHT)?, now)?,
+            last_week_to_date: self.interval(self.local_unix(monday - DAYS_PER_WEEK, MIDNIGHT)?, last_week_now)?,
+            books: self.book_totals_since(period_start)?,
+            streaks: streaks(&self.active_days()?, today),
+            visits: self.visit_count()?,
+        })
     }
 
     /// Every page visit as CSV: `date,time,book,title,page,seconds` (local date and time, page
@@ -276,22 +463,70 @@ fn csv_field(text: &str) -> String {
     if text.contains([',', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text.to_owned() }
 }
 
-/// Days since 1970-01-01 of a `YYYY-MM-DD` date (Howard Hinnant's `days_from_civil`).
+/// Days since 1970-01-01 of a `YYYY-MM-DD` date.
 pub fn day_number(date: &str) -> Option<i64> {
     let mut parts = date.splitn(3, '-');
     let year: i64 = parts.next()?.parse().ok()?;
     let month: i64 = parts.next()?.parse().ok()?;
     let day: i64 = parts.next()?.parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    if !(1..=MONTHS_PER_YEAR).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
+    Some(days_from_civil(year, month, day))
+}
+
+/// Days since 1970-01-01 of a valid date (Howard Hinnant's `days_from_civil`).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = year.div_euclid(400);
     let yoe = year - era * 400;
     let mp = (month + 9) % 12;
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era * 146_097 + doe - 719_468)
+    era * 146_097 + doe - 719_468
+}
+
+/// `day` minus `months` calendar months, the date clamped to the earlier month's length (31
+/// March minus one month is the last day of February).
+pub fn months_back(day: i64, months: u32) -> i64 {
+    let (year, month, date) = civil(day);
+    let index = year * MONTHS_PER_YEAR + i64::from(month) - 1 - i64::from(months);
+    let (year, month) = (index.div_euclid(MONTHS_PER_YEAR), index.rem_euclid(MONTHS_PER_YEAR) + 1);
+    let first = days_from_civil(year, month, 1);
+    let next = if month == MONTHS_PER_YEAR { days_from_civil(year + 1, 1, 1) } else { days_from_civil(year, month + 1, 1) };
+    first + (i64::from(date) - 1).min(next - first - 1)
+}
+
+/// A day's heat level, 0 (no reading) to [`HEAT_LEVELS`]: its share of `busiest` in quarters,
+/// rounded up, so (0, 25 %] is level 1 and (75 %, 100 %] level 4.
+pub fn heat_level(seconds: i64, busiest: i64) -> u8 {
+    if seconds <= 0 || busiest <= 0 {
+        return 0;
+    }
+    let (seconds, busiest, levels) = (i128::from(seconds), i128::from(busiest), i128::from(HEAT_LEVELS));
+    let level = (seconds * levels + busiest - 1) / busiest;
+    u8::try_from(level.clamp(1, levels)).unwrap_or(0)
+}
+
+/// The streaks in `active` (days with reading, ascending): the longest run of consecutive
+/// days, and the run ending today, or yesterday while today has nothing yet. A missing day
+/// breaks a run; days after `today` are ignored.
+pub fn streaks(active: &[i64], today: i64) -> Streaks {
+    let (mut run, mut longest, mut previous) = (0u32, 0u32, None::<i64>);
+    for &day in active.iter().filter(|day| **day <= today) {
+        run = match previous {
+            Some(last) if last == day => run,
+            Some(last) if last + 1 == day => run.saturating_add(1),
+            _ => 1,
+        };
+        longest = longest.max(run);
+        previous = Some(day);
+    }
+    let current = match previous {
+        Some(last) if last == today || last + 1 == today => run,
+        _ => 0,
+    };
+    Streaks { current, longest }
 }
 
 /// (year, month, day) of a day number (Howard Hinnant's `civil_from_days`).
@@ -505,12 +740,14 @@ mod tests {
         let now = crate::library::now_unix() as f64;
         rec.step(&db, now - 40.0, showing("b", 0), true).unwrap();
         rec.stop(&db, now).unwrap();
-        let today = db.local_day(now as i64).unwrap();
-        let days = db.days_since(today - 365).unwrap();
-        assert_eq!(days, vec![DayTotal { day: today, seconds: 40 }]);
-        let totals = db.book_totals().unwrap();
+        let overview = db.overview(now as i64).unwrap();
+        let today = overview.today;
+        assert_eq!(overview.seconds_on(today), 40);
+        assert_eq!(overview.visits, 1);
+        let totals = &overview.books;
         assert_eq!(totals.len(), 1);
         assert_eq!((totals[0].title.as_str(), totals[0].seconds, totals[0].pages), ("A, \"quoted\" title", 40, 1));
+        assert_eq!(totals[0].last_local.len(), "2026-10-10 12:00:00".len());
         let csv = db.export_csv().unwrap();
         let mut lines = csv.lines();
         assert_eq!(lines.next(), Some("date,time,book,title,page,seconds"));
@@ -536,5 +773,80 @@ mod tests {
         assert_eq!(format_duration(45.0), "45s");
         assert_eq!(format_duration(3600.0), "1h");
         assert_eq!(format_duration(f64::NAN), "0s");
+    }
+
+    /// One page visit of `seconds` from `start`, through the real recorder.
+    fn visit(db: &StatsDb, book: &str, page: u32, start: i64, seconds: i64) {
+        let mut recorder = Recorder::default();
+        recorder.step(db, start as f64, showing(book, page), true).unwrap();
+        recorder.stop(db, (start + seconds) as f64).unwrap();
+    }
+
+    #[test]
+    fn overview_reads_days_comparisons_books_and_streaks() {
+        let dir = temp_dir("stats-overview");
+        let db = StatsDb::open(&dir).unwrap();
+        db.note_book("a", "Alpha", 10).unwrap();
+        db.note_book("b", "Beta", 10).unwrap();
+        let today = db.local_day(crate::library::now_unix()).unwrap();
+        let at = |day: i64, clock: &str| db.local_unix(day, clock).unwrap();
+        // Today: pages 0 and 1, page 0 again (time counts, the page once).
+        visit(&db, "a", 0, at(today, "10:00:00"), 600);
+        visit(&db, "a", 1, at(today, "10:30:00"), 300);
+        visit(&db, "a", 0, at(today, "11:00:00"), 60);
+        visit(&db, "b", 0, at(today - 1, "12:00:00"), 1200);
+        visit(&db, "a", 2, at(today - 2, "09:00:00"), 600);
+        // A week ago: before noon, across noon (counted up to noon only) and after noon.
+        visit(&db, "b", 1, at(today - 7, "09:00:00"), 300);
+        visit(&db, "b", 2, at(today - 7, "11:58:00"), 600);
+        visit(&db, "b", 3, at(today - 7, "13:00:00"), 600);
+        for day in today - 40..=today - 37 {
+            visit(&db, "a", 5, at(day, "08:00:00"), 60);
+        }
+        // Before the period: in the streaks and the visit count only.
+        let first = months_back(today, PERIOD_MONTHS);
+        visit(&db, "c", 0, at(first - 1, "08:00:00"), 600);
+
+        let overview = db.overview(at(today, "12:00:00")).unwrap();
+        assert_eq!((overview.today, overview.first), (today, first));
+        assert_eq!(overview.today_so_far, Interval { seconds: 960, books: 1 });
+        assert_eq!(overview.today_last_week, Interval { seconds: 300 + 120, books: 1 });
+        assert_eq!(overview.last_week_to_date, Interval { seconds: 300 + 120, books: 1 });
+        let weekday = weekday(today);
+        let week = 960 + if weekday >= 1 { 1200 } else { 0 } + if weekday >= 2 { 600 } else { 0 };
+        assert_eq!(overview.week_so_far.seconds, week);
+        let day = overview.day(today).unwrap();
+        assert_eq!((day.seconds, day.pages), (960, 2));
+        assert_eq!(day.books, vec![DayBook { book: "a".into(), title: "Alpha".into(), seconds: 960 }]);
+        assert_eq!(overview.seconds_on(today - 7), 1500, "the calendar counts whole visits");
+        assert_eq!(overview.days.len(), 8);
+        assert_eq!(overview.period_seconds(), 960 + 1200 + 600 + 1500 + 240);
+        assert_eq!(overview.busiest(), 1500);
+        let books: Vec<(&str, i64, u32)> = overview.books.iter().map(|book| (book.title.as_str(), book.seconds, book.pages)).collect();
+        assert_eq!(books, vec![("Beta", 2700, 4), ("Alpha", 1800, 4)], "most time first; c is before the period");
+        assert_eq!(overview.streaks, Streaks { current: 3, longest: 4 });
+        assert_eq!(overview.visits, 13);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn heat_levels_months_back_and_streaks() {
+        let levels: Vec<u8> = [0, 1, 25, 26, 50, 51, 75, 76, 100, 200].into_iter().map(|seconds| heat_level(seconds, 100)).collect();
+        assert_eq!(levels, vec![0, 1, 1, 2, 2, 3, 3, 4, 4, 4]);
+        assert_eq!(heat_level(5, 0), 0, "no busiest day: everything is level 0");
+        assert_eq!(heat_level(i64::MAX, i64::MAX), 4);
+        let day = |date: &str| day_number(date).unwrap();
+        assert_eq!(months_back(day("2026-10-10"), 12), day("2025-10-10"));
+        assert_eq!(months_back(day("2024-02-29"), 12), day("2023-02-28"));
+        assert_eq!(months_back(day("2026-03-31"), 1), day("2026-02-28"));
+        assert_eq!(months_back(day("2026-01-15"), 1), day("2025-12-15"));
+        assert_eq!(months_back(day("2026-12-31"), 12), day("2025-12-31"));
+        assert_eq!(streaks(&[], 10), Streaks::default());
+        assert_eq!(streaks(&[8, 9, 10], 10), Streaks { current: 3, longest: 3 });
+        assert_eq!(streaks(&[8, 9], 10), Streaks { current: 2, longest: 2 }, "today not read yet keeps yesterday's run");
+        assert_eq!(streaks(&[7, 8], 10), Streaks { current: 0, longest: 2 });
+        assert_eq!(streaks(&[1, 2, 3, 4, 8, 9, 10], 10), Streaks { current: 3, longest: 4 });
+        assert_eq!(streaks(&[10, 11, 12], 10), Streaks { current: 1, longest: 1 }, "future days are ignored");
+        assert_eq!(streaks(&[5, 5, 6], 6), Streaks { current: 2, longest: 2 });
     }
 }

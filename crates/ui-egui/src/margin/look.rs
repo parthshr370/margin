@@ -100,6 +100,8 @@ pub(crate) struct Surfaces {
     pub scrim: Color32,
     /// An empty progress track or activity cell: #404040.
     pub track: Color32,
+    /// The activity ramp, no reading to busiest: `heat_0..4`.
+    pub heat: [Color32; 5],
 }
 
 /// Margin's palette for [`Surfaces`] (§2): Ember's terminal-black step, comment grey and muted
@@ -112,6 +114,12 @@ const EMBER_ACCENT_HOVER: Color32 = Color32::from_rgb(0xEE, 0x79, 0x48);
 const EMBER_ACCENT_PRESSED: Color32 = Color32::from_rgb(0xD5, 0x53, 0x28);
 const EMBER_ON_ACCENT: Color32 = Color32::from_rgb(0x0A, 0x0A, 0x0A);
 const EMBER_TRACK: Color32 = Color32::from_rgb(0x40, 0x40, 0x40);
+/// Ember's activity ramp (§2): the track, orange at 50 % and 75 % over the floating fill
+/// (precomposited, so a cell's colour never depends on its parent), orange, peach.
+const EMBER_HEAT: [Color32; 5] =
+    [EMBER_TRACK, Color32::from_rgb(0x8A, 0x42, 0x2A), Color32::from_rgb(0xBB, 0x4E, 0x2A), Color32::from_rgb(0xEC, 0x5B, 0x2B), EMBER_ACCENT_HOVER];
+/// Outside Margin's palette, the accent's share at each heat level above none.
+const LIGHT_HEAT_SHARES: [f32; 4] = [0.4, 0.6, 0.8, 1.0];
 /// The modal scrim's alpha: black at 60 % in Margin, egui's lighter default elsewhere.
 const SCRIM_ALPHA: u8 = 153;
 const LIGHT_SCRIM_ALPHA: u8 = 100;
@@ -128,6 +136,7 @@ impl Surfaces {
                 on_accent: EMBER_ON_ACCENT,
                 scrim: Color32::from_black_alpha(SCRIM_ALPHA),
                 track: EMBER_TRACK,
+                heat: EMBER_HEAT,
             }
         } else {
             Self {
@@ -139,6 +148,13 @@ impl Surfaces {
                 on_accent: Color32::WHITE,
                 scrim: Color32::from_black_alpha(LIGHT_SCRIM_ALPHA),
                 track: t.divider,
+                heat: [
+                    t.divider,
+                    t.accent.gamma_multiply(LIGHT_HEAT_SHARES[0]),
+                    t.accent.gamma_multiply(LIGHT_HEAT_SHARES[1]),
+                    t.accent.gamma_multiply(LIGHT_HEAT_SHARES[2]),
+                    t.accent.gamma_multiply(LIGHT_HEAT_SHARES[3]),
+                ],
             }
         }
     }
@@ -375,10 +391,26 @@ pub(crate) fn pointer_card(resp: &Response, x: f32, contents: impl FnOnce(&mut e
     show_card(tip, resp, anchor, contents);
 }
 
+/// A detail card's padding (the heatmap's day card, §5).
+const DETAIL_PAD: i8 = 16;
+
+/// Contents on a padded tooltip card now, its arrow at `anchor` (part of `resp`): details that
+/// follow the pointer or the keyboard over a chart (the Stats calendar's day). `id` keeps one
+/// card as the anchor moves.
+pub(crate) fn detail_card(resp: &Response, anchor: Rect, id: egui::Id, contents: impl FnOnce(&mut egui::Ui)) {
+    let tip = egui::Tooltip::always_open(resp.ctx.clone(), resp.layer_id, id, anchor);
+    show_padded_card(tip, resp, anchor, egui::Margin::same(DETAIL_PAD), contents);
+}
+
 /// `tip` on Margin's card, its arrow pointing at `anchor` (part of `resp`).
-fn show_card(mut tip: egui::Tooltip<'_>, resp: &Response, anchor: Rect, contents: impl FnOnce(&mut egui::Ui)) {
+fn show_card(tip: egui::Tooltip<'_>, resp: &Response, anchor: Rect, contents: impl FnOnce(&mut egui::Ui)) {
+    show_padded_card(tip, resp, anchor, TOOLTIP_PAD, contents);
+}
+
+/// [`show_card`] with `pad` inside the card.
+fn show_padded_card(mut tip: egui::Tooltip<'_>, resp: &Response, anchor: Rect, pad: egui::Margin, contents: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(&resp.ctx);
-    let card = floating_frame(&t, RADIUS_MENU).inner_margin(TOOLTIP_PAD);
+    let card = floating_frame(&t, RADIUS_MENU).inner_margin(pad);
     tip.popup = tip.popup.gap(TOOLTIP_GAP).frame(card);
     if let Some(shown) = tip.show(contents) {
         tooltip_arrow(&resp.ctx, &t, shown.response.layer_id, anchor, shown.response.rect);

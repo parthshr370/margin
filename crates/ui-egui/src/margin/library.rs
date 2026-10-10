@@ -118,6 +118,8 @@ pub struct LibraryState {
     frame: u64,
     /// Covers decoded this frame (at most [`COVERS_PER_FRAME`]).
     decoded: usize,
+    /// The egui pass `frame` and `decoded` count (the library and the Stats sheet share them).
+    cover_pass: u64,
     /// The tab to go back to from the library (`library.open` toggles).
     back_to: Option<usize>,
     /// The library showed last frame.
@@ -194,6 +196,14 @@ fn reload(app: &mut PdfCraftApp) {
     match db.collections() {
         Ok(collections) => state.collections = collections,
         Err(err) => log::warn!("library: {err}"),
+    }
+}
+
+/// The books, read again if the database changed, for the Stats sheet (which can open before
+/// the library ever showed).
+pub(crate) fn refresh(app: &mut PdfCraftApp) {
+    if ensure_db(app) {
+        reload(app);
     }
 }
 
@@ -434,8 +444,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     app.margin_library.shown = true;
     tick(app, &ctx);
     reload(app);
-    app.margin_library.frame = app.margin_library.frame.wrapping_add(1);
-    app.margin_library.decoded = 0;
+    begin_cover_pass(&mut app.margin_library, &ctx);
     let t = Tokens::get(&ctx);
     let order = ordered(&app.margin_library);
     let hero = hero_book(&app.margin_library);
@@ -966,6 +975,23 @@ fn paint_cover(app: &mut PdfCraftApp, ui: &egui::Ui, t: &Tokens, rect: Rect, boo
         }
     }
     ui.painter().rect_stroke(rect, radius, Stroke::new(look::EDGE, COVER_EDGE), egui::StrokeKind::Inside);
+}
+
+/// [`paint_cover`] outside the library (the Stats sheet's thumbnails), on the library's cover
+/// cache and per-frame decoding budget.
+pub(crate) fn paint_book_cover(app: &mut PdfCraftApp, ui: &egui::Ui, t: &Tokens, rect: Rect, book: &Book) {
+    begin_cover_pass(&mut app.margin_library, ui.ctx());
+    paint_cover(app, ui, t, rect, book);
+}
+
+/// Starts a new frame's cover budget once per egui pass, whoever draws covers first.
+fn begin_cover_pass(state: &mut LibraryState, ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    if state.cover_pass != pass {
+        state.cover_pass = pass;
+        state.frame = state.frame.wrapping_add(1);
+        state.decoded = 0;
+    }
 }
 
 /// The book's cover texture, decoding it now if the frame's budget allows.
