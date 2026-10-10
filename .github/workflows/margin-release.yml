@@ -130,7 +130,10 @@ jobs:
           plutil -extract CFBundleIdentifier raw "$mnt/Margin.app/Contents/Info.plist" | grep -Fx io.github.parthshr370.Margin
           lipo -archs "$mnt/Margin.app/Contents/MacOS/Margin"
           "$mnt/Margin.app/Contents/MacOS/Margin" --version | grep -Fx "margin $MARGIN_VERSION"
-          codesign --verify --strict --deep --verbose=2 "$mnt/Margin.app"
+          # The signature survived packaging. Not --strict: the HFS image that makehybrid builds
+          # reports com.apple.FinderInfo attributes on files in the bundle, which --strict calls detritus;
+          # package.sh already verified the app with --strict before it went into the image.
+          codesign --verify --deep --verbose=2 "$mnt/Margin.app"
           hdiutil detach "$mnt"
       - uses: actions/upload-artifact@v4
         with:
