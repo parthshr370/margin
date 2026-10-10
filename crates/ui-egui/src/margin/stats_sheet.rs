@@ -312,7 +312,7 @@ fn draw(app: &mut PdfCraftApp, ctx: &egui::Context, sheet: &mut Sheet) -> Option
 /// right; one divider under it.
 fn header(ui: &mut egui::Ui, t: &Tokens, recording: bool, export_off: Option<&str>, action: &mut Option<Action>) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.bottom() - look::EDGE / 2.0, Stroke::new(look::EDGE, t.border));
+    ui.painter().hline(rect.x_range(), rect.bottom() - look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
     let mut row = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(PAD, 0.0))).layout(Layout::left_to_right(Align::Center)));
     row.spacing_mut().item_spacing.x = INNER_GAP;
     row.label(RichText::new("Reading stats").font(theme::semibold(TITLE_SIZE)).color(t.text));
@@ -365,7 +365,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, sheet: &mut Sheet,
 fn section_title(ui: &mut egui::Ui, t: &Tokens, title: &str, detail: Option<&str>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = INNER_GAP;
-        ui.label(RichText::new(title).font(theme::semibold(SECTION_TITLE_SIZE)).color(t.text));
+        ui.label(RichText::new(title).font(theme::semibold(SECTION_TITLE_SIZE)).color(look::Surfaces::of(t).heading));
         if let Some(detail) = detail {
             ui.label(RichText::new(detail).font(theme::regular(SMALL_TEXT)).color(t.text_muted));
         }
@@ -373,16 +373,13 @@ fn section_title(ui: &mut egui::Ui, t: &Tokens, title: &str, detail: Option<&str
     ui.add_space(look::GAP_LARGE);
 }
 
-/// A chart well: panel fill, one edge, radius 8, padded.
+/// A chart well: panel fill, the theme's edge, radius 8, padded.
 fn well(ui: &mut egui::Ui, t: &Tokens, contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(look::EDGE, t.border)).corner_radius(look::RADIUS_CARD).inner_margin(INNER_PAD).show(
-        ui,
-        |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing = Vec2::ZERO;
-            contents(ui);
-        },
-    );
+    egui::Frame::NONE.fill(t.panel).stroke(look::edge_stroke(t.border)).corner_radius(look::RADIUS_CARD).inner_margin(INNER_PAD).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        contents(ui);
+    });
 }
 
 // ---- Metric cards ----
@@ -483,11 +480,11 @@ fn metric_cards(ui: &mut egui::Ui, t: &Tokens, overview: &Overview) {
     }
 }
 
-/// Card fill, one edge, no shadow: these are numbers, not buttons.
+/// Card fill, the theme's edge, no shadow: these are numbers, not buttons.
 fn metric_card(ui: &mut egui::Ui, t: &Tokens, metric: &Metric, width: f32) {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, metric.accessible()));
-    ui.painter().rect(rect, CornerRadius::same(look::RADIUS_CARD), t.card, Stroke::new(look::EDGE, t.border), egui::StrokeKind::Inside);
+    ui.painter().rect(rect, CornerRadius::same(look::RADIUS_CARD), t.card, look::edge_stroke(t.border), egui::StrokeKind::Inside);
     let inner = rect.shrink(INNER_PAD);
     let painter = ui.painter_at(inner);
     let icon = Rect::from_min_size(inner.min, Vec2::splat(CARD_ICON));
@@ -775,7 +772,7 @@ fn week_chart(ui: &mut egui::Ui, t: &Tokens, overview: &Overview) {
     let painter = ui.painter_at(rect);
     let base = rect.top() + VALUE_ROW + INNER_GAP + PLOT_HEIGHT;
     let plot = Rect::from_min_max(pos2(rect.left(), base - PLOT_HEIGHT), pos2(rect.right(), base));
-    painter.hline(rect.x_range(), base + look::EDGE / 2.0, Stroke::new(look::EDGE, t.border));
+    painter.hline(rect.x_range(), base + look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
     let slot = rect.width() / DAYS_PER_WEEK as f32;
     for (offset, day_seconds) in (0..DAYS_PER_WEEK).zip(seconds.iter().copied()) {
         let day = monday + offset;
@@ -899,18 +896,21 @@ fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, model: &Model, so
         }
         let (Some(book), Some(entry)) = (model.overview.books.get(index), model.library.get(index)) else { continue };
         if position > 0 {
-            ui.painter().hline(row.x_range(), row.top() + look::EDGE / 2.0, Stroke::new(look::EDGE, t.border));
+            ui.painter().hline(row.x_range(), row.top() + look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
         }
         table_row(app, ui, t, row, &columns, book, entry.as_ref());
     }
-    ui.painter().rect_stroke(rect, radius, Stroke::new(look::EDGE, t.border), egui::StrokeKind::Inside);
+    let edge = look::edge_stroke(t.border);
+    if !edge.is_empty() {
+        ui.painter().rect_stroke(rect, radius, edge, egui::StrokeKind::Inside);
+    }
     clicked
 }
 
 fn table_header(ui: &mut egui::Ui, t: &Tokens, rect: Rect, columns: &[(Column, egui::Rangef, Align)], sort: Sort) -> Option<Column> {
     let top = CornerRadius { nw: look::RADIUS_CARD, ne: look::RADIUS_CARD, sw: 0, se: 0 };
     ui.painter().rect_filled(rect, top, t.card);
-    ui.painter().hline(rect.x_range(), rect.bottom() - look::EDGE / 2.0, Stroke::new(look::EDGE, t.border));
+    ui.painter().hline(rect.x_range(), rect.bottom() - look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
     let mut clicked = None;
     for &(column, range, align) in columns.iter().filter(|(column, _, _)| *column != Column::Cover) {
         let cell = Rect::from_x_y_ranges(range, rect.y_range());
@@ -980,7 +980,7 @@ fn table_row(
 /// A book no longer in the library: a neutral document glyph, never a made-up cover.
 fn missing_cover(ui: &egui::Ui, t: &Tokens, rect: Rect) {
     let radius = CornerRadius::same(THUMB_RADIUS);
-    ui.painter().rect(rect, radius, t.card, Stroke::new(look::EDGE, t.border), egui::StrokeKind::Inside);
+    ui.painter().rect(rect, radius, t.card, look::edge_stroke(t.border), egui::StrokeKind::Inside);
     icons::paint(ui, rect, "file-text", THUMB_GLYPH, t.text_faint);
 }
 
@@ -1088,16 +1088,13 @@ fn error_state(ui: &mut egui::Ui, t: &Tokens, err: &str, action: &mut Option<Act
 }
 
 fn centred_panel(ui: &mut egui::Ui, t: &Tokens, contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(look::EDGE, t.border)).corner_radius(look::RADIUS_CARD).inner_margin(EMPTY_PAD).show(
-        ui,
-        |ui| {
-            ui.set_width(ui.available_width());
-            ui.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::ZERO;
-                contents(ui);
-            });
-        },
-    );
+    egui::Frame::NONE.fill(t.panel).stroke(look::edge_stroke(t.border)).corner_radius(look::RADIUS_CARD).inner_margin(EMPTY_PAD).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            contents(ui);
+        });
+    });
 }
 
 // ---- Text ----

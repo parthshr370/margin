@@ -126,7 +126,7 @@ pub(crate) fn section(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, group: &
     ui.add_space(GROUP_BEFORE - GAP);
     ui.horizontal(|ui| {
         ui.add_space(ROW_INSET);
-        ui.label(egui::RichText::new(section.title).font(theme::medium(GROUP_TEXT)).color(t.text_muted));
+        ui.label(egui::RichText::new(section.title).font(theme::medium(GROUP_TEXT)).color(look::Surfaces::of(t).heading));
     });
     ui.add_space(GROUP_AFTER);
     let mut clicked = None;

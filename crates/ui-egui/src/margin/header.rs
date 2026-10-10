@@ -49,9 +49,10 @@ const APP_MENU: &[Option<&str>] = &[Some("file.open"), Some("recent"), None, Som
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut needs_row = false;
-    // egui draws the panel's bottom divider line.
+    // egui draws the panel's bottom divider line where the theme has frame edges.
     egui::Panel::top("margin_header")
         .exact_size(HEIGHT)
+        .show_separator_line(look::has_edges(&t))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             let full = ui.max_rect();

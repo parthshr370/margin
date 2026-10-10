@@ -532,7 +532,10 @@ fn trim_preview(view: &mut DocView, page: usize, size: Option<(f32, f32)>, label
         painter.rect_filled(part, CornerRadius::ZERO, shade);
     }
     painter.rect_stroke(kept, CornerRadius::ZERO, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
-    painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let edge = look::edge_stroke(t.border);
+    if !edge.is_empty() {
+        painter.rect_stroke(rect, CornerRadius::ZERO, edge, egui::StrokeKind::Inside);
+    }
     resp.on_hover_cursor(egui::CursorIcon::Crosshair);
     changed
 }
@@ -562,7 +565,8 @@ fn choice_row(ui: &mut egui::Ui, t: &Tokens, label: &str, segments: &[Segment<'_
 /// A swatch's corner radius.
 const SWATCH_RADIUS: u8 = 9;
 
-/// A page colour swatch: a small page in the mode's paper with lines of its ink, and the name.
+/// A page colour swatch: a small page in the mode's paper with lines of its ink, and the name. The
+/// picked one sits on the selected fill and edge, its name in the selected label colour.
 fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: f32) -> egui::Response {
     let name = i18n::t(mode.name());
     let (rect, resp) = ui.allocate_exact_size(vec2(width, SWATCH_HEIGHT + SWATCH_NAME_HEIGHT), Sense::click());
@@ -574,9 +578,10 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: 
     if hovered > 0.0 {
         painter.rect_filled(rect, CornerRadius::same(SWATCH_RADIUS), t.hover.gamma_multiply(hovered));
     }
+    let surfaces = look::Surfaces::of(t);
     if picked > 0.0 {
-        let stroke = Stroke::new(1.0, t.accent.gamma_multiply(picked));
-        painter.rect(rect, CornerRadius::same(SWATCH_RADIUS), t.accent_soft.gamma_multiply(picked), stroke, egui::StrokeKind::Inside);
+        let stroke = look::edge_stroke(surfaces.selected_edge.gamma_multiply(picked));
+        painter.rect(rect, CornerRadius::same(SWATCH_RADIUS), t.selected.gamma_multiply(picked), stroke, egui::StrokeKind::Inside);
     }
     look::focus_ring(ui, t, rect, &resp, SWATCH_RADIUS);
     let page = Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(width - 12.0, SWATCH_HEIGHT));
@@ -597,7 +602,8 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: 
         let line = Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width() * frac, 3.0));
         painter.rect_filled(line, CornerRadius::same(2), ink);
     }
-    painter.text(pos2(rect.center().x, page.bottom() + 14.0), Align2::CENTER_CENTER, name, theme::regular(12.0), t.text);
+    let name_color = t.text.lerp_to_gamma(surfaces.selected_text, picked);
+    painter.text(pos2(rect.center().x, page.bottom() + 14.0), Align2::CENTER_CENTER, name, theme::regular(12.0), name_color);
     resp
 }
 

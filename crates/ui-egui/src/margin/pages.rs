@@ -202,8 +202,10 @@ fn paint_cell(ui: &egui::Ui, t: &Tokens, resp: &egui::Response, cell: &Cell<'_>)
     if let Some(texture) = cell.texture {
         painter.image(texture, thumb, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
-    let (outline, outline_width) = if cell.current { (t.accent, CURRENT_OUTLINE) } else { (t.border, 1.0) };
-    painter.rect_stroke(thumb, CornerRadius::ZERO, Stroke::new(outline_width, outline), egui::StrokeKind::Outside);
+    let outline = if cell.current { Stroke::new(CURRENT_OUTLINE, t.accent) } else { look::edge_stroke(t.border) };
+    if !outline.is_empty() {
+        painter.rect_stroke(thumb, CornerRadius::ZERO, outline, egui::StrokeKind::Outside);
+    }
     if cell.picked {
         let center = pos2(thumb.right() - BADGE_INSET - BADGE / 2.0, thumb.top() + BADGE_INSET + BADGE / 2.0);
         painter.circle(center, BADGE / 2.0, t.accent, Stroke::new(1.0, t.panel));

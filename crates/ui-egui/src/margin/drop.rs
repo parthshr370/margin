@@ -3,7 +3,7 @@
 //! adds its pages to the document being read; only Organize's page grid and Combine insert pages,
 //! and they draw their own drop marks.
 
-use egui::{Align2, CornerRadius, Stroke};
+use egui::{Align2, CornerRadius};
 
 use crate::PdfCraftApp;
 use crate::margin::look::{GAP, GAP_LARGE};
@@ -35,7 +35,7 @@ pub(crate) fn hint(app: &PdfCraftApp, ctx: &egui::Context) {
     let surfaces = crate::margin::look::Surfaces::of(&t);
     let radius = CornerRadius::same(crate::margin::look::RADIUS_MODAL);
     painter.add(crate::margin::look::SHADOW_M.as_shape(card, radius));
-    painter.rect(card, radius, surfaces.floating, Stroke::new(crate::margin::look::EDGE, t.border), egui::StrokeKind::Inside);
+    painter.rect(card, radius, surfaces.floating, crate::margin::look::edge_stroke(t.border), egui::StrokeKind::Inside);
     let title_pos = egui::pos2(card.center().x - title.size().x / 2.0, card.top() + GAP_LARGE);
     let note_pos = egui::pos2(card.center().x - note.size().x / 2.0, title_pos.y + title.size().y + GAP);
     painter.galley(title_pos, title, t.text);

@@ -358,7 +358,9 @@ fn card(
                     });
                 });
                 let x = resp.response.rect.left() + 12.0;
-                ui.painter().vline(x, (resp.response.rect.top() - 14.0)..=(resp.response.rect.top() - 2.0), Stroke::new(1.5, t.border));
+                // Margin's frame edge is transparent; its thread line is a divider rule.
+                let line = if ember { t.divider } else { t.border };
+                ui.painter().vline(x, (resp.response.rect.top() - 14.0)..=(resp.response.rect.top() - 2.0), Stroke::new(1.5, line));
             }
             if selected && allowed {
                 ui.add_space(8.0);

@@ -127,38 +127,38 @@ impl Tokens {
                 page_shadow: Color32::from_black_alpha(120),
                 radius: 6,
             },
-            // The owner's Obsidian theme, Ember Night V2, over its whole background ladder
-            // (plan/R10-SURFACES.md §2): base #0a0a0a under the pages and the library, panel
-            // #141414 for permanent side panes, #1e1e1e for cards and the header/footer strips,
-            // one neutral #484848 edge between regions. The floating level (#282828), control
-            // outlines, scrim and shadows are Margin's own, in `margin::look`. `accent_text` is
-            // accent-coloured text on these surfaces, so it is the accent itself.
+            // The owner's Black palette (plan/R10-SURFACES.md §2 structure, theme lab "Black"):
+            // pure black under the pages, the library and the header/footer strips, #0a0a0a for
+            // permanent side panes, #111111 for cards. Regions part by fill alone: the frame edge
+            // is transparent (no stroke is drawn), and #161616 dividers rule rows and sections.
+            // The floating level, control outlines, scrim and the selected roles are Margin's
+            // own, in `margin::look`. Orange is only a signal: `accent` fills, `accent_text`
+            // colours text and active icons.
             ThemeKind::Margin => Self {
                 kind,
-                titlebar: Color32::from_rgb(0x14, 0x14, 0x14),
-                chrome: Color32::from_rgb(0x1E, 0x1E, 0x1E),
-                panel: Color32::from_rgb(0x14, 0x14, 0x14),
-                pasteboard: Color32::from_rgb(0x0A, 0x0A, 0x0A),
-                card: Color32::from_rgb(0x1E, 0x1E, 0x1E),
-                border: Color32::from_rgb(0x48, 0x48, 0x48),
-                divider: Color32::from_rgb(0x48, 0x48, 0x48),
+                titlebar: Color32::from_rgb(0x00, 0x00, 0x00),
+                chrome: Color32::from_rgb(0x00, 0x00, 0x00),
+                panel: Color32::from_rgb(0x0A, 0x0A, 0x0A),
+                pasteboard: Color32::from_rgb(0x00, 0x00, 0x00),
+                card: Color32::from_rgb(0x11, 0x11, 0x11),
+                border: Color32::TRANSPARENT,
+                divider: Color32::from_rgb(0x16, 0x16, 0x16),
                 text: Color32::from_rgb(0xEE, 0xEE, 0xEE),
-                // Ember's #808080 lifted: it is only 3.7:1 on the floating level.
-                text_muted: Color32::from_rgb(0xA8, 0xA8, 0xA8),
-                text_faint: Color32::from_rgb(0x80, 0x80, 0x80),
-                icon: Color32::from_rgb(0xA8, 0xA8, 0xA8),
-                // Hover, pressed and selected are three steps; selection also gets an accent
-                // outline (`margin::look`), never the fill alone.
-                hover: Color32::from_rgb(0x33, 0x33, 0x33),
-                pressed: Color32::from_rgb(0x3D, 0x3D, 0x3D),
-                selected: Color32::from_rgb(0x38, 0x38, 0x38),
-                accent: Color32::from_rgb(0xEC, 0x5B, 0x2B),
-                accent_text: Color32::from_rgb(0xEC, 0x5B, 0x2B),
-                // The accent at 25 % (Ember's text-highlight "mark" colour).
-                accent_soft: Color32::from_rgba_unmultiplied(0xEC, 0x5B, 0x2B, 64),
-                field: Color32::from_rgb(0x0A, 0x0A, 0x0A),
-                badge_new: Color32::from_rgb(0xEC, 0x5B, 0x2B),
-                page_shadow: Color32::from_black_alpha(120),
+                text_muted: Color32::from_rgb(0x80, 0x80, 0x80),
+                text_faint: Color32::from_rgb(0x5A, 0x5A, 0x5A),
+                icon: Color32::from_rgb(0x8A, 0x8A, 0x8A),
+                // Hover, selected and pressed are three neutral steps; a selected item's label
+                // and icon carry the orange (`margin::look::Surfaces::selected_text`).
+                hover: Color32::from_rgb(0x18, 0x18, 0x18),
+                pressed: Color32::from_rgb(0x26, 0x26, 0x26),
+                selected: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                accent: Color32::from_rgb(0xFF, 0x5F, 0x1F),
+                accent_text: Color32::from_rgb(0xFF, 0x6A, 0x33),
+                // The accent at 22 % (text selection).
+                accent_soft: Color32::from_rgba_unmultiplied(0xFF, 0x5F, 0x1F, 0x38),
+                field: Color32::from_rgb(0x05, 0x05, 0x05),
+                badge_new: Color32::from_rgb(0xFF, 0x5F, 0x1F),
+                page_shadow: Color32::from_black_alpha(0x78),
                 // A control's corner radius (rows, buttons, inputs).
                 radius: 6,
             },
@@ -307,11 +307,12 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.widgets.open.weak_bg_fill = t.hover;
     if kind == ThemeKind::Margin {
         // No egui default stroke colours in Margin: a pressed widget gets no white outline, an
-        // open menu button the theme's border, and the text cursor is the accent.
+        // open menu button the theme's edge (none in the Black palette), and the text cursor is
+        // the accent.
         v.widgets.active.bg_stroke = Stroke::NONE;
-        v.widgets.open.bg_stroke = Stroke::new(1.0, t.border);
+        v.widgets.open.bg_stroke = crate::margin::look::edge_stroke(t.border);
         v.text_cursor.stroke = Stroke::new(2.0, t.accent);
-        // Windows, menus and popups are Margin's floating level with an edge and a shadow
+        // Windows, menus and popups are Margin's floating level with the theme's edge and a shadow
         // (plan/R10-SURFACES.md §2); a focused text field gets the 2 px accent outline.
         crate::margin::look::style_floating(&mut v, &t);
     }
@@ -362,8 +363,8 @@ mod tests {
         for kind in [ThemeKind::Light, ThemeKind::Dark, ThemeKind::Margin] {
             let t = Tokens::for_kind(kind);
             for (name, fg) in [("text", t.text), ("text_muted", t.text_muted), ("text_faint", t.text_faint)] {
-                // Margin's faint grey (#606060, about 3.2:1) is the owner's Obsidian theme, kept
-                // on purpose for hints; its text and muted text still pass.
+                // Margin's faint grey (#5a5a5a, about 3:1) is the owner's choice for hints, kept
+                // on purpose; its text and muted text still pass.
                 if kind == ThemeKind::Margin && name == "text_faint" {
                     continue;
                 }

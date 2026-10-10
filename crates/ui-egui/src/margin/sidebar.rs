@@ -53,26 +53,36 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if shown < 1.0 {
         // A panel of its own, so the resizable panel keeps the reader's width.
         let width = egui::PanelState::load(ui.ctx(), id).map_or(DEFAULT_WIDTH, |s| s.size().x).clamp(MIN_WIDTH, MAX_WIDTH);
-        egui::Panel::left(id.with("sliding")).exact_size(width * shown).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
-            let visible = ui.max_rect();
-            let rect = Rect::from_min_size(egui::pos2(visible.right() - width, visible.top()), vec2(width, visible.height()));
-            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
-            body.set_clip_rect(visible.intersect(ui.clip_rect()));
-            if !app.margin_chrome.sidebar_open {
-                // Closing: no clicks and no keyboard focus (its icons fade to faint as it goes).
-                let opacity = body.opacity();
-                body.disable();
-                body.set_opacity(opacity);
-            }
-            sections(app, &mut body, &t);
-            ui.expand_to_include_rect(visible);
-        });
+        egui::Panel::left(id.with("sliding"))
+            .exact_size(width * shown)
+            .resizable(false)
+            .show_separator_line(look::has_edges(&t))
+            .frame(egui::Frame::NONE.fill(t.panel))
+            .show(ui, |ui| {
+                let visible = ui.max_rect();
+                let rect = Rect::from_min_size(egui::pos2(visible.right() - width, visible.top()), vec2(width, visible.height()));
+                let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                body.set_clip_rect(visible.intersect(ui.clip_rect()));
+                if !app.margin_chrome.sidebar_open {
+                    // Closing: no clicks and no keyboard focus (its icons fade to faint as it goes).
+                    let opacity = body.opacity();
+                    body.disable();
+                    body.set_opacity(opacity);
+                }
+                sections(app, &mut body, &t);
+                ui.expand_to_include_rect(visible);
+            });
         return;
     }
-    // Each panel draws its own divider line (egui's separator, in the theme's divider colour).
-    egui::Panel::left(id).resizable(true).default_size(DEFAULT_WIDTH).size_range(MIN_WIDTH..=MAX_WIDTH).frame(egui::Frame::NONE.fill(t.panel)).show(
-        ui,
-        |ui| {
+    // Each panel draws its own divider line (egui's separator, in the theme's divider colour)
+    // where the theme has frame edges; the Black palette parts the sidebar by fill alone.
+    egui::Panel::left(id)
+        .resizable(true)
+        .show_separator_line(look::has_edges(&t))
+        .default_size(DEFAULT_WIDTH)
+        .size_range(MIN_WIDTH..=MAX_WIDTH)
+        .frame(egui::Frame::NONE.fill(t.panel))
+        .show(ui, |ui| {
             // The reader sets the sidebar's width by dragging its edge; its contents never do.
             // egui widens a panel to what its contents use, so a pane row a little too wide
             // (Bookmarks' search field was) widened it more every frame, shrinking the page and
@@ -82,8 +92,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             body.set_clip_rect(rect.intersect(ui.clip_rect()));
             sections(app, &mut body, &t);
             ui.expand_to_include_rect(rect);
-        },
-    );
+        });
 }
 
 /// The sidebar over the page, between the header and the footer, so a narrow window keeps its
@@ -100,7 +109,9 @@ fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id,
     egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).show(ctx, |ui| {
         let painter = ui.painter();
         painter.add(look::SHADOW_M.as_shape(visible, CornerRadius::ZERO));
-        painter.rect(visible, CornerRadius::ZERO, t.panel, egui::Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
+        // The overlay's own divider line where the theme has frame edges, none in the Black palette.
+        let edge = if look::has_edges(t) { egui::Stroke::new(1.0, t.divider) } else { egui::Stroke::NONE };
+        painter.rect(visible, CornerRadius::ZERO, t.panel, edge, egui::StrokeKind::Inside);
         let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
         body.set_clip_rect(visible);
         if !open {
@@ -131,9 +142,10 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             top_buttons(app, ui);
             document_card(app, ui, t, summary);
         });
-    // The tab strip is chrome (its top edge is the panel's separator); the tabs sit the small
-    // step in from the panel's edges, as the panes' rows do.
+    // The tab strip is chrome (its top edge is the panel's separator where the theme has frame
+    // edges); the tabs sit the small step in from the panel's edges, as the panes' rows do.
     egui::Panel::bottom("margin_sidebar_tabs")
+        .show_separator_line(look::has_edges(t))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: GAP as i8, right: GAP as i8, top: GAP as i8, bottom: edge }))
         .show(ui, |ui| tab_strip(app, ui, t));
     egui::CentralPanel::default()

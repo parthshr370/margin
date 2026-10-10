@@ -184,6 +184,7 @@ pub(crate) fn row(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::top("margin_find_row")
         .exact_size(ROW_HEIGHT)
+        .show_separator_line(look::has_edges(&t))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             let full = ui.max_rect();

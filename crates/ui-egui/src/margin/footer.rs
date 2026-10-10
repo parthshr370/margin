@@ -62,9 +62,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut command = None;
     let mut save_command = None;
     let mut preview = None;
-    // egui draws the panel's top divider line.
+    // egui draws the panel's top divider line where the theme has frame edges.
     egui::Panel::bottom("margin_footer")
         .exact_size(HEIGHT)
+        .show_separator_line(look::has_edges(&t))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
@@ -215,12 +216,13 @@ struct ZoomKeys {
     fit: Option<String>,
 }
 
-/// `− 100% +`, the percent opening the zoom menu, then the fit toggle. Returns the command to
-/// run (Margin's `view.zoom.*` / `view.fit.*`, with its arguments).
+/// `− 100% +` in a control outline, the percent opening the zoom menu, then the fit toggle.
+/// Returns the command to run (Margin's `view.zoom.*` / `view.fit.*`, with its arguments).
 fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32], keys: &ZoomKeys) -> Option<(&'static str, Value)> {
     let mut command = None;
     let reads = reading::reads(view);
-    egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(t.radius)).show(ui, |ui| {
+    let outline = Stroke::new(look::EDGE, look::Surfaces::of(t).control_edge);
+    egui::Frame::NONE.stroke(outline).corner_radius(CornerRadius::same(t.radius)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         if look::icon_button(ui, "minus", ZOOM_BUTTON, false, "Zoom out", keys.zoom_out.as_deref()).clicked() {
             command = Some(("view.zoom.out", Value::Null));

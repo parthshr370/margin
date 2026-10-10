@@ -70,7 +70,7 @@ pub(crate) fn show(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, marks: &Ma
     let page_at = |x: f32| ((share_at(x) * last).round() as usize).min(pages - 1);
     let y = rect.center().y;
     let painter = ui.painter();
-    painter.hline(rect.x_range(), y, Stroke::new(2.0, t.border));
+    painter.hline(rect.x_range(), y, Stroke::new(2.0, look::Surfaces::of(t).track));
     if rect.width() >= DETAIL_MIN_WIDTH {
         let mut previous = f32::NEG_INFINITY;
         for &page in &marks.sections {

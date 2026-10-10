@@ -702,7 +702,7 @@ fn sort_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     });
 }
 
-/// A filter chip: a standard secondary button, the chosen one selected (check, accent edge).
+/// A filter chip: a standard secondary button, the chosen one selected (check, selected label).
 fn chip(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
     look::Button::secondary(ButtonSize::Standard, label).selected(on).show(ui)
 }
@@ -824,7 +824,7 @@ fn book_cell(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize,
     ui.painter().add(look::SHADOW_S.as_shape(cell, radius));
     let lift = super::motion::hover(ui.ctx(), resp.id, resp.hovered());
     let edge = t.border.lerp_to_gamma(look::Surfaces::of(t).edge_hover, lift);
-    ui.painter().rect(cell, radius, t.card.lerp_to_gamma(t.hover, lift), Stroke::new(look::EDGE, edge), egui::StrokeKind::Inside);
+    ui.painter().rect(cell, radius, t.card.lerp_to_gamma(t.hover, lift), look::edge_stroke(edge), egui::StrokeKind::Inside);
     look::focus_ring(ui, t, cell, &resp, look::RADIUS_CARD);
     let inner = cell.shrink(CELL_PAD);
     let cover = Rect::from_min_size(inner.min, vec2(inner.width(), cover_h));
@@ -864,8 +864,7 @@ fn status_line(ui: &egui::Ui, t: &Tokens, book: &Book, rect: Rect) {
 /// The list view: one row per book in a panel-coloured, edged container, a divider between
 /// rows; virtualised like the grid.
 fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], actions: &mut Vec<Action>) {
-    let container =
-        egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(look::EDGE, t.border)).corner_radius(look::RADIUS_CARD).inner_margin(look::EDGE);
+    let container = egui::Frame::NONE.fill(t.panel).stroke(look::edge_stroke(t.border)).corner_radius(look::RADIUS_CARD).inner_margin(look::EDGE);
     container.show(ui, |ui| list_rows(app, ui, t, order, actions));
 }
 

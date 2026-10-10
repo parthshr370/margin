@@ -1,11 +1,11 @@
-//! Margin's shared look, the owner's Obsidian "Ember Night": surfaces, list rows, buttons,
-//! section labels and tooltips (plan/R10-SURFACES.md §2 and §6). Permanent regions are separated
-//! by a fill step and one edge; floating ones (rail, popovers, menus, tooltips, toasts) add the
-//! floating fill and a shadow; a modal adds a scrim. A hovered row or ghost control gets the
-//! `hover` fill and a lighter edge; a selected one the `selected` fill, an accent edge and accent
-//! icon; secondary columns (page numbers) stay muted; a disabled control stays muted. The theme's
-//! [`Tokens`] hold the base ladder (`theme.rs`); [`Surfaces`] adds the levels and states only
-//! Margin uses.
+//! Margin's shared look, the owner's "Black" palette: surfaces, list rows, buttons, section labels
+//! and tooltips (plan/R10-SURFACES.md §2 and §6). Permanent regions are separated by a fill step
+//! and the theme's edge (transparent in the Black palette, so no stroke at all); floating ones
+//! (rail, popovers, menus, tooltips, toasts) add the floating fill and a shadow; a modal adds a
+//! scrim. A hovered row or ghost control gets the `hover` fill and the hover edge; a selected one
+//! the `selected` fill, the selected edge, an orange label and icon; secondary columns (page
+//! numbers) stay muted; a disabled control stays muted. The theme's [`Tokens`] hold the base
+//! ladder (`theme.rs`); [`Surfaces`] adds the levels, states and text roles only Margin uses.
 //!
 //! PdfCraft's panels that Margin's sidebar hosts (Bookmarks, Pages, the Highlights list) paint
 //! their rows here when their [`RowLook`] is [`RowLook::Ember`].
@@ -80,44 +80,56 @@ pub(crate) const SHADOW_S: egui::Shadow = egui::Shadow { offset: [0, 1], blur: 3
 pub(crate) const SHADOW_L: egui::Shadow = egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(102) };
 pub(crate) const SHADOW_M: egui::Shadow = egui::Shadow { offset: [0, 8], blur: 32, spread: 0, color: Color32::from_black_alpha(153) };
 
-/// Margin's colours beyond the theme's ladder (§2): the floating level, the hover and control
-/// edges, the accent's states and its ink, the modal scrim and the empty track. Margin's palette
-/// has them all; in a light theme each falls back to the nearest token, so nothing here invents
-/// a light palette.
+/// Margin's colours beyond the theme's ladder (§2): the floating level, the hover, control and
+/// selected edges, the accent's states and its ink, the modal scrim, the empty track, and the
+/// text roles of headings, section labels and selected items. Margin's palette has them all;
+/// any other theme gets the colour it used before each role existed, so nothing here invents a
+/// light palette.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Surfaces {
-    /// Rail, popover, menu, tooltip, toast, modal: #282828.
+    /// Rail, popover, menu, tooltip, toast, modal: #161616.
     pub floating: Color32,
-    /// A hovered card, row or ghost control's edge: #606060.
+    /// A hovered card, row or ghost control's edge: none in the Black palette.
     pub edge_hover: Color32,
-    /// The outline that marks a control (input, secondary button, segmented well): #808080.
+    /// The outline that marks a control (input, secondary button, segmented well): #242424.
     pub control_edge: Color32,
+    /// The outline of a selected chip, segment, card or tab: none in the Black palette.
+    pub selected_edge: Color32,
     pub accent_hover: Color32,
     pub accent_pressed: Color32,
-    /// Text and icons on an accent fill: Ember's `--text-on-accent`, #0a0a0a.
+    /// Text and icons on an accent fill: black.
     pub on_accent: Color32,
     /// Behind a modal: black at 60 %.
     pub scrim: Color32,
-    /// An empty progress track or activity cell: #404040.
+    /// An empty progress track, slider rail or activity cell: #1e1e1e.
     pub track: Color32,
     /// The activity ramp, no reading to busiest: `heat_0..4`.
     pub heat: [Color32; 5],
+    /// A section title (stats, settings, tool groups).
+    pub heading: Color32,
+    /// A small-caps section label ("CONTENTS", "RECENT").
+    pub section_label: Color32,
+    /// The count after a section label ("HIGHLIGHTS 3").
+    pub section_count: Color32,
+    /// The label on a selected row, chip or card.
+    pub selected_text: Color32,
 }
 
-/// Margin's palette for [`Surfaces`] (§2): Ember's terminal-black step, comment grey and muted
-/// grey; the accent's peach hover and its 90 % pressed shade; Ember's text-on-accent; the empty
-/// track.
-const EMBER_FLOATING: Color32 = Color32::from_rgb(0x28, 0x28, 0x28);
-const EMBER_EDGE_HOVER: Color32 = Color32::from_rgb(0x60, 0x60, 0x60);
-const EMBER_CONTROL_EDGE: Color32 = Color32::from_rgb(0x80, 0x80, 0x80);
-const EMBER_ACCENT_HOVER: Color32 = Color32::from_rgb(0xEE, 0x79, 0x48);
-const EMBER_ACCENT_PRESSED: Color32 = Color32::from_rgb(0xD5, 0x53, 0x28);
-const EMBER_ON_ACCENT: Color32 = Color32::from_rgb(0x0A, 0x0A, 0x0A);
-const EMBER_TRACK: Color32 = Color32::from_rgb(0x40, 0x40, 0x40);
-/// Ember's activity ramp (§2): the track, orange at 50 % and 75 % over the floating fill
-/// (precomposited, so a cell's colour never depends on its parent), orange, peach.
-const EMBER_HEAT: [Color32; 5] =
-    [EMBER_TRACK, Color32::from_rgb(0x8A, 0x42, 0x2A), Color32::from_rgb(0xBB, 0x4E, 0x2A), Color32::from_rgb(0xEC, 0x5B, 0x2B), EMBER_ACCENT_HOVER];
+/// Margin's palette for [`Surfaces`] (§2, theme lab "Black"): the floating step, the control
+/// outline; the accent's lighter hover and darker pressed shade; black ink on the accent; the
+/// empty track; orange headings and section labels, and the brighter orange of a selected label.
+const BLACK_FLOATING: Color32 = Color32::from_rgb(0x16, 0x16, 0x16);
+const BLACK_CONTROL_EDGE: Color32 = Color32::from_rgb(0x24, 0x24, 0x24);
+const BLACK_ACCENT_HOVER: Color32 = Color32::from_rgb(0xFF, 0x7A, 0x45);
+const BLACK_ACCENT_PRESSED: Color32 = Color32::from_rgb(0xE0, 0x4F, 0x15);
+const BLACK_ON_ACCENT: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
+const BLACK_TRACK: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
+const BLACK_HEADING: Color32 = Color32::from_rgb(0xEC, 0x5B, 0x2B);
+const BLACK_SELECTED_TEXT: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x33);
+/// The activity ramp (§2): the track, two dark oranges (opaque, so a cell's colour never depends
+/// on its parent), the accent, its hover.
+const BLACK_HEAT: [Color32; 5] =
+    [BLACK_TRACK, Color32::from_rgb(0x68, 0x30, 0x19), Color32::from_rgb(0xAD, 0x45, 0x1C), Color32::from_rgb(0xFF, 0x5F, 0x1F), BLACK_ACCENT_HOVER];
 /// Outside Margin's palette, the accent's share at each heat level above none.
 const LIGHT_HEAT_SHARES: [f32; 4] = [0.4, 0.6, 0.8, 1.0];
 /// The modal scrim's alpha: black at 60 % in Margin, egui's lighter default elsewhere.
@@ -128,21 +140,27 @@ impl Surfaces {
     pub(crate) fn of(t: &Tokens) -> Self {
         if t.kind == theme::ThemeKind::Margin {
             Self {
-                floating: EMBER_FLOATING,
-                edge_hover: EMBER_EDGE_HOVER,
-                control_edge: EMBER_CONTROL_EDGE,
-                accent_hover: EMBER_ACCENT_HOVER,
-                accent_pressed: EMBER_ACCENT_PRESSED,
-                on_accent: EMBER_ON_ACCENT,
+                floating: BLACK_FLOATING,
+                edge_hover: Color32::TRANSPARENT,
+                control_edge: BLACK_CONTROL_EDGE,
+                selected_edge: Color32::TRANSPARENT,
+                accent_hover: BLACK_ACCENT_HOVER,
+                accent_pressed: BLACK_ACCENT_PRESSED,
+                on_accent: BLACK_ON_ACCENT,
                 scrim: Color32::from_black_alpha(SCRIM_ALPHA),
-                track: EMBER_TRACK,
-                heat: EMBER_HEAT,
+                track: BLACK_TRACK,
+                heat: BLACK_HEAT,
+                heading: BLACK_HEADING,
+                section_label: BLACK_HEADING,
+                section_count: t.text_faint,
+                selected_text: BLACK_SELECTED_TEXT,
             }
         } else {
             Self {
                 floating: t.card,
                 edge_hover: t.border,
                 control_edge: t.border,
+                selected_edge: t.accent,
                 accent_hover: t.accent,
                 accent_pressed: t.accent.gamma_multiply(ACCENT_PRESSED_SHADE),
                 on_accent: Color32::WHITE,
@@ -155,6 +173,10 @@ impl Surfaces {
                     t.accent.gamma_multiply(LIGHT_HEAT_SHARES[2]),
                     t.accent.gamma_multiply(LIGHT_HEAT_SHARES[3]),
                 ],
+                heading: t.text,
+                section_label: t.text_muted,
+                section_count: t.text_muted,
+                selected_text: t.text,
             }
         }
     }
@@ -165,7 +187,7 @@ impl Surfaces {
 /// 2 px accent outline on a focused text field.
 pub(crate) fn style_floating(visuals: &mut egui::Visuals, t: &Tokens) {
     visuals.window_fill = Surfaces::of(t).floating;
-    visuals.window_stroke = Stroke::new(EDGE, t.border);
+    visuals.window_stroke = edge_stroke(t.border);
     visuals.window_shadow = SHADOW_M;
     visuals.popup_shadow = SHADOW_L;
     visuals.window_corner_radius = CornerRadius::same(RADIUS_MODAL);
@@ -176,14 +198,26 @@ pub(crate) fn style_floating(visuals: &mut egui::Visuals, t: &Tokens) {
 /// The width of every edge between surfaces and of a control's outline.
 pub(crate) const EDGE: f32 = 1.0;
 
+/// An [`EDGE`]-wide stroke of `color`, or no stroke at all when `color` is fully transparent (the
+/// Black palette's frame, hover and selected edges), so nothing invisible is drawn.
+pub(crate) fn edge_stroke(color: Color32) -> Stroke {
+    if color.a() == 0 { Stroke::NONE } else { Stroke::new(EDGE, color) }
+}
+
+/// Whether the theme draws frame edges between regions (not in the Black palette, where panels
+/// part by fill alone); panels pass it to egui's separator line.
+pub(crate) fn has_edges(t: &Tokens) -> bool {
+    t.border.a() != 0
+}
+
 /// A floating surface's frame (rail, popover, toast) at `radius`: floating fill, edge, L shadow.
 pub(crate) fn floating_frame(t: &Tokens, radius: u8) -> egui::Frame {
-    egui::Frame::NONE.fill(Surfaces::of(t).floating).stroke(Stroke::new(EDGE, t.border)).corner_radius(radius).shadow(SHADOW_L)
+    egui::Frame::NONE.fill(Surfaces::of(t).floating).stroke(edge_stroke(t.border)).corner_radius(radius).shadow(SHADOW_L)
 }
 
 /// A modal sheet's frame: floating fill, edge, M shadow, radius 16.
 pub(crate) fn modal_frame(t: &Tokens) -> egui::Frame {
-    egui::Frame::NONE.fill(Surfaces::of(t).floating).stroke(Stroke::new(EDGE, t.border)).corner_radius(RADIUS_MODAL).shadow(SHADOW_M)
+    egui::Frame::NONE.fill(Surfaces::of(t).floating).stroke(edge_stroke(t.border)).corner_radius(RADIUS_MODAL).shadow(SHADOW_M)
 }
 
 /// The padding inside a modal sheet.
@@ -197,7 +231,7 @@ pub(crate) fn modal(id: egui::Id, t: &Tokens) -> egui::Modal {
 
 /// A card's frame (document card, highlight, metric card): card fill, edge, radius 8.
 pub(crate) fn card_frame(t: &Tokens) -> egui::Frame {
-    egui::Frame::NONE.fill(t.card).stroke(Stroke::new(EDGE, t.border)).corner_radius(RADIUS_CARD)
+    egui::Frame::NONE.fill(t.card).stroke(edge_stroke(t.border)).corner_radius(RADIUS_CARD)
 }
 
 /// A text input's well (search, page number, collection name, note editor): the base fill, a
@@ -241,7 +275,7 @@ impl RowLook {
 }
 
 /// A row's background (§2): a hovered row gets the hover fill and the hover edge, fading in and
-/// out over [`motion::HOVER`]; a selected row the selected fill and an accent edge; nothing
+/// out over [`motion::HOVER`]; a selected row the selected fill and the selected edge; nothing
 /// otherwise. A row with keyboard focus gets the focus ring.
 pub(crate) fn row_fill(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response, selected: bool) {
     state_fill(ui, t, rect, resp, selected, t.radius);
@@ -255,13 +289,14 @@ pub(crate) fn state_fill(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response,
     if shown <= 0.0 {
         return;
     }
-    let (fill, edge) = if selected { (t.selected, t.accent) } else { (t.hover, Surfaces::of(t).edge_hover) };
+    let surfaces = Surfaces::of(t);
+    let (fill, edge) = if selected { (t.selected, surfaces.selected_edge) } else { (t.hover, surfaces.edge_hover) };
     let fill = if resp.is_pointer_button_down_on() { t.pressed } else { fill };
     ui.painter().rect(
         rect,
         CornerRadius::same(radius),
         fill.gamma_multiply(shown),
-        Stroke::new(EDGE, edge.gamma_multiply(shown)),
+        edge_stroke(edge.gamma_multiply(shown)),
         egui::StrokeKind::Inside,
     );
 }
@@ -281,27 +316,32 @@ pub(crate) fn focus_ring(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response,
     }
 }
 
-/// A row's main text colour: full text on the selected row (its edge and icon carry the
-/// accent), `normal` otherwise.
+/// A row's main text colour: the selected label colour on the selected row, `normal` otherwise.
 pub(crate) fn row_text(t: &Tokens, selected: bool, normal: Color32) -> Color32 {
-    if selected { t.text } else { normal }
+    if selected { Surfaces::of(t).selected_text } else { normal }
 }
 
-/// A section label in small caps, muted ("CONTENTS", "HIGHLIGHTS 3"), inset like row text. Call
-/// it in a horizontal layout.
+/// A section label in small caps ("CONTENTS", "HIGHLIGHTS 3"), inset like row text. Call it in a
+/// horizontal layout.
 pub(crate) fn section_label(ui: &mut egui::Ui, t: &Tokens, title: &str, count: Option<usize>) -> Response {
     ui.add_space(ROW_PAD);
     ui.label(section_caps(t, title, count))
 }
 
-/// The text of a [`section_label`], for places that set their own inset (popover headers).
+/// The text of a [`section_label`], for places that set their own inset (popover headers): the
+/// title in the section label colour, the count after it in its own.
 pub(crate) fn section_caps(t: &Tokens, title: &str, count: Option<usize>) -> egui::text::LayoutJob {
+    let surfaces = Surfaces::of(t);
     let mut job = egui::text::LayoutJob::default();
-    let format =
-        egui::TextFormat { font_id: theme::semibold(LABEL_SIZE), color: t.text_muted, extra_letter_spacing: LABEL_TRACKING, ..Default::default() };
+    let format = egui::TextFormat {
+        font_id: theme::semibold(LABEL_SIZE),
+        color: surfaces.section_label,
+        extra_letter_spacing: LABEL_TRACKING,
+        ..Default::default()
+    };
     job.append(&title.to_uppercase(), 0.0, format.clone());
     if let Some(n) = count {
-        job.append(&n.to_string(), GAP, egui::TextFormat { font_id: theme::regular(LABEL_SIZE), ..format });
+        job.append(&n.to_string(), GAP, egui::TextFormat { font_id: theme::regular(LABEL_SIZE), color: surfaces.section_count, ..format });
     }
     job
 }
@@ -443,32 +483,35 @@ fn tooltip_arrow(ctx: &egui::Context, t: &Tokens, layer: egui::LayerId, control:
     };
     let painter = ctx.layer_painter(layer);
     painter.add(egui::Shape::convex_polygon(vec![base[0], tip, base[1]], Surfaces::of(t).floating, Stroke::NONE));
-    let edge = Stroke::new(EDGE, t.border);
-    painter.line_segment([base[0], tip], edge);
-    painter.line_segment([tip, base[1]], edge);
+    let edge = edge_stroke(t.border);
+    if !edge.is_empty() {
+        painter.line_segment([base[0], tip], edge);
+        painter.line_segment([tip, base[1]], edge);
+    }
 }
 
-/// A ghost icon button (§6): transparent at rest, the hover fill and a lighter edge when
-/// hovered (the icon brightens), the selected fill, an accent edge and an accent icon when `on`,
-/// faint with no state when disabled. Screen readers and tests get `label`; the tooltip adds
+/// A ghost icon button (§6): transparent at rest, the hover fill and the hover edge when hovered
+/// (the icon brightens), the selected fill, the selected edge and an orange icon when `on`, faint
+/// with no state when disabled. Screen readers and tests get `label`; the tooltip adds
 /// `shortcut`.
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str, shortcut: Option<&str>) -> Response {
-    paint_button(ui, icon, size, on, label, shortcut, None)
+    paint_button(ui, icon, size, on, label, shortcut, Stroke::NONE)
 }
 
-/// The annotate rail's icon button: [`icon_button`] inside a hairline border.
+/// The annotate rail's icon button: [`icon_button`] inside the theme's edge (none in the Black
+/// palette).
 pub(crate) fn rail_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str, shortcut: Option<&str>) -> Response {
-    let border = Tokens::get(ui.ctx()).border;
-    paint_button(ui, icon, size, on, label, shortcut, Some(border))
+    let border = edge_stroke(Tokens::get(ui.ctx()).border);
+    paint_button(ui, icon, size, on, label, shortcut, border)
 }
 
-fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str, shortcut: Option<&str>, border: Option<Color32>) -> Response {
+fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str, shortcut: Option<&str>, border: Stroke) -> Response {
     let t = Tokens::get(ui.ctx());
     let enabled = ui.is_enabled();
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
-    if let Some(border) = border {
-        ui.painter().rect_stroke(rect, CornerRadius::same(t.radius), Stroke::new(EDGE, border), egui::StrokeKind::Inside);
+    if !border.is_empty() {
+        ui.painter().rect_stroke(rect, CornerRadius::same(t.radius), border, egui::StrokeKind::Inside);
     }
     if enabled {
         state_fill(ui, &t, rect, &resp, on, t.radius);
@@ -480,12 +523,12 @@ fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str,
 }
 
 /// A button showing a colour instead of an icon (a comment tool's or a highlight's colour):
-/// [`icon_button`]'s states, a hairline border when `bordered` (the rail's buttons have one).
+/// [`icon_button`]'s states, the theme's edge when `bordered` (the rail's buttons have one).
 pub(crate) fn color_button(ui: &mut egui::Ui, size: f32, color: Color32, bordered: bool, label: &str, shortcut: Option<&str>) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
-    let stroke = if bordered { Stroke::new(1.0, t.border) } else { Stroke::NONE };
+    let stroke = if bordered { edge_stroke(t.border) } else { Stroke::NONE };
     ui.painter().rect(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false), stroke, egui::StrokeKind::Inside);
     focus_ring(ui, &t, rect, &resp, t.radius);
     paint_dot(ui, rect.center(), color);
@@ -530,15 +573,15 @@ pub(crate) fn color_dots(ui: &mut egui::Ui, dots: &[ColorDot<'_>]) -> Option<usi
     clicked
 }
 
-/// Margin's slider (the mockup's range input): a thin rail in the divider colour and a round
-/// knob. egui fills the idle knob with the rail's colour, so the idle knob is a light ring;
-/// hovered it fills; dragged or focused from the keyboard it fills inside the focus ring. Call
-/// before adding the slider.
+/// Margin's slider (the mockup's range input): a thin rail in the track colour and a round knob.
+/// egui fills the idle knob with the rail's colour, so the idle knob is a ring; hovered it
+/// fills; dragged or focused from the keyboard it fills inside the focus ring. Call before adding
+/// the slider.
 pub(crate) fn slider_style(ui: &mut egui::Ui, t: &Tokens) {
     ui.spacing_mut().slider_rail_height = SLIDER_RAIL_HEIGHT;
     ui.visuals_mut().handle_shape = egui::style::HandleShape::Circle;
     let widgets = &mut ui.visuals_mut().widgets;
-    widgets.inactive.bg_fill = t.divider;
+    widgets.inactive.bg_fill = Surfaces::of(t).track;
     widgets.inactive.fg_stroke = Stroke::new(SLIDER_KNOB_RING, t.text_muted);
     widgets.hovered.bg_fill = t.text;
     widgets.hovered.fg_stroke = Stroke::NONE;
@@ -553,11 +596,11 @@ fn button_fill(ctx: &egui::Context, t: &Tokens, resp: &Response, on: bool) -> Co
     if resp.is_pointer_button_down_on() { t.pressed } else { t.hover.gamma_multiply(shown) }
 }
 
-/// An icon's colour on a button or tab: the accent when on, full text when hovered (the icon
-/// brightens), the muted icon colour otherwise.
+/// An icon's colour on a button or tab: orange text colour when on, full text when hovered (the
+/// icon brightens), the muted icon colour otherwise.
 pub(crate) fn icon_tint(t: &Tokens, on: bool, hovered: bool) -> Color32 {
     if on {
-        t.accent
+        t.accent_text
     } else if hovered {
         t.text
     } else {
@@ -565,18 +608,19 @@ pub(crate) fn icon_tint(t: &Tokens, on: bool, hovered: bool) -> Color32 {
     }
 }
 
-/// An on/off switch, the mockup's `.sw-t`: an accent track with a white knob on the right when
-/// on, a divider-coloured track with a muted knob on the left when off; the knob slides and the
-/// colours blend over [`motion::FADE`]. Screen readers and tests see a checkbox named `label`.
+/// An on/off switch, the mockup's `.sw-t`: an accent track with the accent's ink as the knob on
+/// the right when on, a pressed-grey track with a muted knob on the left when off; the knob slides
+/// and the colours blend over [`motion::FADE`]. Screen readers and tests see a checkbox named
+/// `label`.
 pub(crate) fn switch(ui: &mut egui::Ui, on: bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(SWITCH_SIZE, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
     let how_on = motion::toggle(ui.ctx(), resp.id.with("margin-switch"), on, motion::FADE);
     let radius = rect.height() / 2.0;
-    ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), t.divider.lerp_to_gamma(t.accent, how_on));
+    ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), t.pressed.lerp_to_gamma(t.accent, how_on));
     let knob_x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
-    let knob = t.text_muted.lerp_to_gamma(Color32::WHITE, how_on);
+    let knob = t.text_muted.lerp_to_gamma(Surfaces::of(&t).on_accent, how_on);
     ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), radius - SWITCH_KNOB_INSET, knob);
     focus_ring(ui, &t, rect, &resp, radius as u8);
     resp
@@ -676,8 +720,8 @@ impl<'a> Button<'a> {
         Self { shortcut, ..self }
     }
 
-    /// A filter or toggle that is on: the selected fill, an accent edge, an accent check (or
-    /// icon).
+    /// A filter or toggle that is on: the selected fill and edge, the selected label colour, an
+    /// orange check (or icon).
     pub(crate) fn selected(self, selected: bool) -> Self {
         Self { selected, ..self }
     }
@@ -764,10 +808,9 @@ impl<'a> Button<'a> {
 
     /// Fill, edge, label ink and icon colour for this frame's state (§6's table).
     fn visual(&self, t: &Tokens, surfaces: &Surfaces, enabled: bool, lift: f32, pressed: bool) -> ButtonVisual {
-        let edge = |color: Color32| Stroke::new(EDGE, color);
         match self.kind {
             ButtonKind::Primary | ButtonKind::Secondary if !enabled => {
-                ButtonVisual { fill: t.panel, edge: edge(t.border), ink: t.text_faint, icon: t.text_faint }
+                ButtonVisual { fill: t.panel, edge: edge_stroke(t.border), ink: t.text_faint, icon: t.text_faint }
             }
             ButtonKind::Ghost if !enabled => ButtonVisual { fill: Color32::TRANSPARENT, edge: Stroke::NONE, ink: t.text_faint, icon: t.text_faint },
             ButtonKind::Primary => {
@@ -777,16 +820,19 @@ impl<'a> Button<'a> {
             ButtonKind::Secondary => {
                 let rest = if self.selected { t.selected } else { t.card };
                 let fill = if pressed { t.pressed } else { rest.lerp_to_gamma(t.hover, lift) };
-                let outline = if self.selected { t.accent } else { surfaces.control_edge };
-                let icon = if self.selected { t.accent } else { t.icon.lerp_to_gamma(t.text, lift) };
-                ButtonVisual { fill, edge: edge(outline), ink: t.text, icon }
+                let outline = if self.selected { surfaces.selected_edge } else { surfaces.control_edge };
+                let (ink, icon) = if self.selected { (surfaces.selected_text, t.accent_text) } else { (t.text, t.icon.lerp_to_gamma(t.text, lift)) };
+                ButtonVisual { fill, edge: edge_stroke(outline), ink, icon }
             }
             ButtonKind::Ghost => {
-                let (fill, outline) =
-                    if self.selected { (t.selected, t.accent) } else { (t.hover.gamma_multiply(lift), surfaces.edge_hover.gamma_multiply(lift)) };
+                let (fill, outline) = if self.selected {
+                    (t.selected, surfaces.selected_edge)
+                } else {
+                    (t.hover.gamma_multiply(lift), surfaces.edge_hover.gamma_multiply(lift))
+                };
                 let fill = if pressed { t.pressed } else { fill };
-                let icon = if self.selected { t.accent } else { t.icon.lerp_to_gamma(t.text, lift) };
-                ButtonVisual { fill, edge: edge(outline), ink: t.text, icon }
+                let (ink, icon) = if self.selected { (surfaces.selected_text, t.accent_text) } else { (t.text, t.icon.lerp_to_gamma(t.text, lift)) };
+                ButtonVisual { fill, edge: edge_stroke(outline), ink, icon }
             }
         }
     }
@@ -827,10 +873,10 @@ pub(crate) struct Segment<'a> {
     pub tip: Option<&'a str>,
 }
 
-/// The mockup's segmented control (`.seg`): choices in an outlined base well (radius 8, inset 2),
-/// the chosen one on the selected fill with an accent edge and full text, the others muted
-/// (bright and on the hover fill when hovered). Lays out left to right; returns the clicked
-/// index.
+/// The mockup's segmented control (`.seg`): choices in an outlined field well (radius 8, inset 2),
+/// the chosen one on the selected fill with the selected edge and the selected label colour, the
+/// others muted (bright and on the hover fill when hovered). Lays out left to right; returns the
+/// clicked index.
 pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let font = theme::regular(SEGMENT_TEXT);
@@ -840,8 +886,8 @@ pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<u
     let inner_w: f32 = widths.iter().sum::<f32>() + SEGMENT_INSET * (segments.len().saturating_sub(1)) as f32;
     let size = vec2(inner_w + 2.0 * SEGMENT_INSET, SEGMENT_HEIGHT);
     let (well, _) = ui.allocate_exact_size(size, Sense::hover());
-    let control_edge = Surfaces::of(&t).control_edge;
-    ui.painter().rect(well, CornerRadius::same(RADIUS_CARD), t.field, Stroke::new(EDGE, control_edge), egui::StrokeKind::Inside);
+    let surfaces = Surfaces::of(&t);
+    ui.painter().rect(well, CornerRadius::same(RADIUS_CARD), t.field, Stroke::new(EDGE, surfaces.control_edge), egui::StrokeKind::Inside);
     let mut clicked = None;
     let mut x = well.left() + SEGMENT_INSET;
     for (i, ((segment, galley), width)) in segments.iter().zip(galleys).zip(widths).enumerate() {
@@ -850,10 +896,11 @@ pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<u
         let resp = ui.interact(rect, ui.id().with(("segment", segment.label)), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), segment.selected, segment.label));
         let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
-        let (fill, edge) = if segment.selected { (t.selected, Stroke::new(EDGE, t.accent)) } else { (t.hover.gamma_multiply(shown), Stroke::NONE) };
+        let (fill, edge) =
+            if segment.selected { (t.selected, edge_stroke(surfaces.selected_edge)) } else { (t.hover.gamma_multiply(shown), Stroke::NONE) };
         ui.painter().rect(rect, CornerRadius::same(t.radius), fill, edge, egui::StrokeKind::Inside);
         focus_ring(ui, &t, rect, &resp, t.radius);
-        let color = if segment.selected { t.text } else { t.text_muted.lerp_to_gamma(t.text, shown) };
+        let color = if segment.selected { surfaces.selected_text } else { t.text_muted.lerp_to_gamma(t.text, shown) };
         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
         let resp = match segment.tip {
             Some(tip) => tooltip(resp, tip, None),

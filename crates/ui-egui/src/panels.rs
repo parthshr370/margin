@@ -995,8 +995,14 @@ fn pages(
                 ui.painter().rect_filled(rect, radius, t.hover);
             }
             if picked {
-                let width = if ember { 1.0 } else { 1.5 };
-                ui.painter().rect_stroke(rect, radius, Stroke::new(width, t.accent), egui::StrokeKind::Inside);
+                let outline = if ember {
+                    crate::margin::look::edge_stroke(crate::margin::look::Surfaces::of(t).selected_edge)
+                } else {
+                    Stroke::new(1.5, t.accent)
+                };
+                if !outline.is_empty() {
+                    ui.painter().rect_stroke(rect, radius, outline, egui::StrokeKind::Inside);
+                }
             }
             let pr = rect.shrink(8.0);
             ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
@@ -1004,12 +1010,10 @@ fn pages(
                 ui.painter().image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
             let heavy = selected && !ember;
-            ui.painter().rect_stroke(
-                pr,
-                CornerRadius::ZERO,
-                Stroke::new(if heavy { 2.0 } else { 1.0 }, if heavy { t.accent } else { t.border }),
-                egui::StrokeKind::Outside,
-            );
+            let outline = if heavy { Stroke::new(2.0, t.accent) } else { crate::margin::look::edge_stroke(t.border) };
+            if !outline.is_empty() {
+                ui.painter().rect_stroke(pr, CornerRadius::ZERO, outline, egui::StrokeKind::Outside);
+            }
             ui.label(egui::RichText::new(&p.label).font(theme::medium(12.0)).color(if selected || picked { t.accent_text } else { t.text_muted }));
             if resp.clicked() {
                 let m = ui.input(|i| i.modifiers);

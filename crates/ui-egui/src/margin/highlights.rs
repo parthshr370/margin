@@ -346,9 +346,9 @@ pub(crate) fn change_kind(app: &mut PdfCraftApp, i: usize, page: usize, index: u
     Some(new)
 }
 
-/// One comment's card (§2): the card fill and edge at rest, the hover fill and a lighter edge
-/// under the pointer, the selected fill and an accent edge when selected. The whole card is one
-/// click target under its own widgets.
+/// One comment's card (§2): the card fill and edge at rest, the hover fill and the hover edge
+/// under the pointer, the selected fill and edge and the selected label colour on the quote when
+/// selected. The whole card is one click target under its own widgets.
 fn card(ui: &mut egui::Ui, input: &CardInput<'_>, view: &mut DocView, out: &mut Outcome) {
     let (t, a) = (input.t, input.a);
     let key = (a.page, a.index);
@@ -359,12 +359,13 @@ fn card(ui: &mut egui::Ui, input: &CardInput<'_>, view: &mut DocView, out: &mut 
         let resp = ui.response();
         let shown = motion::hover(ui.ctx(), resp.id, resp.contains_pointer());
         let actions_shown = motion::hover(ui.ctx(), resp.id.with("actions"), resp.contains_pointer() || selected);
+        let surfaces = look::Surfaces::of(t);
         let (fill, edge) = if selected {
-            (t.selected, t.accent)
+            (t.selected, surfaces.selected_edge)
         } else {
-            (t.card.lerp_to_gamma(t.hover, shown), t.border.lerp_to_gamma(look::Surfaces::of(t).edge_hover, shown))
+            (t.card.lerp_to_gamma(t.hover, shown), t.border.lerp_to_gamma(surfaces.edge_hover, shown))
         };
-        look::card_frame(t).fill(fill).stroke(egui::Stroke::new(look::EDGE, edge)).inner_margin(GAP_LARGE).show(ui, |ui| {
+        look::card_frame(t).fill(fill).stroke(look::edge_stroke(edge)).inner_margin(GAP_LARGE).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing = vec2(GAP, GAP);
             action = meta_row(ui, input, actions_shown);
@@ -610,7 +611,8 @@ fn body(ui: &mut egui::Ui, input: &CardInput<'_>, selected: bool, editing: bool)
     let note = a.contents.as_deref().map(str::trim).filter(|note| !note.is_empty() && *note != quote);
     if !quote.is_empty() {
         let rows = if selected { usize::MAX } else { QUOTE_ROWS };
-        text_block(ui, quote, TextFormat { font_id: theme::regular(QUOTE_TEXT), color: t.text, ..Default::default() }, rows);
+        let color = look::row_text(t, selected, t.text);
+        text_block(ui, quote, TextFormat { font_id: theme::regular(QUOTE_TEXT), color, ..Default::default() }, rows);
     } else if note.is_none() && !editing {
         let format = TextFormat { font_id: theme::regular(QUOTE_TEXT), color: t.text_faint, italics: true, ..Default::default() };
         text_block(ui, kind_label(a), format, 1);

@@ -189,14 +189,10 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
-/// A section's small-caps label in the accent, after the section gap.
+/// A section's small-caps label in the section label colour, after the section gap.
 fn section(ui: &mut egui::Ui, t: &Tokens, title: &str) {
     ui.add_space(SECTION_GAP);
-    let mut caps = look::section_caps(t, i18n::t(title), None);
-    for part in &mut caps.sections {
-        part.format.color = t.accent_text;
-    }
-    ui.add(egui::Label::new(caps).selectable(false));
+    ui.add(egui::Label::new(look::section_caps(t, i18n::t(title), None)).selectable(false));
 }
 
 /// What a setting row says: its name, an optional description, and whether it is the first of
