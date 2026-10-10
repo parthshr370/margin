@@ -23,6 +23,7 @@ pub mod look;
 pub mod motion;
 pub mod obsidian;
 pub mod pagecolor;
+pub mod pages;
 pub mod rail;
 pub mod reading;
 pub mod saving;

@@ -248,6 +248,57 @@ fn switching_sidebar_tabs_keeps_the_page_still() {
     }
 }
 
+/// The Pages tab is a two-column grid with only the rows in view laid out. Opening it reveals a
+/// late current page; Ctrl-picked pages are counted apart from it; scrolling the grid away from
+/// the current page stays where the reader put it.
+#[test]
+fn pages_grid_reveals_the_current_page_and_leaves_scrolling_alone() {
+    const PAGES: usize = 40;
+    const READING_PAGE: usize = 33;
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.set_option("language", "en").unwrap();
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-test-data-{}", std::process::id())));
+        app.open_bytes("long.pdf", None, long_fixture(PAGES)).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    h.state_mut().views[0].go_to_page(READING_PAGE);
+    settle(&mut h);
+    h.get_all_by_label("Pages").next().expect("tab").click();
+    // Long enough for the reveal's scroll animation to finish.
+    h.run_steps(60);
+    // Physical page 34 (index 33) and its row neighbour 33, side by side.
+    let (left, right) = (h.get_by_label("Page 33").rect(), h.get_by_label("Page 34").rect());
+    assert!((left.top() - right.top()).abs() < 0.5 && right.left() > left.right(), "{left:?} {right:?}");
+    assert!(h.query_by_label("Page 1").is_none(), "rows out of view aren't laid out");
+    h.get_by_label("Page 35").click_modifiers(egui::Modifiers::COMMAND);
+    h.run_steps(3);
+    h.get_by_label("Page 36").click_modifiers(egui::Modifiers::COMMAND);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, READING_PAGE, "picking doesn't move the document");
+    assert_eq!(h.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [READING_PAGE, 34, 35]);
+    h.get_by_label("3 picked");
+    // Scroll the grid to its top: the current page leaves the view and stays out.
+    h.hover_at(h.get_by_label("Page 36").rect().center());
+    for _ in 0..30 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+        if h.query_by_label("Page 1").is_some() {
+            break;
+        }
+    }
+    h.run_steps(10);
+    assert!(h.query_by_label("Page 1").is_some(), "the grid scrolled to the top");
+    assert!(h.query_by_label("Page 34").is_none(), "and isn't pulled back to the current page");
+}
+
 #[test]
 fn tooltips_name_the_keymap_shortcut_apart() {
     let mut h = harness(Flavor::Margin);

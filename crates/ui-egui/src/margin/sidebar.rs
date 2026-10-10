@@ -229,7 +229,9 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             page_bookmarks(app, ui, t, index);
             crate::panels::panel_body(app, ui);
         }
-        SidebarTab::Pages | SidebarTab::Other(_) => {
+        // The thumbnail grid (`margin::pages`); PdfCraft's Pages panel stays PdfCraft's.
+        SidebarTab::Pages => super::pages::show(app, ui, t, index),
+        SidebarTab::Other(_) => {
             // PdfCraft's panel, its title row a section label here (`look::RowLook::Ember`), the
             // Comments panel's cards too.
             if let Some(view) = app.views.get_mut(index) {
