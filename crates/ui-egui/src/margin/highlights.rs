@@ -160,6 +160,8 @@ struct CardInput<'a> {
     external: bool,
     /// Why there is no reading note to open (no vault, a bad template), if there is none.
     no_note: Option<&'a str>,
+    /// This year (the session's clock): its dates leave the year out.
+    this_year: i64,
 }
 
 impl CardInput<'_> {
@@ -173,6 +175,7 @@ impl CardInput<'_> {
 /// stack; returns where to show the clicked comment.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) -> Option<Nav> {
     let keys = Keys::of(app);
+    let this_year = app.session.today().0;
     let view = app.views.get_mut(index)?;
     let doc = app.session.get(view.id)?;
     let info = &doc.info;
@@ -196,6 +199,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
                 notes_on: view.comments.notes.enabled,
                 external: view.comments.notes.external,
                 no_note: no_note.as_deref(),
+                this_year,
             };
             card(ui, &input, view, &mut out);
         }
@@ -330,8 +334,10 @@ fn color_name(notes: &Notes, color: Option<[f32; 3]>) -> String {
     named.map_or_else(|| "Custom".to_owned(), |c| c.name.clone())
 }
 
-/// Swatch, type icon, page and date; then the actions, faded in by `actions_shown` (they keep
-/// their place, so the date's width never jumps).
+/// Swatch, type icon, page and a short date ("10 Oct"); then the actions, faded in by
+/// `actions_shown` (they keep their place, so nothing beside them moves on hover). A date that
+/// doesn't fit beside the page label is left out rather than cut; the page label's tooltip has
+/// the full metadata, the date's its full timestamp.
 fn meta_row(ui: &mut egui::Ui, input: &CardInput<'_>, actions_shown: f32) -> Option<Action> {
     let (t, a) = (input.t, input.a);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), META_ROW), Layout::left_to_right(Align::Center), |ui| {
@@ -341,15 +347,25 @@ fn meta_row(ui: &mut egui::Ui, input: &CardInput<'_>, actions_shown: f32) -> Opt
         let edge = Stroke::new(1.0, Color32::from_black_alpha(SWATCH_EDGE_ALPHA));
         ui.painter().circle(rect.center(), SWATCH / 2.0, shown_color(input.notes, a.color), edge);
         look::tooltip(ui.add(icons::image(subtype_icon(&a.subtype), KIND_ICON, t.text_muted)), kind_label(a), None);
-        let page = egui::RichText::new(format!("p. {}", input.page_label)).font(theme::regular(META_TEXT)).color(t.text_muted);
-        ui.add(egui::Label::new(page).selectable(false));
         let actions_width = ACTION_COUNT * ACTION + (ACTION_COUNT - 1.0) * ACTION_GAP;
-        let date_width = (ui.available_width() - actions_width - GAP).max(0.0);
-        ui.allocate_ui_with_layout(vec2(date_width, META_ROW), Layout::left_to_right(Align::Center), |ui| {
-            ui.set_width(date_width);
-            if let Some(date) = &a.modified {
-                let date = egui::RichText::new(date).font(theme::regular(META_TEXT)).color(t.text_faint);
-                ui.add(egui::Label::new(date).truncate().selectable(false));
+        let room = (ui.available_width() - actions_width - GAP).max(0.0);
+        let font = theme::regular(META_TEXT);
+        let page = format!("p. {}", input.page_label);
+        let date =
+            a.modified.as_deref().and_then(|full| ui.ctx().memory_mut(|m| m.caches.cache::<ShortDates>().get((full, input.this_year)).clone()));
+        let width = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x;
+        let date = date.filter(|date| width(&page) + GAP + width(date) <= room);
+        ui.allocate_ui_with_layout(vec2(room, META_ROW), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_width(room);
+            let label = ui.add(egui::Label::new(egui::RichText::new(&page).font(font.clone()).color(t.text_muted)).truncate().selectable(false));
+            let full = match &a.modified {
+                Some(modified) => format!("Page {} · {} · {modified}", input.page_label, kind_label(a)),
+                None => format!("Page {} · {}", input.page_label, kind_label(a)),
+            };
+            look::tooltip(label, &full, None);
+            if let (Some(date), Some(modified)) = (date, &a.modified) {
+                let shown = ui.add(egui::Label::new(egui::RichText::new(date).font(font).color(t.text_faint)).selectable(false));
+                look::tooltip(shown, modified, None);
             }
         });
         ui.scope(|ui| {
@@ -507,5 +523,51 @@ fn editor(ui: &mut egui::Ui, t: &Tokens, key: (usize, usize), view: &mut DocView
         out.edit = Some(Edit::SetAnnotationContents { page, index, text });
     } else if cancel || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         view.comments.editing = None;
+    }
+}
+
+/// The months as a card's short date names them.
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/// Short dates for the cards, each formatted once while it is shown (egui's frame cache, keyed
+/// by the annotation's date as PdfCraft gives it).
+type ShortDates = egui::cache::FrameCache<Option<String>, ShortDate>;
+
+#[derive(Default)]
+struct ShortDate;
+
+impl egui::cache::ComputerMut<(&str, i64), Option<String>> for ShortDate {
+    fn compute(&mut self, (modified, this_year): (&str, i64)) -> Option<String> {
+        short_date(modified, this_year)
+    }
+}
+
+/// `modified` as PdfCraft shows an annotation's `/M` ("2026-10-10 12:30"), shortened: "10 Oct"
+/// in `this_year`, "10 Oct 2025" otherwise. `None` for anything else (a date PdfCraft couldn't
+/// read stays whole in the tooltip, never cut on the card).
+fn short_date(modified: &str, this_year: i64) -> Option<String> {
+    let ymd = modified.get(..10)?;
+    let digits = |range: std::ops::Range<usize>| ymd.get(range).filter(|s| s.bytes().all(|b| b.is_ascii_digit()));
+    if ymd.as_bytes().get(4) != Some(&b'-') || ymd.as_bytes().get(7) != Some(&b'-') {
+        return None;
+    }
+    let year = digits(0..4)?.parse::<i64>().ok()?;
+    let month = MONTHS.get(digits(5..7)?.parse::<usize>().ok()?.checked_sub(1)?)?;
+    let day = digits(8..10)?.parse::<u8>().ok().filter(|day| (1..=31).contains(day))?;
+    Some(if year == this_year { format!("{day} {month}") } else { format!("{day} {month} {year}") })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_date;
+
+    #[test]
+    fn short_dates_drop_this_year_and_refuse_what_they_cannot_read() {
+        assert_eq!(short_date("2026-10-10 12:30", 2026).as_deref(), Some("10 Oct"));
+        assert_eq!(short_date("2025-01-05 09:00", 2026).as_deref(), Some("5 Jan 2025"));
+        assert_eq!(short_date("2026-10-10", 2026).as_deref(), Some("10 Oct"));
+        for unreadable in ["Tuesday", "2026-13-01 00:00", "2026-00-10", "2026-10-32", "D:2026101012", "", "20261010"] {
+            assert_eq!(short_date(unreadable, 2026), None, "{unreadable}");
+        }
     }
 }

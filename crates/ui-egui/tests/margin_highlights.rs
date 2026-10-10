@@ -138,6 +138,41 @@ fn a_deletion_offers_undo_in_a_toast_above_the_footer() {
     assert_eq!(h.try_run().expect("idle"), 1, "nothing repaints once it has gone");
 }
 
+/// R8 QoL 25: a card's date is short ("10 Oct" this year), 8 points after the page label, never
+/// a cut timestamp, at the sidebar's narrowest, default and widest; hovering the card moves
+/// neither.
+#[test]
+fn highlight_dates_are_short_and_never_squeezed() {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let mut h = harness("highlight");
+    mark(&mut h, 4, 14);
+    let (year, month, day) = h.state().session.today();
+    let today = format!("{day} {}", MONTHS[month as usize - 1]);
+    for width in [240.0_f32, 296.0, 440.0] {
+        // The width the reader dragged the sidebar to, as egui keeps it.
+        let outer_rect = egui::Rect::from_min_size(egui::pos2(0.0, 44.0), egui::vec2(width, 800.0));
+        h.ctx.data_mut(|d| d.insert_persisted(egui::Id::new("margin_sidebar"), egui::PanelState { outer_rect }));
+        h.run_steps(3);
+        let page = h.get_by_label("p. 1").rect();
+        let actions_end = h.get_by_label("Delete highlight").rect().right();
+        assert!(actions_end <= width && actions_end > width - 40.0, "the sidebar is {width} wide: actions end at {actions_end}");
+        assert_eq!(h.query_all_by_label_contains(&format!("{year}-")).count(), 0, "no raw timestamp at {width}");
+        // At the narrowest the date gives way to the reserved actions (the page label's tooltip
+        // still has it); wider, it sits 8 points after the page label.
+        let date = h.query_by_label(&today).map(|node| node.rect());
+        assert!(date.is_some() || width <= 240.0, "the date shows at {width}");
+        if let Some(date) = date {
+            assert!(date.left() >= page.right() + 7.5, "the date sits 8 points after the page label at {width}: {page:?} {date:?}");
+            assert!(date.right() <= actions_end - 90.0, "and clear of the actions at {width}: {date:?}");
+        }
+        hover_card(&mut h);
+        let hovered = (h.get_by_label("p. 1").rect(), h.query_by_label(&today).map(|node| node.rect()));
+        assert_eq!(hovered, (page, date), "hover moves nothing at {width}");
+        h.hover_at(egui::pos2(width + 400.0, 450.0));
+        h.run_steps(3);
+    }
+}
+
 #[test]
 fn changing_the_colour_updates_the_swatch() {
     let mut h = harness("highlight");
