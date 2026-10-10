@@ -22,6 +22,7 @@ use margin_config::{CompileOptions, Compiled, CompiledKeymap, ContextNode, Keyma
 use pdfcraft_engine::commands::{self, CommandSpec, Shortcut};
 use serde_json::Value;
 
+use super::reading;
 use super::settings_watch::SettingsWatch;
 use crate::canvas::{DocView, Fit, PageLayout};
 use crate::{PdfCraftApp, QuickTool};
@@ -29,8 +30,9 @@ use crate::{PdfCraftApp, QuickTool};
 /// Wait after the last change event before reloading: editors save a file in several steps.
 const RELOAD_DEBOUNCE_S: f64 = 0.15;
 
-/// Zoom limits of `view.zoom.set`, as a factor (PdfCraft's own zoom steps span 10 %..3200 %).
-const MIN_ZOOM: f64 = 0.1;
+/// Zoom limits of `view.zoom.set`, as a factor: the page view's own (`DocView::zoom_at`), which
+/// `view.zoom` and `view.zoom_steps` share.
+const MIN_ZOOM: f64 = 0.08;
 const MAX_ZOOM: f64 = 64.0;
 
 /// The settings before the files are read (and on a build without a config folder).
@@ -540,8 +542,9 @@ pub(crate) fn stroke(key: Key, modifiers: Modifiers, os: Os) -> Option<String> {
     Some(flags.iter().filter(|(on, _)| *on).map(|(_, prefix)| *prefix).chain([name.as_str()]).collect())
 }
 
-/// Runs a bound id. `false` when nothing here handles it.
-fn run(app: &mut PdfCraftApp, ctx: &egui::Context, id: &str, args: &Value) -> bool {
+/// Runs a bound id (also the footer's zoom controls, so they share the keys' commands). `false`
+/// when nothing here handles it.
+pub(crate) fn run(app: &mut PdfCraftApp, ctx: &egui::Context, id: &str, args: &Value) -> bool {
     match id {
         "app.close_layer" => close_layer(app, ctx),
         "app.key_context" => app.margin_keys.key_context_open = !app.margin_keys.key_context_open,
@@ -602,12 +605,13 @@ fn close_layer(app: &mut PdfCraftApp, ctx: &egui::Context) {
 }
 
 /// The document view's ids (PdfCraft hard-codes their keys in `canvas::shortcuts`).
-const VIEW_COMMANDS: [&str; 20] = [
+const VIEW_COMMANDS: [&str; 21] = [
     "view.zoom.in",
     "view.zoom.out",
     "view.zoom.set",
     "view.fit.page",
     "view.fit.width",
+    "view.fit.read",
     "view.fit.toggle_width",
     "view.rotate.cw",
     "view.rotate.ccw",
@@ -641,9 +645,12 @@ fn view_command(view: &mut DocView, id: &str, args: &Value, settings: &margin_co
             let Some(percent) = args.get("percent").and_then(Value::as_f64).filter(|p| p.is_finite()) else { return false };
             view.set_zoom((percent / 100.0).clamp(MIN_ZOOM, MAX_ZOOM) as f32);
         }
-        "view.fit.page" => fit(view, Fit::Page),
-        "view.fit.width" => fit(view, Fit::Width),
-        "view.fit.toggle_width" => fit(view, if view.fit == Fit::Width { Fit::Page } else { Fit::Width }),
+        "view.fit.page" => reading::set_fit(view, Fit::Page),
+        "view.fit.width" => reading::set_fit(view, Fit::Width),
+        "view.fit.read" => reading::fit_read(view, settings.reading_width_px),
+        // `W`: the width of the window, or back to the reading width.
+        "view.fit.toggle_width" if view.fit == Fit::Width => reading::fit_read(view, settings.reading_width_px),
+        "view.fit.toggle_width" => reading::set_fit(view, Fit::Width),
         "view.rotate.cw" => view.rotate_view(true),
         "view.rotate.ccw" => view.rotate_view(false),
         "reader.find.next" => view.find_step(true),
@@ -668,11 +675,6 @@ fn view_command(view: &mut DocView, id: &str, args: &Value, settings: &margin_co
         _ => return false,
     }
     true
-}
-
-fn fit(view: &mut DocView, fit: Fit) {
-    view.fit = fit;
-    view.goto = Some((view.current, 0.0));
 }
 
 /// The next stop of `view.zoom_steps` (percent) above or below the zoom; past the last stop,

@@ -265,6 +265,26 @@ pub fn fit_read(view: &mut DocView, width_px: u32) {
     go(view, spot);
 }
 
+/// Pick fit width or page (ending fit "read"), keeping the reading line where it is rather than
+/// going to the page's top as `DocView::set_fit` does.
+pub fn set_fit(view: &mut DocView, fit: Fit) {
+    let spot = spot(view);
+    view.fit = fit;
+    view.margin.read_fit = None;
+    go(view, spot);
+}
+
+/// The canvas's fit width or page just changed the zoom (a resized window or sidebar): keep the
+/// reading line. Nothing to keep before a frame is drawn, and Single view fits each page anew as
+/// it turns, so a page turn is not pulled back.
+pub(crate) fn refitted(view: &mut DocView) {
+    if view.goto.is_some() || view.layout == PageLayout::Single || view.visible_page_rects().is_empty() {
+        return;
+    }
+    let spot = spot(view);
+    go(view, spot);
+}
+
 /// `--trim auto|manual|on|off` (and the control channel's `set`); `on` keeps the last mode.
 pub fn set_trim_option(view: &mut DocView, value: &str) -> Result<(), String> {
     let manual = match value {
@@ -333,8 +353,11 @@ fn follow_read_fit(view: &mut DocView, info: &DocInfo) -> bool {
     let width = view.viewport_rect().width();
     let window = if width.is_finite() && width > 0.0 { width } else { FIRST_FRAME_WIDTH };
     let widest = info.pages.iter().enumerate().map(|(i, p)| view.display_size(i, p).0).fold(1.0, f32::max);
-    let shown = read.width_px.min((window - 2.0 * SIDE).max(1.0));
-    let zoom = (shown / (widest * PT)).clamp(MIN_ZOOM, MAX_ZOOM);
+    // Two-up fits the spread: two pages and the gap between them, as `DocView::fit_zoom` lays
+    // out a row (a cover shown alone is one page of such a row).
+    let per_row = if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
+    let page_room = ((window - 2.0 * SIDE - GAP * (per_row - 1.0)) / per_row).max(1.0);
+    let zoom = (read.width_px.min(page_room) / (widest * PT)).clamp(MIN_ZOOM, MAX_ZOOM);
     let moved = (zoom - view.zoom).abs() > view.zoom * READ_ZOOM_STEP;
     if moved {
         view.zoom = zoom;

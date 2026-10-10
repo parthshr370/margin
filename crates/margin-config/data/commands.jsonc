@@ -15,10 +15,11 @@
   { "id": "view.zoom.in", "title": "Zoom in", "icon": "zoom-in", "group": "View", "when": "Reader", "aliases": ["bigger", "magnify"] },
   { "id": "view.zoom.out", "title": "Zoom out", "icon": "zoom-out", "group": "View", "when": "Reader", "aliases": ["smaller"] },
   { "id": "view.zoom.set", "title": "Zoom", "group": "View", "when": "Reader",
-    "args": { "type": "object", "required": ["percent"], "properties": { "percent": { "type": "integer", "minimum": 10, "maximum": 6400 } } } },
+    "args": { "type": "object", "required": ["percent"], "properties": { "percent": { "type": "integer", "minimum": 8, "maximum": 6400 } } } },
   { "id": "view.fit.page", "title": "Fit page", "group": "View", "when": "Reader" },
   { "id": "view.fit.width", "title": "Fit width", "group": "View", "when": "Reader" },
-  { "id": "view.fit.toggle_width", "title": "Toggle fit width", "group": "View", "when": "Reader" },
+  { "id": "view.fit.read", "title": "Fit reading width", "group": "View", "when": "Reader" },
+  { "id": "view.fit.toggle_width", "title": "Toggle fit width and reading width", "group": "View", "when": "Reader" },
   { "id": "view.rotate.cw", "title": "Rotate view clockwise", "icon": "rotate-cw", "group": "View", "when": "Reader" },
   { "id": "view.rotate.ccw", "title": "Rotate view counterclockwise", "icon": "rotate-ccw", "group": "View", "when": "Reader" },
 

@@ -1280,7 +1280,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let avail = ui.available_rect_before_wrap();
     view.viewport_w = avail.width();
     view.viewport_h = avail.height();
+    let zoom_before_fit = view.zoom;
     view.fit_zoom(info);
+    // Margin keeps the reading line when fit width/page follows a resized window or sidebar.
+    if app.flavor == crate::Flavor::Margin && view.zoom != zoom_before_fit {
+        crate::margin::reading::refitted(view);
+    }
 
     // Pinch / ctrl+scroll zoom, anchored on the current page.
     let zoom_delta = ui.input(|i| i.zoom_delta());

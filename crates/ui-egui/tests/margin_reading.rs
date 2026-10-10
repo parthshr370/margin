@@ -241,6 +241,82 @@ fn reopen_puts_the_same_text_under_the_same_point() {
     }
 }
 
+/// The spot's page and height share, for comparing reading lines.
+fn line(h: &Harness<'static, PdfCraftApp>) -> (usize, f32) {
+    reading::place(&h.state().views[0])
+}
+
+fn same_line(a: (usize, f32), b: (usize, f32)) -> bool {
+    a.0 == b.0 && (a.1 - b.1).abs() < 0.01
+}
+
+/// The footer's zoom percent opens its menu ("Zoom and fit" is the tooltip; the label is the
+/// percent shown).
+fn open_zoom_menu(h: &mut Harness<'static, PdfCraftApp>) {
+    let percent = format!("{:.0}%", h.state().views[0].zoom * 100.0);
+    h.get_by_label(&percent).click();
+}
+
+/// R8 QoL 5: footer − / + and the zoom menu use `view.zoom_steps` like the keys; a fit change,
+/// `W` and a resized window keep the reading line; fit "read" in Two-up fits the whole spread.
+#[test]
+fn zoom_and_fit_entry_points_agree_and_keep_the_line() {
+    let place = Place::new("fit", "paper.pdf", &paper(6));
+    std::fs::create_dir_all(place.config()).unwrap();
+    std::fs::write(place.config().join("settings.jsonc"), "{ \"view\": { \"fit\": \"zoom\", \"zoom\": 100, \"zoom_steps\": [80, 130, 400] } }")
+        .unwrap();
+    let mut h = harness(&place);
+    let zoom = |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].zoom * 100.0).round();
+    h.get_by_label("Zoom in").click();
+    settle(&mut h);
+    assert_eq!(zoom(&h), 130.0, "the footer's + takes the next configured stop");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Equals);
+    settle(&mut h);
+    assert_eq!(zoom(&h), 400.0, "and so does Ctrl+=");
+    h.get_by_label("Zoom out").click();
+    settle(&mut h);
+    assert_eq!(zoom(&h), 130.0);
+    open_zoom_menu(&mut h);
+    h.run_steps(2);
+    h.get_by_label("400%").click();
+    settle(&mut h);
+    assert_eq!(zoom(&h), 400.0, "the menu lists the configured stops");
+    // The menu stays open while choosing (item 2): Esc closes it.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+
+    // Halfway down p. 3, every fit change keeps the line.
+    reading::go(&mut h.state_mut().views[0], reading::Spot { page: 2, y: 0.5, x: None });
+    settle(&mut h);
+    let start = line(&h);
+    for (key, fit) in [(Key::W, "width"), (Key::W, "reading width")] {
+        h.key_press(key);
+        settle(&mut h);
+        assert!(same_line(line(&h), start), "W to {fit}: {:?}, was {start:?}", line(&h));
+    }
+    assert!(reading::reads(&h.state().views[0]), "W toggles back to the reading width, not to page");
+    open_zoom_menu(&mut h);
+    h.run_steps(2);
+    h.get_by_label("Fit page").click();
+    settle(&mut h);
+    assert!(same_line(line(&h), start), "Fit page: {:?}, was {start:?}", line(&h));
+    h.key_press(Key::Escape);
+    h.key_press(Key::W);
+    settle(&mut h);
+    assert_eq!(h.state().views[0].fit, Fit::Width);
+    h.set_size(egui::vec2(1000.0, 900.0));
+    settle(&mut h);
+    assert!(same_line(line(&h), start), "a narrower window at fit width: {:?}, was {start:?}", line(&h));
+
+    // Two-up at the reading width: both pages of the spread fit the window.
+    h.state_mut().set_option("layout", "two-up").unwrap();
+    reading::fit_read(&mut h.state_mut().views[0], 4000);
+    settle(&mut h);
+    let view = &h.state().views[0];
+    let right = view.visible_page_rects().iter().map(|(_, r)| r.right()).fold(f32::MIN, f32::max);
+    assert!(right <= view.viewport_rect().right() + 0.5, "the spread's right page ends at {right}, window {:?}", view.viewport_rect());
+}
+
 #[test]
 fn auto_trim_fills_the_width_with_the_text_at_fit_width() {
     let place = Place::new("trim", "paper2col.pdf", &paper(3));

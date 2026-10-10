@@ -326,7 +326,7 @@ fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// Page display (Scroll, Single, Two-up, through PdfCraft's commands, which it returns), the
-/// cover page in Two-up, and fit (Width, Page, Read).
+/// cover page in Two-up, and fit (Width, Page, Reading).
 fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &Tokens) -> Option<&'static str> {
     let layouts = [(PageLayout::Continuous, "Scroll"), (PageLayout::Single, "Single"), (PageLayout::TwoUp, "Two-up")];
     let segments = layouts.map(|(choice, name)| Segment { label: i18n::t(name), selected: view.layout == choice, tip: None });
@@ -341,11 +341,11 @@ fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &To
     let segments = [
         Segment { label: i18n::t("Width"), selected: !reading && view.fit == Fit::Width, tip: None },
         Segment { label: i18n::t("Page"), selected: !reading && view.fit == Fit::Page, tip: None },
-        Segment { label: i18n::t("Read"), selected: reading, tip: Some(i18n::t("A comfortable reading width (view.reading_width_px)")) },
+        Segment { label: i18n::t("Reading"), selected: reading, tip: Some(i18n::t("A comfortable reading width (view.reading_width_px)")) },
     ];
     match choice_row(ui, t, i18n::t("Fit"), &segments) {
-        Some(0) => view.set_fit(Fit::Width),
-        Some(1) => view.set_fit(Fit::Page),
+        Some(0) => reading::set_fit(view, Fit::Width),
+        Some(1) => reading::set_fit(view, Fit::Page),
         Some(_) => reading::fit_read(view, reading_width),
         None => {}
     }

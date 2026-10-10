@@ -2,17 +2,18 @@
 //! with its menu and the fit toggle, a reading-progress scrubber, and the save status.
 
 use egui::{Align, CornerRadius, Layout, Sense, Stroke, vec2};
+use serde_json::{Value, json};
 
 use crate::PdfCraftApp;
 use crate::canvas::Fit;
 use crate::margin::look::{self, GAP, GAP_LARGE};
 use crate::margin::motion;
-use crate::margin::reading::SaveStatus;
+use crate::margin::reading::{self, SaveStatus};
 use crate::theme::{self, Tokens};
 
 pub const HEIGHT: f32 = 36.0;
-/// The zoom menu's fixed steps, in percent.
-const ZOOM_STEPS: [u16; 5] = [75, 100, 125, 150, 200];
+/// A zoom stop this close (as a factor) is the zoom shown.
+const ZOOM_MATCH: f32 = 0.005;
 /// The id of the page box, shared with PdfCraft's `view.focus_page_input` (⇧⌘N).
 const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
@@ -36,6 +37,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         zoom_in: look::shortcut(app, "view.zoom.in"),
         fit: look::shortcut(app, "view.fit.toggle_width"),
     };
+    let steps = app.margin_keys.settings().view.zoom_steps.clone();
     let Some(view) = app.views.get_mut(index) else { return };
     let mut command = None;
     // egui draws the panel's top divider line.
@@ -46,7 +48,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = GAP;
                 page_box(ui, &t, view, &labels);
-                command = zoom_group(ui, &t, view, &keys);
+                command = zoom_group(ui, &t, view, &steps, &keys);
                 ui.add_space(GAP_LARGE);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.allocate_ui(vec2(STATUS_WIDTH, HEIGHT), |ui| {
@@ -64,8 +66,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
-    if let Some(id) = command {
-        app.execute(id);
+    if let Some((id, args)) = command {
+        // The keys' own path: the same zoom stops and fits as `Ctrl+=`, `W` and the palette.
+        super::keys::run(app, ui.ctx(), id, &args);
     }
 }
 
@@ -100,13 +103,15 @@ struct ZoomKeys {
     fit: Option<String>,
 }
 
-/// `− 100% +`, the percent opening the zoom menu, then the fit toggle. Returns a command to run.
-fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, keys: &ZoomKeys) -> Option<&'static str> {
+/// `− 100% +`, the percent opening the zoom menu, then the fit toggle. Returns the command to
+/// run (Margin's `view.zoom.*` / `view.fit.*`, with its arguments).
+fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32], keys: &ZoomKeys) -> Option<(&'static str, Value)> {
     let mut command = None;
+    let reads = reading::reads(view);
     egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(t.radius)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         if look::icon_button(ui, "minus", ZOOM_BUTTON, false, "Zoom out", keys.zoom_out.as_deref()).clicked() {
-            view.zoom_step(false);
+            command = Some(("view.zoom.out", Value::Null));
         }
         let percent = format!("{:.0}%", view.zoom * 100.0);
         let menu =
@@ -114,30 +119,35 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, keys: &Z
         let menu = look::tooltip(menu, "Zoom and fit", None);
         look::popover(&menu, egui::Id::new("margin-zoom-menu")).show(|ui| {
             ui.set_min_width(170.0);
-            for (fit, label) in [(Fit::Width, "Fit width"), (Fit::Page, "Fit page")] {
-                if ui.radio(view.fit == fit, label).clicked() {
-                    view.set_fit(fit);
+            let fits = [
+                ("view.fit.width", !reads && view.fit == Fit::Width, "Fit width"),
+                ("view.fit.page", !reads && view.fit == Fit::Page, "Fit page"),
+                ("view.fit.read", reads, "Fit reading width"),
+            ];
+            for (id, on, label) in fits {
+                if ui.radio(on, label).clicked() {
+                    command = Some((id, Value::Null));
                 }
             }
             if ui.button("Fit visible content").clicked() {
-                command = Some("view.fit_visible");
+                command = Some(("view.fit_visible", Value::Null));
             }
             ui.separator();
-            for step in ZOOM_STEPS {
-                let zoom = f32::from(step) / 100.0;
-                let on = view.fit == Fit::None && (view.zoom - zoom).abs() < 0.005;
+            for &step in steps {
+                let on = view.fit == Fit::None && !reads && (view.zoom - step as f32 / 100.0).abs() < ZOOM_MATCH;
                 if ui.radio(on, format!("{step}%")).clicked() {
-                    view.set_zoom(zoom);
+                    command = Some(("view.zoom.set", json!({ "percent": step })));
                 }
             }
         });
         if look::icon_button(ui, "plus", ZOOM_BUTTON, false, "Zoom in", keys.zoom_in.as_deref()).clicked() {
-            view.zoom_step(true);
+            command = Some(("view.zoom.in", Value::Null));
         }
     });
-    let (icon, tip) = if view.fit == Fit::Width { ("maximize-2", "Fit page") } else { ("maximize", "Fit width") };
+    // `W`: fit width, or back to the reading width.
+    let (icon, tip) = if view.fit == Fit::Width { ("maximize-2", "Fit reading width") } else { ("maximize", "Fit width") };
     if look::icon_button(ui, icon, FIT_BUTTON, false, tip, keys.fit.as_deref()).clicked() {
-        view.set_fit(if view.fit == Fit::Width { Fit::Page } else { Fit::Width });
+        command = Some(("view.fit.toggle_width", Value::Null));
     }
     command
 }
