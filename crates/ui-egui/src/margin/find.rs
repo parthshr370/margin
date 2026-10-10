@@ -213,7 +213,8 @@ fn field(ui: &mut egui::Ui, view: &mut DocView, pages: usize, keys: &FindKeys) -
     let mut out = FieldOutcome::default();
     let Some(find) = view.find.as_mut() else { return out };
     let rect = ui.max_rect();
-    ui.painter().rect(rect, CornerRadius::same(t.radius), t.card, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let id = Id::new(INPUT_ID);
+    look::paint_input_well(ui, &t, rect, look::input_focused(ui, id));
     ui.spacing_mut().item_spacing.x = GAP / 2.0;
     ui.add_space(GAP);
     ui.add(icons::image("search", SEARCH_ICON, t.text_muted));
@@ -223,7 +224,6 @@ fn field(ui: &mut egui::Ui, view: &mut DocView, pages: usize, keys: &FindKeys) -
     let spacing = ui.spacing().item_spacing.x;
     let buttons = FIELD_BUTTON_COUNT * (FIELD_BUTTON + spacing) + spacing;
     let query_width = (ui.available_width() - count_galley.size().x - buttons - GAP).max(GAP);
-    let id = Id::new(INPUT_ID);
     let edit = egui::TextEdit::singleline(&mut find.query)
         .id(id)
         .hint_text("Find in this document")

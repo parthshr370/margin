@@ -40,6 +40,10 @@ const DOCUMENT_MENU: &[Option<&str>] = &[
 /// Export ▸: every registered export command.
 const EXPORT_MENU: &[&str] = &["export.text", "export.docx", "export.html", "export.rtf", "export.image", "export.all_images"];
 
+/// The Library's app menu: what the document menu offers without a document (open, recent,
+/// settings, shortcuts), since the Library shows no reader header.
+const APP_MENU: &[Option<&str>] = &[Some("file.open"), Some("recent"), None, Some("app.preferences"), Some("help.shortcuts")];
+
 /// The header. While the active document is being searched, the find field takes the title's
 /// place; returns true when the header has no room for it, so it needs its own row.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
@@ -233,11 +237,21 @@ pub(crate) fn command_item(app: &mut PdfCraftApp, ui: &mut egui::Ui, id: &str) {
 
 fn document_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_min_width(240.0);
     if let Some(doc) = app.active_ids().and_then(|(_, id)| app.session.get(id)) {
         ui.label(egui::RichText::new(doc.display_name()).font(theme::regular(11.5)).color(t.text_faint));
     }
-    for entry in DOCUMENT_MENU {
+    menu_rows(app, ui, DOCUMENT_MENU);
+}
+
+/// The Library toolbar's menu button and its [`APP_MENU`].
+pub(crate) fn app_menu_button(app: &mut PdfCraftApp, ui: &mut egui::Ui, size: f32) {
+    let menu = look::icon_button(ui, "ellipsis", size, false, "Margin: open, recent, settings, shortcuts", None);
+    egui::Popup::menu(&menu).show(|ui| menu_rows(app, ui, APP_MENU));
+}
+
+fn menu_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, rows: &[Option<&str>]) {
+    ui.set_min_width(240.0);
+    for entry in rows {
         match entry {
             None => {
                 ui.separator();

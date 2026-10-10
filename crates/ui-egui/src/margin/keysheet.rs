@@ -161,7 +161,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(sheet) = app.margin_keys.sheet.as_mut() else { return };
     let mut close = false;
     let mut key_context = false;
-    let modal = egui::Modal::new(egui::Id::new("margin-keysheet")).show(ctx, |ui| {
+    let modal = crate::margin::look::modal(egui::Id::new("margin-keysheet"), &t).show(ctx, |ui| {
         ui.set_width(620.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(18.0)));
@@ -294,14 +294,9 @@ pub(crate) fn pending_chord(app: &PdfCraftApp, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("margin-pending-chord")).order(egui::Order::Foreground).anchor(Align2::CENTER_BOTTOM, [0.0, -48.0]).show(
         ctx,
         |ui| {
-            egui::Frame::new()
-                .fill(t.card)
-                .stroke(egui::Stroke::new(1.0, t.border))
-                .corner_radius(8)
-                .inner_margin(egui::Margin::symmetric(10, 5))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(text).font(egui::FontId::monospace(13.0)).color(t.text));
-                });
+            crate::margin::look::floating_frame(&t, crate::margin::look::RADIUS_MENU).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
+                ui.label(RichText::new(text).font(egui::FontId::monospace(13.0)).color(t.text));
+            });
         },
     );
 }

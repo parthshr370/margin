@@ -133,12 +133,7 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
         .horizontal_align(Align::Center)
         .font(font.clone())
         .margin(vec2(2.0, 2.0));
-    let field = egui::Frame::NONE
-        .fill(t.field)
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(t.radius))
-        .show(ui, |ui| ui.add(edit))
-        .inner;
+    let field = look::input_frame(t, look::input_focused(ui, id)).show(ui, |ui| ui.add(edit)).inner;
     ui.ctx().accesskit_node_builder(field.id, |node| node.set_label("Go to page"));
     if field.gained_focus() {
         select_all(ui.ctx(), id, &view.page_input);

@@ -5,7 +5,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{Color32, CornerRadius, Rect, Sense, Stroke, vec2};
+use egui::{Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::commands;
 
 use crate::comments::{CommentPrefs, CommentTool, SWATCHES, color32};
@@ -121,42 +121,35 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                 ui.disable();
             }
             ui.set_opacity(shown);
-            egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(t.radius + PADDING))
-                .shadow(egui::Shadow { offset: [0, 10], blur: 40, spread: 0, color: Color32::from_black_alpha(if t.dark() { 128 } else { 30 }) })
-                .inner_margin(egui::Margin::same(PADDING as i8))
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.vertical(|ui| {
-                        let mut clicked = None;
-                        for item in RAIL {
-                            if *item == RailItem::Divider {
-                                divider(ui, &t);
-                                continue;
-                            }
-                            let enabled = match item {
-                                RailItem::Command(id) => commands::command(id).is_some_and(|spec| app.command_enabled(spec)),
-                                _ => true,
-                            };
-                            let (label, shortcut) = item.tooltip(app);
-                            let on = item.active(app.quick_tool);
-                            let r =
-                                ui.add_enabled_ui(enabled, |ui| look::rail_button(ui, item.icon(), BUTTON, on, &label, shortcut.as_deref())).inner;
-                            if r.clicked() {
-                                clicked = Some(*item);
-                            }
-                        }
-                        if let Some(item) = clicked {
-                            item.run(app);
-                        }
-                        if let QuickTool::Comment(tool) = app.quick_tool {
+            look::floating_frame(&t, look::RADIUS_FLOATING).inner_margin(egui::Margin::same(PADDING as i8)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.vertical(|ui| {
+                    let mut clicked = None;
+                    for item in RAIL {
+                        if *item == RailItem::Divider {
                             divider(ui, &t);
-                            tool_controls(ui, &t, tool, &mut app.comment_prefs);
+                            continue;
                         }
-                    });
+                        let enabled = match item {
+                            RailItem::Command(id) => commands::command(id).is_some_and(|spec| app.command_enabled(spec)),
+                            _ => true,
+                        };
+                        let (label, shortcut) = item.tooltip(app);
+                        let on = item.active(app.quick_tool);
+                        let r = ui.add_enabled_ui(enabled, |ui| look::rail_button(ui, item.icon(), BUTTON, on, &label, shortcut.as_deref())).inner;
+                        if r.clicked() {
+                            clicked = Some(*item);
+                        }
+                    }
+                    if let Some(item) = clicked {
+                        item.run(app);
+                    }
+                    if let QuickTool::Comment(tool) = app.quick_tool {
+                        divider(ui, &t);
+                        tool_controls(ui, &t, tool, &mut app.comment_prefs);
+                    }
                 });
+            });
         });
 }
 

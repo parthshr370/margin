@@ -6,7 +6,7 @@
 //! it steps through, and a quiet "Back to p. N" pill offers the way back for a few seconds
 //! after each jump (the mockup's `.backpill`).
 
-use egui::{Align2, Color32, CornerRadius, PointerButton, Stroke, pos2};
+use egui::{Align2, PointerButton, pos2};
 
 use super::look::{self, BUTTON_HEIGHT, GAP};
 use super::motion;
@@ -23,8 +23,6 @@ pub(crate) const PILL_LIFT: f32 = 20.0;
 /// The pill's padding around its button, and the shortcut's text size.
 const PILL_PAD: f32 = 4.0;
 const SHORTCUT_TEXT: f32 = 11.0;
-/// The pill floats: the mockup's `0 8px 30px rgba(0,0,0,.5)` (Margin's toasts share it).
-pub(crate) const PILL_SHADOW: egui::Shadow = egui::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(128) };
 
 /// The exact place a history entry returns to: the reading spot, and the zoom and fit it was
 /// read at.
@@ -146,22 +144,16 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> O
     let mut back = false;
     let drawn = egui::Area::new(id).pivot(Align2::CENTER_BOTTOM).fixed_pos(anchor).interactable(showing).show(ctx, |ui| {
         ui.set_opacity(shown);
-        egui::Frame::NONE
-            .fill(t.card)
-            .stroke(Stroke::new(1.0, t.border))
-            .corner_radius(CornerRadius::same(((BUTTON_HEIGHT + 2.0 * PILL_PAD) / 2.0) as u8))
-            .inner_margin(egui::Margin::symmetric(PILL_PAD as i8, PILL_PAD as i8))
-            .shadow(PILL_SHADOW)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = GAP / 2.0;
-                    back = look::text_button(ui, "chevron-left", &text, BUTTON_HEIGHT, false, "Return to where you were before the jump").clicked();
-                    if let Some(key) = &key {
-                        ui.label(egui::RichText::new(key).font(theme::regular(SHORTCUT_TEXT)).color(t.text_faint));
-                        ui.add_space(GAP / 2.0);
-                    }
-                });
+        look::floating_frame(&t, look::RADIUS_MENU).inner_margin(egui::Margin::symmetric(PILL_PAD as i8, PILL_PAD as i8)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP / 2.0;
+                back = look::text_button(ui, "chevron-left", &text, BUTTON_HEIGHT, false, "Return to where you were before the jump").clicked();
+                if let Some(key) = &key {
+                    ui.label(egui::RichText::new(key).font(theme::regular(SHORTCUT_TEXT)).color(t.text_faint));
+                    ui.add_space(GAP / 2.0);
+                }
             });
+        });
     });
     if back && let Some(view) = app.views.get_mut(index) {
         view.view_history(false);

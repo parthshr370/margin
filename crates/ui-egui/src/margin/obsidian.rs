@@ -695,7 +695,7 @@ pub(crate) fn panel_block(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
     if !notes.enabled {
         return;
     }
-    egui::Frame::NONE.fill(t.card).stroke(egui::Stroke::new(1.0, t.border)).corner_radius(t.radius).inner_margin(look::GAP_LARGE).show(ui, |ui| {
+    look::card_frame(t).inner_margin(look::GAP_LARGE).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = egui::vec2(look::GAP, look::GAP);
         note_row(ui, t, notes);

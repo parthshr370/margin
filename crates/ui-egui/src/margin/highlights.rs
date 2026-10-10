@@ -346,7 +346,9 @@ pub(crate) fn change_kind(app: &mut PdfCraftApp, i: usize, page: usize, index: u
     Some(new)
 }
 
-/// One comment's card. The whole card is one click target under its own widgets.
+/// One comment's card (§2): the card fill and edge at rest, the hover fill and a lighter edge
+/// under the pointer, the selected fill and an accent edge when selected. The whole card is one
+/// click target under its own widgets.
 fn card(ui: &mut egui::Ui, input: &CardInput<'_>, view: &mut DocView, out: &mut Outcome) {
     let (t, a) = (input.t, input.a);
     let key = (a.page, a.index);
@@ -357,8 +359,12 @@ fn card(ui: &mut egui::Ui, input: &CardInput<'_>, view: &mut DocView, out: &mut 
         let resp = ui.response();
         let shown = motion::hover(ui.ctx(), resp.id, resp.contains_pointer());
         let actions_shown = motion::hover(ui.ctx(), resp.id.with("actions"), resp.contains_pointer() || selected);
-        let fill = if selected { t.selected } else { t.hover.gamma_multiply(shown) };
-        egui::Frame::NONE.fill(fill).corner_radius(t.radius).inner_margin(GAP_LARGE).show(ui, |ui| {
+        let (fill, edge) = if selected {
+            (t.selected, t.accent)
+        } else {
+            (t.card.lerp_to_gamma(t.hover, shown), t.border.lerp_to_gamma(look::Surfaces::of(t).edge_hover, shown))
+        };
+        look::card_frame(t).fill(fill).stroke(egui::Stroke::new(look::EDGE, edge)).inner_margin(GAP_LARGE).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing = vec2(GAP, GAP);
             action = meta_row(ui, input, actions_shown);

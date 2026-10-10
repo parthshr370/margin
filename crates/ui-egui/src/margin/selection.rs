@@ -16,7 +16,7 @@
 
 use std::ops::Range;
 
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, vec2};
+use egui::{Align2, Color32, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape};
 use serde_json::Value;
 
@@ -177,76 +177,69 @@ fn draw(app: &PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) -> Opt
         .constrain_to(viewport.shrink(OFFSET))
         .fade_in(false)
         .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(t.radius + PADDING))
-                .shadow(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if t.dark() { 128 } else { 30 }) })
-                .inner_margin(egui::Margin::same(PADDING as i8))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        if look::icon_button(ui, "copy", BUTTON, false, "Copy", Some("Ctrl+C")).clicked() {
-                            clicked = Some(Action::Copy);
+            look::floating_frame(&t, look::RADIUS_FLOATING).inner_margin(egui::Margin::same(PADDING as i8)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if look::icon_button(ui, "copy", BUTTON, false, "Copy", Some("Ctrl+C")).clicked() {
+                        clicked = Some(Action::Copy);
+                    }
+                    divider(ui, &t);
+                    ui.add_enabled_ui(can_mark, |ui| {
+                        let shortcuts: Vec<Option<String>> = app
+                            .notes
+                            .colors
+                            .iter()
+                            .map(|c| look::shortcut_with(app, highlights::COLOR_ID, &highlights::color_args(&c.name)))
+                            .collect();
+                        let dots: Vec<look::ColorDot<'_>> = app
+                            .notes
+                            .colors
+                            .iter()
+                            .zip(&shortcuts)
+                            .map(|(c, keys)| look::ColorDot {
+                                name: &c.name,
+                                color: Color32::from_rgb(c.rgb[0], c.rgb[1], c.rgb[2]),
+                                selected: mark_color == Some(c.name.as_str()),
+                                shortcut: keys.as_deref(),
+                            })
+                            .collect();
+                        if let Some(index) = look::color_dots(ui, &dots) {
+                            clicked = Some(Action::Color(index));
                         }
-                        divider(ui, &t);
-                        ui.add_enabled_ui(can_mark, |ui| {
-                            let shortcuts: Vec<Option<String>> = app
-                                .notes
-                                .colors
-                                .iter()
-                                .map(|c| look::shortcut_with(app, highlights::COLOR_ID, &highlights::color_args(&c.name)))
-                                .collect();
-                            let dots: Vec<look::ColorDot<'_>> = app
-                                .notes
-                                .colors
-                                .iter()
-                                .zip(&shortcuts)
-                                .map(|(c, keys)| look::ColorDot {
-                                    name: &c.name,
-                                    color: Color32::from_rgb(c.rgb[0], c.rgb[1], c.rgb[2]),
-                                    selected: mark_color == Some(c.name.as_str()),
-                                    shortcut: keys.as_deref(),
-                                })
-                                .collect();
-                            if let Some(index) = look::color_dots(ui, &dots) {
-                                clicked = Some(Action::Color(index));
-                            }
-                            // A toggle: it underlines the selection, turns the bar's highlight
-                            // into an underline, and an underline back into a highlight.
-                            let (label, keys) = if underlined {
-                                ("Underline: on, click for a highlight", None)
-                            } else {
-                                ("Underline", look::shortcut(app, "comment.underline"))
-                            };
-                            if look::icon_button(ui, "underline", BUTTON, underlined, label, keys.as_deref()).clicked() {
-                                clicked = Some(Action::Underline);
-                            }
-                            if look::icon_button(ui, "message-square-plus", BUTTON, false, "Comment", None).clicked() {
-                                clicked = Some(Action::Comment);
-                            }
-                        });
-                        if notes.enabled {
-                            divider(ui, &t);
-                            let tip = if notes.external { obsidian::EXTERNAL_TIP } else { "Copy callout" };
-                            if look::icon_button(ui, "message-square-quote", BUTTON, false, tip, None).clicked() {
-                                clicked = Some(Action::CopyCallout);
-                            }
-                            let open_reason = match (&notes.note, can_mark) {
-                                (Err(why), _) => Some(why.as_str()),
-                                (Ok(_), false) => Some(NOT_ALLOWED),
-                                (Ok(_), true) => None,
-                            };
-                            let label = open_reason.map_or("Open in Obsidian: highlight and add to the reading note", |why| why);
-                            let open = ui
-                                .add_enabled_ui(open_reason.is_none(), |ui| look::icon_button(ui, "external-link", BUTTON, false, label, None))
-                                .inner;
-                            if open.clicked() {
-                                clicked = Some(Action::OpenInObsidian);
-                            }
+                        // A toggle: it underlines the selection, turns the bar's highlight
+                        // into an underline, and an underline back into a highlight.
+                        let (label, keys) = if underlined {
+                            ("Underline: on, click for a highlight", None)
+                        } else {
+                            ("Underline", look::shortcut(app, "comment.underline"))
+                        };
+                        if look::icon_button(ui, "underline", BUTTON, underlined, label, keys.as_deref()).clicked() {
+                            clicked = Some(Action::Underline);
+                        }
+                        if look::icon_button(ui, "message-square-plus", BUTTON, false, "Comment", None).clicked() {
+                            clicked = Some(Action::Comment);
                         }
                     });
+                    if notes.enabled {
+                        divider(ui, &t);
+                        let tip = if notes.external { obsidian::EXTERNAL_TIP } else { "Copy callout" };
+                        if look::icon_button(ui, "message-square-quote", BUTTON, false, tip, None).clicked() {
+                            clicked = Some(Action::CopyCallout);
+                        }
+                        let open_reason = match (&notes.note, can_mark) {
+                            (Err(why), _) => Some(why.as_str()),
+                            (Ok(_), false) => Some(NOT_ALLOWED),
+                            (Ok(_), true) => None,
+                        };
+                        let label = open_reason.map_or("Open in Obsidian: highlight and add to the reading note", |why| why);
+                        let open =
+                            ui.add_enabled_ui(open_reason.is_none(), |ui| look::icon_button(ui, "external-link", BUTTON, false, label, None)).inner;
+                        if open.clicked() {
+                            clicked = Some(Action::OpenInObsidian);
+                        }
+                    }
                 });
+            });
         });
     clicked
 }

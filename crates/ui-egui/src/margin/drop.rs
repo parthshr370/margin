@@ -32,7 +32,10 @@ pub(crate) fn hint(app: &PdfCraftApp, ctx: &egui::Context) {
     let note = painter.layout_no_wrap(note.to_owned(), theme::regular(NOTE_TEXT), t.text_muted);
     let size = egui::vec2(title.size().x.max(note.size().x) + 4.0 * GAP_LARGE, title.size().y + note.size().y + GAP + 2.0 * GAP_LARGE);
     let card = Align2::CENTER_CENTER.align_size_within_rect(size, window);
-    painter.rect(card, CornerRadius::same(t.radius), t.card, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let surfaces = crate::margin::look::Surfaces::of(&t);
+    let radius = CornerRadius::same(crate::margin::look::RADIUS_MODAL);
+    painter.add(crate::margin::look::SHADOW_M.as_shape(card, radius));
+    painter.rect(card, radius, surfaces.floating, Stroke::new(crate::margin::look::EDGE, t.border), egui::StrokeKind::Inside);
     let title_pos = egui::pos2(card.center().x - title.size().x / 2.0, card.top() + GAP_LARGE);
     let note_pos = egui::pos2(card.center().x - note.size().x / 2.0, title_pos.y + title.size().y + GAP);
     painter.galley(title_pos, title, t.text);

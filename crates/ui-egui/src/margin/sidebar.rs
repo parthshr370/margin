@@ -18,17 +18,12 @@ use crate::{DocView, Flavor, LeftPanel, PdfCraftApp, icons};
 const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 440.0;
-/// The overlay sidebar's shadow over the page.
-const OVERLAY_SHADOW_BLUR: u8 = 24;
 const TAB_HEIGHT: f32 = 32.0;
 const TOP_BUTTON: f32 = 30.0;
 pub(super) const ROW_HEIGHT: f32 = 28.0;
 /// Rows sit nearly touching, so neighbouring hover fills read as one list.
 pub(super) const ROW_SPACING: f32 = 2.0;
 const COVER: egui::Vec2 = vec2(52.0, 67.0);
-/// The card lines up with the panes' headings: the pane's edge plus a row's padding, less the
-/// top section's own edge.
-const CARD_INDENT: f32 = GAP + ROW_PAD - GAP_LARGE;
 /// The card's stats: at most this many lines, the units joined by [`STATS_SEPARATOR`].
 const STATS_LINES: usize = 2;
 const STATS_SEPARATOR: &str = " · ";
@@ -94,7 +89,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 /// The sidebar over the page, between the header and the footer, so a narrow window keeps its
 /// page width: the same sections and the reader's width (the docked panel's), sliding in from
-/// the left edge with a shadow. A press on the page outside it closes it; while it closes it
+/// the left edge with the M shadow. A press on the page outside it closes it; while it closes it
 /// takes no clicks and no keyboard focus. It docks again once the window is wide enough.
 fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id, shown: f32, window: Rect) {
     let open = app.margin_chrome.sidebar_open;
@@ -105,9 +100,7 @@ fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id,
     let visible = Rect::from_min_max(egui::pos2(window.left(), top), rect.right_bottom());
     egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).show(ctx, |ui| {
         let painter = ui.painter();
-        painter.add(
-            egui::epaint::Shadow { offset: [0, 0], blur: OVERLAY_SHADOW_BLUR, spread: 0, color: t.page_shadow }.as_shape(visible, CornerRadius::ZERO),
-        );
+        painter.add(look::SHADOW_M.as_shape(visible, CornerRadius::ZERO));
         painter.rect(visible, CornerRadius::ZERO, t.panel, egui::Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
         let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
         body.set_clip_rect(visible);
@@ -139,9 +132,10 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             top_buttons(app, ui);
             document_card(app, ui, t, summary);
         });
-    // The tabs' pills sit the small step in from the panel's edges, as the panes' rows do.
+    // The tab strip is chrome (its top edge is the panel's separator); the tabs sit the small
+    // step in from the panel's edges, as the panes' rows do.
     egui::Panel::bottom("margin_sidebar_tabs")
-        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP as i8, right: GAP as i8, top: GAP as i8, bottom: edge }))
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: GAP as i8, right: GAP as i8, top: GAP as i8, bottom: edge }))
         .show(ui, |ui| tab_strip(app, ui, t));
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP as i8, right: GAP as i8, top: 0, bottom: GAP as i8 }))
@@ -173,9 +167,9 @@ pub(crate) fn cover_pages(flavor: Flavor, pages: usize) -> usize {
     if flavor == Flavor::Margin { pages.min(1) } else { 0 }
 }
 
-/// Cover, title, author and how far in the reader is: the title in full text, everything else
-/// muted, the progress bar's fill the only accent. Under that row, across the card, the book's
-/// reading stats when it has some (`stats_lines`).
+/// Cover, title, author and how far in the reader is, on a card: the title in full text,
+/// everything else muted, the progress bar's fill the only accent. Under that row, across the
+/// card, the book's reading stats when it has some (`stats_lines`).
 fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Option<Vec<String>>) {
     let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
     let info = &doc.info;
@@ -183,7 +177,8 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Opti
     let radius = CornerRadius::same(t.radius);
     ui.add_space(GAP);
     let meta = |text: &str| egui::RichText::new(text).font(theme::regular(META_TEXT)).color(t.text_muted);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: CARD_INDENT as i8, ..Default::default() }).show(ui, |ui| {
+    look::card_frame(t).inner_margin(GAP_LARGE).show(ui, |ui| {
+        ui.set_width(ui.available_width());
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = GAP_LARGE;
             let (cover, _) = ui.allocate_exact_size(COVER, Sense::hover());
@@ -221,7 +216,7 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Opti
                     let count_width = ui.fonts_mut(|f| f.layout_no_wrap(count.clone(), theme::regular(META_TEXT), t.text_muted).size().x);
                     let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
                     let (bar, _) = ui.allocate_exact_size(vec2(bar_width, 3.0), Sense::hover());
-                    ui.painter().rect_filled(bar, CornerRadius::same(2), t.divider);
+                    ui.painter().rect_filled(bar, CornerRadius::same(2), look::Surfaces::of(t).track);
                     let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
                     let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
                     ui.painter().rect_filled(fill, CornerRadius::same(2), t.accent);

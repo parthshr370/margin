@@ -4,10 +4,10 @@
 //! string cannot carry: Undo for a deleted mark, and a failure that stays until it is dismissed
 //! or its action runs, so a routine message never replaces it.
 
-use egui::{Align2, CornerRadius, Stroke, pos2};
+use egui::{Align2, pos2};
 use pdfcraft_engine::DocId;
 
-use super::history::{PILL_LIFT, PILL_SHADOW};
+use super::history::PILL_LIFT;
 use super::look::{self, BUTTON_HEIGHT, GAP, GAP_LARGE, GAP_SECTION};
 use super::obsidian::Request;
 use crate::PdfCraftApp;
@@ -182,26 +182,20 @@ fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, action: Optio
     let wrap = (max_width - reserved).max(BUTTON_HEIGHT);
     let galley = ui.painter().layout(text.to_owned(), theme::regular(TEXT_SIZE), t.text, wrap);
     let mut pressed = None;
-    egui::Frame::NONE
-        .fill(t.card)
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(t.radius))
-        .inner_margin(pad)
-        .shadow(PILL_SHADOW)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                ui.set_min_height(BUTTON_HEIGHT);
-                ui.add(egui::Label::new(galley).selectable(false));
-                if let Some(label) = action
-                    && look::plain_button(ui, label).clicked()
-                {
-                    pressed = Some(Pressed::Action);
-                }
-                if dismissable && look::icon_button(ui, "x", BUTTON_HEIGHT, false, "Dismiss", None).clicked() {
-                    pressed = Some(Pressed::Dismiss);
-                }
-            });
+    look::floating_frame(t, look::RADIUS_MENU).inner_margin(pad).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            ui.set_min_height(BUTTON_HEIGHT);
+            ui.add(egui::Label::new(galley).selectable(false));
+            if let Some(label) = action
+                && look::plain_button(ui, label).clicked()
+            {
+                pressed = Some(Pressed::Action);
+            }
+            if dismissable && look::icon_button(ui, "x", BUTTON_HEIGHT, false, "Dismiss", None).clicked() {
+                pressed = Some(Pressed::Dismiss);
+            }
         });
+    });
     pressed
 }

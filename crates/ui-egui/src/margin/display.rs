@@ -241,9 +241,10 @@ const MIN_TRIM_DRAG: f32 = 0.1;
 /// How dark the trimmed-off part of a preview is drawn.
 const TRIMMED_SHADE: u8 = 150;
 
-/// The popover's frame: the theme's popup, padded by the section step on every side.
+/// The popover's frame: the theme's popup (Margin's floating level, edge and L shadow) at the
+/// floating radius, padded by the section step on every side.
 pub fn popover_frame(style: &egui::Style) -> egui::Frame {
-    egui::Frame::popup(style).inner_margin(GAP_SECTION)
+    egui::Frame::popup(style).corner_radius(look::RADIUS_FLOATING).inner_margin(GAP_SECTION)
 }
 
 /// The Display popover's body for the active document, laid out like the mockup: page colour

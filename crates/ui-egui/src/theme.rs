@@ -127,27 +127,31 @@ impl Tokens {
                 page_shadow: Color32::from_black_alpha(120),
                 radius: 6,
             },
-            // The owner's Obsidian theme, Ember Night V2: near-black layers, grey text, one
-            // orange accent. `accent_text` is accent-coloured text on these surfaces (links,
-            // selected icons and rows), so it is the accent itself.
+            // The owner's Obsidian theme, Ember Night V2, over its whole background ladder
+            // (plan/R10-SURFACES.md §2): base #0a0a0a under the pages and the library, panel
+            // #141414 for permanent side panes, #1e1e1e for cards and the header/footer strips,
+            // one neutral #484848 edge between regions. The floating level (#282828), control
+            // outlines, scrim and shadows are Margin's own, in `margin::look`. `accent_text` is
+            // accent-coloured text on these surfaces, so it is the accent itself.
             ThemeKind::Margin => Self {
                 kind,
-                titlebar: Color32::from_rgb(0x0A, 0x0A, 0x0A),
-                chrome: Color32::from_rgb(0x0A, 0x0A, 0x0A),
-                panel: Color32::from_rgb(0x0A, 0x0A, 0x0A),
+                titlebar: Color32::from_rgb(0x14, 0x14, 0x14),
+                chrome: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                panel: Color32::from_rgb(0x14, 0x14, 0x14),
                 pasteboard: Color32::from_rgb(0x0A, 0x0A, 0x0A),
-                card: Color32::from_rgb(0x0E, 0x0E, 0x0E),
-                border: Color32::from_rgb(0x14, 0x14, 0x14),
-                divider: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                card: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                border: Color32::from_rgb(0x48, 0x48, 0x48),
+                divider: Color32::from_rgb(0x48, 0x48, 0x48),
                 text: Color32::from_rgb(0xEE, 0xEE, 0xEE),
-                text_muted: Color32::from_rgb(0x80, 0x80, 0x80),
-                text_faint: Color32::from_rgb(0x60, 0x60, 0x60),
-                icon: Color32::from_rgb(0x80, 0x80, 0x80),
-                // The owner's measured Obsidian row and icon pill (hovered and selected rows
-                // alike): #1b1b1b, opaque. Not `accent_soft`, which marks text.
-                hover: Color32::from_rgb(0x1B, 0x1B, 0x1B),
-                pressed: Color32::from_rgb(0x1E, 0x1E, 0x1E),
-                selected: Color32::from_rgb(0x1B, 0x1B, 0x1B),
+                // Ember's #808080 lifted: it is only 3.7:1 on the floating level.
+                text_muted: Color32::from_rgb(0xA8, 0xA8, 0xA8),
+                text_faint: Color32::from_rgb(0x80, 0x80, 0x80),
+                icon: Color32::from_rgb(0xA8, 0xA8, 0xA8),
+                // Hover, pressed and selected are three steps; selection also gets an accent
+                // outline (`margin::look`), never the fill alone.
+                hover: Color32::from_rgb(0x33, 0x33, 0x33),
+                pressed: Color32::from_rgb(0x3D, 0x3D, 0x3D),
+                selected: Color32::from_rgb(0x38, 0x38, 0x38),
                 accent: Color32::from_rgb(0xEC, 0x5B, 0x2B),
                 accent_text: Color32::from_rgb(0xEC, 0x5B, 0x2B),
                 // The accent at 25 % (Ember's text-highlight "mark" colour).
@@ -155,7 +159,7 @@ impl Tokens {
                 field: Color32::from_rgb(0x0A, 0x0A, 0x0A),
                 badge_new: Color32::from_rgb(0xEC, 0x5B, 0x2B),
                 page_shadow: Color32::from_black_alpha(120),
-                // The pill's corner radius (the owner's rows and icon buttons).
+                // A control's corner radius (rows, buttons, inputs).
                 radius: 6,
             },
         }
@@ -307,6 +311,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         v.widgets.active.bg_stroke = Stroke::NONE;
         v.widgets.open.bg_stroke = Stroke::new(1.0, t.border);
         v.text_cursor.stroke = Stroke::new(2.0, t.accent);
+        // Windows, menus and popups are Margin's floating level with an edge and a shadow
+        // (plan/R10-SURFACES.md §2); a focused text field gets the 2 px accent outline.
+        crate::margin::look::style_floating(&mut v, &t);
     }
     // Crisper text at 100–150 % scaling (#76): glyphs sit on whole pixels instead of being
     // rendered at quarter-pixel offsets, which egui notes blurs them. In the light theme, a mild

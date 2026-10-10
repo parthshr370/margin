@@ -32,9 +32,17 @@ const CELL_GAP_Y: f32 = 26.0;
 const COVER_ASPECT: f32 = 4.0 / 3.0;
 /// Under a cover: the gap, two title lines and the status line.
 const CELL_TEXT: f32 = 10.0 + 2.0 * 17.0 + 6.0 + 16.0;
+/// A grid cell is one card: the cover and its text inset by this much.
+const CELL_PAD: f32 = 8.0;
 const LIST_ROW: f32 = 52.0;
 const LIST_COVER: Vec2 = vec2(30.0, 40.0);
 const HERO_COVER: f32 = 120.0;
+/// The Continue reading card's corner radius and padding (§2: radius 12, 16 inside).
+const HERO_RADIUS: u8 = 12;
+const HERO_PAD: i8 = 16;
+/// A cover's own radius and its faint light edge, so a dark first page keeps its outline.
+const COVER_RADIUS: u8 = 4;
+const COVER_EDGE: Color32 = Color32::from_rgba_premultiplied(26, 26, 26, 26);
 const SEARCH_WIDTH: f32 = 300.0;
 const BUTTON: f32 = 32.0;
 const BAR_WIDTH: f32 = 70.0;
@@ -557,6 +565,7 @@ fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut V
         ui.label(egui::RichText::new("Library").font(theme::semibold(18.0)).color(t.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = GAP / 2.0;
+            super::header::app_menu_button(app, ui, BUTTON);
             let open_keys = look::shortcut(app, "file.open");
             if look::icon_button(ui, "plus", BUTTON, false, "Open PDF…", open_keys.as_deref()).clicked() {
                 app.open_dialog();
@@ -592,38 +601,30 @@ fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut V
 
 fn search_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let id = egui::Id::new(SEARCH_ID);
-    egui::Frame::NONE
-        .fill(t.field)
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(t.radius.saturating_add(2)))
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            // Left to right even inside the top bar's right-to-left cluster: icon, then text.
-            ui.allocate_ui_with_layout(vec2(SEARCH_WIDTH - 20.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                icons::paint(ui, icon, "search", 15.0, t.text_muted);
-                let keys = look::shortcut(app, "library.search").map(|keys| format!("  ({keys})")).unwrap_or_default();
-                let field = egui::TextEdit::singleline(&mut app.margin_library.query)
-                    .id(id)
-                    .frame(egui::Frame::NONE)
-                    .hint_text(format!("Search titles{keys}"))
-                    .desired_width(SEARCH_WIDTH - 50.0);
-                let resp = ui.add(field);
-                if std::mem::take(&mut app.margin_library.focus_search) {
-                    resp.request_focus();
-                }
-            });
+    let focused = look::input_focused(ui, id);
+    look::input_frame(t, focused).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+        // Left to right even inside the top bar's right-to-left cluster: icon, then text.
+        ui.allocate_ui_with_layout(vec2(SEARCH_WIDTH - 20.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+            icons::paint(ui, icon, "search", 15.0, t.text_muted);
+            let keys = look::shortcut(app, "library.search").map(|keys| format!("  ({keys})")).unwrap_or_default();
+            let field = egui::TextEdit::singleline(&mut app.margin_library.query)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .hint_text(format!("Search titles{keys}"))
+                .desired_width(SEARCH_WIDTH - 50.0);
+            let resp = ui.add(field);
+            if std::mem::take(&mut app.margin_library.focus_search) {
+                resp.request_focus();
+            }
         });
+    });
 }
 
 fn hero_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, meta: &str, actions: &mut Vec<Action>) {
     let Some(book) = app.margin_library.books.get(index).cloned() else { return };
-    let frame = egui::Frame::NONE
-        .fill(t.chrome)
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(t.radius.saturating_mul(2).saturating_add(2)))
-        .inner_margin(egui::Margin::same(20));
+    let frame = look::card_frame(t).corner_radius(HERO_RADIUS).shadow(look::SHADOW_S).inner_margin(HERO_PAD);
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_top(|ui| {
@@ -782,8 +783,8 @@ fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], a
     let width = ui.available_width();
     let columns = (((width + CELL_GAP_X) / (CELL_MIN + CELL_GAP_X)).floor() as usize).max(1);
     let cell_w = ((width - CELL_GAP_X * (columns as f32 - 1.0)) / columns as f32).max(1.0);
-    let cover_h = cell_w * COVER_ASPECT;
-    let row_h = cover_h + CELL_TEXT;
+    let cover_h = (cell_w - 2.0 * CELL_PAD).max(1.0) * COVER_ASPECT;
+    let row_h = cover_h + CELL_TEXT + 2.0 * CELL_PAD;
     let rows = order.len().div_ceil(columns);
     ui.spacing_mut().item_spacing.y = CELL_GAP_Y;
     egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("margin-library-grid").show_rows(ui, row_h, rows, |ui, range| {
@@ -798,20 +799,26 @@ fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], a
     });
 }
 
+/// One book in the grid: a card (cover, title, status) with the S shadow, its fill and edge
+/// lifting to the hover state under the pointer.
 fn book_cell(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, cell: Rect, cover_h: f32, actions: &mut Vec<Action>) {
     let Some(book) = app.margin_library.books.get(index).cloned() else { return };
     let resp = ui.interact(cell, ui.id().with(("book", book.id)), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
-    let cover = Rect::from_min_size(cell.min, vec2(cell.width(), cover_h));
-    if resp.hovered() {
-        ui.painter().rect_stroke(cover.expand(3.0), CornerRadius::same(t.radius), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-    }
+    let radius = CornerRadius::same(look::RADIUS_CARD);
+    ui.painter().add(look::SHADOW_S.as_shape(cell, radius));
+    let lift = super::motion::hover(ui.ctx(), resp.id, resp.hovered());
+    let edge = t.border.lerp_to_gamma(look::Surfaces::of(t).edge_hover, lift);
+    ui.painter().rect(cell, radius, t.card.lerp_to_gamma(t.hover, lift), Stroke::new(look::EDGE, edge), egui::StrokeKind::Inside);
+    look::focus_ring(ui, t, cell, &resp, look::RADIUS_CARD);
+    let inner = cell.shrink(CELL_PAD);
+    let cover = Rect::from_min_size(inner.min, vec2(inner.width(), cover_h));
     paint_cover(app, ui, t, cover, &book);
-    let mut job = egui::text::LayoutJob::simple(book.title.clone(), theme::medium(12.5), t.text, cell.width());
+    let mut job = egui::text::LayoutJob::simple(book.title.clone(), theme::medium(12.5), t.text, inner.width());
     job.wrap.max_rows = 2;
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-    ui.painter().galley(pos2(cell.left(), cover.bottom() + 10.0), galley, t.text);
-    status_line(ui, t, &book, Rect::from_min_max(pos2(cell.left(), cell.bottom() - 16.0), cell.max));
+    ui.painter().galley(pos2(inner.left(), cover.bottom() + 10.0), galley, t.text);
+    status_line(ui, t, &book, Rect::from_min_max(pos2(inner.left(), inner.bottom() - 16.0), inner.max));
     let resp = look::tooltip(resp, &book.path, None);
     if resp.clicked() {
         actions.push(Action::Open(book.path.clone()));
@@ -829,7 +836,7 @@ fn status_line(ui: &egui::Ui, t: &Tokens, book: &Book, rect: Rect) {
         painter.text(pos2(rect.left(), y), Align2::LEFT_CENTER, "done", font, t.text_muted);
     } else if book.is_reading() {
         let bar = Rect::from_min_size(pos2(rect.left(), y - 1.5), vec2(BAR_WIDTH.min(rect.width() / 2.0), 3.0));
-        painter.rect_filled(bar, CornerRadius::same(2), t.divider);
+        painter.rect_filled(bar, CornerRadius::same(2), look::Surfaces::of(t).track);
         let fill = Rect::from_min_size(bar.min, vec2(bar.width() * book.progress.clamp(0.0, 1.0) as f32, bar.height()));
         painter.rect_filled(fill, CornerRadius::same(2), t.accent);
         let percent = format!("{}%", (book.progress * 100.0).round() as u32);
@@ -839,16 +846,24 @@ fn status_line(ui: &egui::Ui, t: &Tokens, book: &Book, rect: Rect) {
     }
 }
 
-/// The list view: one row per book, virtualised like the grid.
+/// The list view: one row per book in a panel-coloured, edged container, a divider between
+/// rows; virtualised like the grid.
 fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], actions: &mut Vec<Action>) {
+    let container =
+        egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(look::EDGE, t.border)).corner_radius(look::RADIUS_CARD).inner_margin(look::EDGE);
+    container.show(ui, |ui| list_rows(app, ui, t, order, actions));
+}
+
+fn list_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], actions: &mut Vec<Action>) {
     let width = ui.available_width();
-    ui.spacing_mut().item_spacing.y = 2.0;
+    ui.spacing_mut().item_spacing.y = look::EDGE;
     egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("margin-library-list").show_rows(ui, LIST_ROW, order.len(), |ui, range| {
         for &index in order.get(range).unwrap_or_default() {
             let Some(book) = app.margin_library.books.get(index).cloned() else { continue };
             let (rect, resp) = ui.allocate_exact_size(vec2(width, LIST_ROW), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
             look::row_fill(ui, t, rect, &resp, false);
+            ui.painter().hline(rect.x_range(), rect.bottom() + look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
             let cover = Rect::from_min_size(pos2(rect.left() + GAP, rect.center().y - LIST_COVER.y / 2.0), LIST_COVER);
             paint_cover(app, ui, t, cover, &book);
             let text_left = cover.right() + GAP_LARGE;
@@ -921,10 +936,10 @@ fn context_menu(app: &PdfCraftApp, resp: &egui::Response, book: &Book, actions: 
 }
 
 /// Draws the book's cover in `rect` (the top of the page, filling the width), or a placeholder
-/// while it isn't decoded.
+/// while it isn't decoded: radius 4, the S shadow and a faint light edge (§2).
 fn paint_cover(app: &mut PdfCraftApp, ui: &egui::Ui, t: &Tokens, rect: Rect, book: &Book) {
-    let radius = CornerRadius::same(t.radius.min(4));
-    ui.painter().rect_filled(rect.translate(vec2(0.0, 4.0)).expand(1.0), radius, t.page_shadow);
+    let radius = CornerRadius::same(COVER_RADIUS);
+    ui.painter().add(look::SHADOW_S.as_shape(rect, radius));
     match cover_texture(app, ui.ctx(), book) {
         Some(texture) => {
             let size = texture.size_vec2();
@@ -944,6 +959,7 @@ fn paint_cover(app: &mut PdfCraftApp, ui: &egui::Ui, t: &Tokens, rect: Rect, boo
             icons::paint(ui, Rect::from_center_size(rect.center(), Vec2::splat(28.0)), "file-text", 24.0, t.text_muted);
         }
     }
+    ui.painter().rect_stroke(rect, radius, Stroke::new(look::EDGE, COVER_EDGE), egui::StrokeKind::Inside);
 }
 
 /// The book's cover texture, decoding it now if the frame's budget allows.
