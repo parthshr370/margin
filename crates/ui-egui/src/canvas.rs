@@ -2040,7 +2040,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, &t);
+    // Margin shows the search in its header and Find tab (`margin::find`).
+    if app.flavor == crate::Flavor::PdfCraft {
+        find_bar(view, info.pages.len(), avail, ui, &t);
+    }
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
     }

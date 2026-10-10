@@ -34,8 +34,11 @@ const DOCUMENT_MENU: &[Option<&str>] = &[
 /// Export ▸: every registered export command.
 const EXPORT_MENU: &[&str] = &["export.text", "export.docx", "export.html", "export.rtf", "export.image", "export.all_images"];
 
-pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+/// The header. While the active document is being searched, the find field takes the title's
+/// place; returns true when the header has no room for it, so it needs its own row.
+pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
     let t = Tokens::get(ui.ctx());
+    let mut needs_row = false;
     // egui draws the panel's bottom divider line.
     egui::Panel::top("margin_header")
         .exact_size(HEIGHT)
@@ -53,8 +56,14 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     right_start = ui.min_rect().left();
                 });
             });
-            title(app, ui, &t, full, left_end, right_start);
+            let finding = app.active.and_then(|i| app.views.get(i)).is_some_and(|v| v.find.is_some());
+            let room = 2.0 * ((full.center().x - left_end).min(right_start - full.center().x) - TITLE_GAP);
+            if !finding || !crate::margin::find::in_header(app, ui, full.center(), room) {
+                needs_row = finding;
+                title(app, ui, &t, full, left_end, right_start);
+            }
         });
+    needs_row
 }
 
 fn left_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {

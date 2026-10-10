@@ -56,6 +56,8 @@ pub struct DocReading {
     pub bookmarks: Vec<Bookmark>,
     /// The page text the Highlights tab's cards quote.
     pub(crate) quotes: super::highlights::Quotes,
+    /// A new search's first match, kept on the reading page (`margin::find`).
+    pub(crate) find_pick: Option<super::find::AutoPick>,
     /// Fit "read": the widest page `reading_width_px` wide, narrower windows permitting. Ends
     /// when the reader zooms or picks another fit.
     read_fit: Option<ReadFit>,

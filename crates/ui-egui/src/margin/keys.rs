@@ -9,7 +9,7 @@
 //!
 //! Context stack, outermost first: `App os=…`, then one of `Dialog` (a modal, the keyboard sheet),
 //! `Palette`, or `Reader format=pdf layout=…` with `AnnotateMode tool=…` while the annotate rail
-//! shows or a comment tool is on, then `Find > TextInput` in the find bar, `TextInput` in any other text field, or `Page`
+//! shows or a comment tool is on, then `Find > TextInput` in the find field, `TextInput` in any other text field, or `Page`
 //! with `Selection` while text is selected and `Annotation` while a comment is selected.
 
 use std::collections::HashSet;
@@ -28,9 +28,6 @@ use crate::{PdfCraftApp, QuickTool};
 
 /// Wait after the last change event before reloading: editors save a file in several steps.
 const RELOAD_DEBOUNCE_S: f64 = 0.15;
-
-/// The find bar's text field (`canvas::find_bar`).
-const FIND_INPUT_ID: &str = "find-input";
 
 /// Zoom limits of `view.zoom.set`, as a factor (PdfCraft's own zoom steps span 10 %..3200 %).
 const MIN_ZOOM: f64 = 0.1;
@@ -497,7 +494,7 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         _ if super::annotate_mode(app) => stack.push(node("AnnotateMode", &[("tool", "reader.tool.select")])),
         _ => {}
     }
-    let find_focused = ctx.memory(|memory| memory.focused()) == Some(egui::Id::new(FIND_INPUT_ID));
+    let find_focused = ctx.memory(|memory| memory.focused()) == Some(egui::Id::new(super::find::INPUT_ID));
     if find_focused {
         stack.push(node("Find", &[]));
         stack.push(node("TextInput", &[]));
@@ -586,7 +583,7 @@ fn run_pdfcraft(app: &mut PdfCraftApp, ctx: &egui::Context, id: &str) {
 }
 
 /// Escape: closes Margin's own layer, else does what PdfCraft's view did (clear the selection,
-/// else close the find bar). Text fields, dialogs, the palette and an open popover (Display,
+/// else close the search). Text fields, dialogs, the palette and an open popover (Display,
 /// zoom, a colour) close themselves on the Escape the dispatcher leaves in the input, and that
 /// Escape does nothing else.
 fn close_layer(app: &mut PdfCraftApp, ctx: &egui::Context) {

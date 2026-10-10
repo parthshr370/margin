@@ -9,6 +9,7 @@
 //! PdfCraft's catalogs (which must cover every `tl!` literal) stay complete.
 
 pub mod display;
+pub mod find;
 pub mod focus;
 pub mod footer;
 pub mod header;
@@ -45,11 +46,14 @@ pub struct ReaderChrome {
     synced_right: Option<RightPanel>,
     /// The document shown when the chrome last synced; another one starts on Contents.
     synced_doc: Option<pdfcraft_engine::DocId>,
+    /// While a search is open: the tab and sidebar state it replaced, shown again when it closes
+    /// (`find::sync`).
+    before_find: Option<(SidebarTab, bool)>,
 }
 
 impl Default for ReaderChrome {
     fn default() -> Self {
-        Self { sidebar_open: true, tab: SidebarTab::Contents, rail_open: true, synced_right: None, synced_doc: None }
+        Self { sidebar_open: true, tab: SidebarTab::Contents, rail_open: true, synced_right: None, synced_doc: None, before_find: None }
     }
 }
 
@@ -179,12 +183,14 @@ pub fn annotate_mode(app: &PdfCraftApp) -> bool {
 
 /// Show `tab` in the sidebar, opening the sidebar if needed.
 pub(crate) fn open_tab(app: &mut PdfCraftApp, tab: SidebarTab) {
+    if tab == SidebarTab::Find {
+        // Find opens the search, remembering the tab to come back to.
+        find::open(app);
+        return;
+    }
     let chrome = &mut app.margin_chrome;
     chrome.sidebar_open = true;
     chrome.tab = tab;
-    if let (SidebarTab::Find, Some(view)) = (tab, app.active.and_then(|i| app.views.get_mut(i))) {
-        view.open_find();
-    }
 }
 
 /// Keep PdfCraft's panel state and the sidebar in step, once per frame before drawing.
@@ -193,8 +199,9 @@ pub(crate) fn open_tab(app: &mut PdfCraftApp, tab: SidebarTab) {
 /// Commands (`comment.list`, `edit.advanced_search`, `sign.panel`, the control channel's
 /// `panel` option) still set `app.right`: the sidebar switches to the matching tab. Closing a
 /// panel with its own close button closes the sidebar. In turn the sidebar sets `app.right` to
-/// the panel its tab shows, so the canvas renders thumbnails for Pages and hands the find bar's
-/// search to Find, and `app.left_open` while the Tools tab shows a tool's options.
+/// the panel its tab shows, so the canvas renders thumbnails for Pages, and `app.left_open`
+/// while the Tools tab shows a tool's options. An open search shows the Find tab
+/// (`find::sync`).
 pub(crate) fn sync(app: &mut PdfCraftApp) {
     if app.active.is_none() {
         return;
@@ -230,6 +237,9 @@ pub(crate) fn sync(app: &mut PdfCraftApp) {
 /// Draw Margin's whole window (everything but full screen, which PdfCraft's `ui` handles).
 pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     sync(app);
+    if find::sync(app) {
+        sync(app);
+    }
     motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
     let t = crate::theme::Tokens::get(ctx);
     // A click while a popover or menu is open closes it (`look::popover`) and does nothing else:
@@ -239,7 +249,9 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     if app.active.is_some() {
         sidebar::show(app, ui);
     }
-    header::show(app, ui);
+    if header::show(app, ui) {
+        find::row(app, ui);
+    }
     if app.active.is_some() {
         footer::show(app, ui);
     }

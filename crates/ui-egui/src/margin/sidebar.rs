@@ -1,10 +1,11 @@
 //! The left sidebar: Library and palette buttons, the document card (cover, title, author,
 //! progress), the current tab's pane, and the tab strip at the bottom.
 //!
-//! Panes reuse PdfCraft's panels: Pages, Bookmarks and Find are the right panel's bodies
-//! (`panels::panel_body`), Highlights is the Comments list limited to text markup, Tools is the
-//! tool catalogue (`panels::all_tools` / `tool_detail`). Contents is the outline as a reading
-//! table of contents, marking the section being read.
+//! Panes reuse PdfCraft's panels: Pages and Bookmarks are the right panel's bodies
+//! (`panels::panel_body`), Tools is the tool catalogue (`panels::all_tools` / `tool_detail`).
+//! Highlights is Margin's card list (`margin::highlights`), Find the search's results
+//! (`margin::find`). Contents is the outline as a reading table of contents, marking the
+//! section being read.
 
 use std::collections::HashSet;
 
@@ -221,16 +222,8 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         SidebarTab::Contents => contents(app, ui, t, index),
         SidebarTab::Highlights => highlights(app, ui, t, index),
         SidebarTab::Tools => tools(app, ui, t),
-        SidebarTab::Find => {
-            // The Search panel lists the find bar's search; it needs one to show.
-            if let Some(view) = app.views.get_mut(index)
-                && view.find.is_none()
-            {
-                view.open_find();
-            }
-            ui.add_space(GAP_LARGE);
-            crate::panels::panel_body(app, ui);
-        }
+        // The search's status and results; its field is in the header (`margin::find`).
+        SidebarTab::Find => super::find::results(app, ui, t, index),
         SidebarTab::Bookmarks => {
             // Margin's page bookmarks first, then the PDF's bookmarks (its outline, editable).
             page_bookmarks(app, ui, t, index);
