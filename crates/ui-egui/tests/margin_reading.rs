@@ -148,7 +148,7 @@ fn opening_alone_writes_nothing() {
     let mut h = harness(&place);
     wait(&mut h, 3.0);
     assert!(!place.sidecar().exists(), "never written on open");
-    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved);
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: true });
 }
 
 #[test]
@@ -460,7 +460,8 @@ fn a_highlight_autosaves_within_two_seconds() {
         wait(&mut h, STEP_SECS);
         waited += STEP_SECS;
     }
-    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved, "saved within 2 s");
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: true }, "saved within 2 s");
+    h.get_by_label("Saved");
     let bytes = std::fs::read(place.doc()).unwrap();
     assert!(bytes.windows(10).any(|w| w == b"/Highlight"), "the highlight is in the file");
     assert!(h.state().toast.as_ref().is_none_or(|t| !t.0.starts_with("Saved")), "no toast for an autosave");
@@ -482,9 +483,66 @@ fn autosave_off_leaves_the_pdf_to_ctrl_s() {
     h.state_mut().views[0].comments.editing = None;
     wait(&mut h, 2.0);
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Unsaved);
+    assert!(h.query_by_label_contains("Unsaved · ").is_some(), "the footer names the key that saves");
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::S);
     h.run_steps(3);
-    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved, "Ctrl+S still saves");
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: false }, "Ctrl+S still saves");
+}
+
+/// Highlight the text page's first words (the note that opens is closed, as a reader would).
+fn highlight(h: &mut Harness<'static, PdfCraftApp>) {
+    h.state_mut().set_option("quick", "highlight").unwrap();
+    h.run_steps(2);
+    let (a, b) = {
+        let view = &h.state().views[0];
+        (view.glyph_screen_pos(0, 4).expect("text layer"), view.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(h, a, b);
+    h.state_mut().views[0].comments.editing = None;
+}
+
+/// R8 QoL 7: a failed autosave stays visible and offers Save and Save as, the change stays
+/// unsaved until a save works; a read-only file says so and is never written by itself.
+#[cfg(unix)]
+#[test]
+fn the_footer_tells_the_truth_about_saving() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let place = Place::new("save-fails", "text.pdf", &text_page());
+    let docs = place.doc().parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // Root ignores permissions: nothing to show there.
+    if std::fs::write(docs.join(".probe"), b"").is_ok() {
+        std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let mut h = harness(&place);
+    highlight(&mut h);
+    wait(&mut h, 2.0);
+    let id = h.state().views[0].id;
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Failed);
+    assert!(h.state().session.get(id).unwrap().dirty, "the change is kept, unsaved");
+    h.get_by_label("Couldn't save");
+    h.get_by_label("Save as…");
+    wait(&mut h, 3.0);
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Failed, "the failure stays until a save works");
+    std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: true }, "Save retried");
+    assert!(std::fs::read(place.doc()).unwrap().windows(10).any(|w| w == b"/Highlight"));
+    drop(h);
+
+    let place = Place::new("read-only-file", "text.pdf", &text_page());
+    std::fs::set_permissions(place.doc(), std::fs::Permissions::from_mode(0o444)).unwrap();
+    let mut h = harness(&place);
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: false });
+    h.get_by_label("Read-only");
+    highlight(&mut h);
+    wait(&mut h, 2.0);
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: true });
+    h.get_by_label("Save as…");
+    assert_eq!(std::fs::read(place.doc()).unwrap(), text_page(), "never written by itself");
+    std::fs::set_permissions(place.doc(), std::fs::Permissions::from_mode(0o644)).unwrap();
 }
 
 #[test]

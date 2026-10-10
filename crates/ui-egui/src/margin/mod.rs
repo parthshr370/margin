@@ -25,6 +25,7 @@ pub mod obsidian;
 pub mod pagecolor;
 pub mod rail;
 pub mod reading;
+pub mod saving;
 pub mod settings_watch;
 pub mod sidebar;
 #[cfg(not(target_arch = "wasm32"))]

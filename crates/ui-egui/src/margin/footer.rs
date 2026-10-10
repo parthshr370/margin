@@ -8,7 +8,7 @@ use crate::PdfCraftApp;
 use crate::canvas::Fit;
 use crate::margin::look::{self, GAP, GAP_LARGE};
 use crate::margin::motion;
-use crate::margin::reading::{self, SaveStatus};
+use crate::margin::reading;
 use crate::theme::{self, Tokens};
 
 pub const HEIGHT: f32 = 36.0;
@@ -32,6 +32,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let sections: Vec<usize> = doc.info.outline.iter().filter_map(|o| o.page).collect();
     let status = crate::margin::reading::save_status(app, index);
     let save_key = look::shortcut(app, "file.save");
+    let save_line = super::saving::line(
+        status,
+        &super::saving::Context {
+            autosave_on: app.margin_keys.settings().reader.autosave,
+            has_file: doc.path.is_some(),
+            read_only_reason: doc.read_only_reason.as_deref(),
+            save_key: save_key.as_deref(),
+        },
+    );
     let keys = ZoomKeys {
         zoom_out: look::shortcut(app, "view.zoom.out"),
         zoom_in: look::shortcut(app, "view.zoom.in"),
@@ -40,6 +49,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let steps = app.margin_keys.settings().view.zoom_steps.clone();
     let Some(view) = app.views.get_mut(index) else { return };
     let mut command = None;
+    let mut save_command = None;
     // egui draws the panel's top divider line.
     egui::Panel::bottom("margin_footer")
         .exact_size(HEIGHT)
@@ -52,14 +62,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.add_space(GAP_LARGE);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.allocate_ui(vec2(STATUS_WIDTH, HEIGHT), |ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let color = if status == SaveStatus::Unsaved { t.accent_text } else { t.text_muted };
-                            let hint = match save_key.as_deref() {
-                                Some(key) => format!("Annotations save to the PDF by themselves; {key} saves now"),
-                                None => "Annotations save to the PDF by themselves".to_owned(),
-                            };
-                            ui.label(egui::RichText::new(status.label()).font(theme::regular(11.5)).color(color)).on_hover_text(hint);
-                        });
+                        save_command = super::saving::show(ui, &t, &save_line);
                     });
                     ui.add_space(GAP_LARGE);
                     scrubber(ui, &t, view, labels.len(), &sections);
@@ -69,6 +72,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some((id, args)) = command {
         // The keys' own path: the same zoom stops and fits as `Ctrl+=`, `W` and the palette.
         super::keys::run(app, ui.ctx(), id, &args);
+    }
+    if let Some(id) = save_command {
+        super::keys::run(app, ui.ctx(), id, &Value::Null);
     }
 }
 

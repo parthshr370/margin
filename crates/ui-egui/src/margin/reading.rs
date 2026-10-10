@@ -90,6 +90,8 @@ struct Autosave {
     changed_at: f64,
     /// Saving this generation failed: wait for the next change.
     failed: Option<u64>,
+    /// The PDF file was read-only when it opened: Save as is the only way to keep changes.
+    file_read_only: bool,
 }
 
 /// The sidecar of a document opened from a file.
@@ -163,24 +165,25 @@ pub struct Spot {
     pub x: Option<f32>,
 }
 
-/// How far the footer's save hint is.
+/// Where the document's changes are, for the footer (R8 QoL 7). Read-only and signed come first:
+/// they say why Margin doesn't save the PDF by itself even when nothing has changed yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveStatus {
-    Saved,
+    /// Nothing unsaved; `autosave`: Margin writes changes into the PDF by itself.
+    Saved { autosave: bool },
     /// Changed; autosave will write it.
     Saving,
-    /// Changed; only Ctrl+S saves it (autosave off, read-only, signed or failed).
+    /// Changed and only Save writes it: autosave is off, the document has no file yet, or the
+    /// changes came from before this session (a recovered document).
     Unsaved,
-}
-
-impl SaveStatus {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Saved => "Saved",
-            Self::Saving => "Saving…",
-            Self::Unsaved => "Unsaved",
-        }
-    }
+    /// Autosave couldn't write this change: still in the document, unsaved.
+    Failed,
+    /// Can't be changed or saved in place: PdfCraft opened it read-only
+    /// (`Document::read_only_reason`) or the file itself is read-only.
+    ReadOnly { dirty: bool },
+    /// Signed: Margin never writes it unasked; Save adds an incremental update, which keeps the
+    /// signatures valid.
+    Signed { dirty: bool },
 }
 
 /// The Display popover rows "Set as default" belongs to.
@@ -229,7 +232,8 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     let reading = &mut view.margin;
     reading.bookmarks = file.bookmarks.iter().take(MAX_BOOKMARKS).cloned().collect();
     reading.bookmarks.sort_by_key(|bookmark| bookmark_page(bookmark).unwrap_or(usize::MAX));
-    reading.autosave = Autosave { opened: generation, seen: generation, ..Autosave::default() };
+    let file_read_only = doc.path.as_ref().and_then(|path| std::fs::metadata(path).ok()).is_some_and(|meta| meta.permissions().readonly());
+    reading.autosave = Autosave { opened: generation, seen: generation, file_read_only, ..Autosave::default() };
     reading.pages = pages;
     reading.history.exact = true;
     let auto_add = file.obsidian.as_ref().is_some_and(|obsidian| obsidian.auto_add);
@@ -544,7 +548,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             state.seen = generation;
             state.changed_at = now;
         }
-        if autosave_on && autosave_possible(doc) && doc.dirty && generation != state.opened && state.failed != Some(generation) {
+        if autosave_on && autosave_possible(doc, state) && doc.dirty && generation != state.opened && state.failed != Some(generation) {
             let ready = view.pending_edit.is_none() && view.forms.focus.is_none();
             if ready && now - state.changed_at >= DEBOUNCE_SECS {
                 save.push((index, generation));
@@ -575,24 +579,36 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Whether autosave may write this document: it has a file, may be edited and isn't signed
-/// (an incremental save keeps signatures valid, but Margin never writes a signed file unasked).
-fn autosave_possible(doc: &Document) -> bool {
-    doc.path.is_some() && doc.read_only_reason.is_none() && !doc.is_signed()
+/// Whether autosave may write this document: it has a writable file, may be edited and isn't
+/// signed (an incremental save keeps signatures valid, but Margin never writes a signed file
+/// unasked).
+fn autosave_possible(doc: &Document, state: &Autosave) -> bool {
+    doc.path.is_some() && doc.read_only_reason.is_none() && !state.file_read_only && !doc.is_signed()
 }
 
-/// The footer's save hint for view `index`.
+/// The footer's save state for view `index`.
 pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
-    let Some(view) = app.views.get(index) else { return SaveStatus::Saved };
-    let Some(doc) = app.session.get(view.id) else { return SaveStatus::Saved };
-    if !doc.dirty {
-        return SaveStatus::Saved;
-    }
+    let autosave_on = app.margin_keys.settings().reader.autosave;
+    let Some(view) = app.views.get(index) else { return SaveStatus::Saved { autosave: autosave_on } };
+    let Some(doc) = app.session.get(view.id) else { return SaveStatus::Saved { autosave: autosave_on } };
     let state = &view.margin.autosave;
+    if doc.read_only_reason.is_some() || state.file_read_only {
+        return SaveStatus::ReadOnly { dirty: doc.dirty };
+    }
+    if doc.is_signed() {
+        return SaveStatus::Signed { dirty: doc.dirty };
+    }
+    let autosave = autosave_on && autosave_possible(doc, state);
     let generation = doc.edit_generation();
-    let autosaves =
-        app.margin_keys.settings().reader.autosave && autosave_possible(doc) && generation != state.opened && state.failed != Some(generation);
-    if autosaves { SaveStatus::Saving } else { SaveStatus::Unsaved }
+    if !doc.dirty {
+        SaveStatus::Saved { autosave }
+    } else if state.failed == Some(generation) {
+        SaveStatus::Failed
+    } else if autosave && generation != state.opened {
+        SaveStatus::Saving
+    } else {
+        SaveStatus::Unsaved
+    }
 }
 
 enum Step {
