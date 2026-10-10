@@ -111,8 +111,9 @@ fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Title and current section, centred on the header and clipped to the space the buttons leave.
-fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui::Rect, left_end: f32, right_start: f32) {
+/// Title and current section, centred on `full` and clipped to the space the buttons leave
+/// (also the full-screen bar's, `margin::focus`).
+pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui::Rect, left_end: f32, right_start: f32) {
     let center = full.center().x;
     let half = (center - left_end).min(right_start - center) - TITLE_GAP;
     if half <= 0.0 {

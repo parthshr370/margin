@@ -9,6 +9,7 @@
 //! PdfCraft's catalogs (which must cover every `tl!` literal) stay complete.
 
 pub mod display;
+pub mod focus;
 pub mod footer;
 pub mod header;
 pub mod keys;

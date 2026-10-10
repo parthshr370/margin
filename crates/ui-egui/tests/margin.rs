@@ -268,3 +268,27 @@ fn tooltips_name_the_keymap_shortcut_apart() {
     assert!(h.query_by_label("V").is_some(), "the tooltip shows the shortcut");
     std::fs::remove_dir_all(&config).expect("temp dir removed");
 }
+
+/// Full screen keeps a way out: a bar with "Exit full screen" shows on entering, hides after a
+/// moment, comes back at the top edge, and its button leaves full screen. Esc still leaves too.
+#[test]
+fn full_screen_bar_has_an_exit_button() {
+    let mut h = harness(Flavor::Margin);
+    click(&mut h, "Full screen");
+    assert!(h.state().full_screen);
+    assert!(h.query_by_label("Exit full screen").is_some(), "the bar shows on entering");
+    h.hover_at(egui::pos2(720.0, 500.0));
+    // Default kittest frames are 0.25 s: well past the two-second intro.
+    h.run_steps(12);
+    assert!(h.query_by_label("Exit full screen").is_none(), "then it hides");
+    h.hover_at(egui::pos2(720.0, 2.0));
+    h.run_steps(2);
+    click(&mut h, "Exit full screen");
+    assert!(!h.state().full_screen);
+
+    click(&mut h, "Full screen");
+    assert!(h.state().full_screen);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().full_screen, "Esc leaves full screen");
+}

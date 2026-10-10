@@ -1815,6 +1815,7 @@ impl eframe::App for PdfCraftApp {
             dialogs::show(self, &ctx);
             if self.flavor == Flavor::Margin {
                 margin::keys::show(self, &ctx);
+                margin::focus::show(self, &ctx);
             }
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
