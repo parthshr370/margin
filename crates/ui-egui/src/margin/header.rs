@@ -17,9 +17,11 @@ const TITLE_GAP: f32 = 16.0;
 /// Below this header width the Tools button drops its word, leaving the title more room.
 const COMPACT_BELOW: f32 = 760.0;
 
-/// The document menu, top to bottom; `None` is a separator, `Some("export")` the Export submenu.
+/// The document menu, top to bottom; `None` is a separator, `Some("export")` the Export submenu,
+/// `Some("recent")` the Recent submenu.
 const DOCUMENT_MENU: &[Option<&str>] = &[
     Some("file.open"),
+    Some("recent"),
     None,
     Some("file.save"),
     Some("file.save_as"),
@@ -207,9 +209,33 @@ fn document_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     })
                 });
             }
+            Some("recent") => recent_menu(app, ui),
             Some(id) => command_item(app, ui, id),
         }
     }
+}
+
+/// The most recent documents the Recent submenu lists.
+const RECENT_ROWS: usize = 10;
+
+/// Recent ▸: PdfCraft's recent files (deduplicated, missing ones already dropped at start), each
+/// opened as the library opens a book (its tab if open, else the file, at its reading place). A
+/// file gone since then says so and leaves the current document open.
+fn recent_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let recent: Vec<(String, String)> = app.recent.iter().take(RECENT_ROWS).map(|file| (file.name.clone(), file.path.clone())).collect();
+    ui.add_enabled_ui(!recent.is_empty(), |ui| {
+        ui.menu_button("Recent", |ui| {
+            for (name, path) in recent {
+                if look::tooltip(ui.button(&name), &path, None).clicked() {
+                    ui.close();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    crate::margin::library::open_book(app, &path);
+                    #[cfg(target_arch = "wasm32")]
+                    app.open_recent(&path);
+                }
+            }
+        })
+    });
 }
 
 /// The Display popover's body: page colour, layout and fit (`margin::display`).

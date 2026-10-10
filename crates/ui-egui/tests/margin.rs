@@ -776,3 +776,36 @@ fn a_narrow_window_gets_the_sidebar_over_the_page() {
     h.run_steps(30);
     assert!(h.state().views[0].zoom > zoom_wide_open, "docked, the sidebar takes page width");
 }
+
+/// R8 item 21: the document menu's Recent opens a recent PDF (or shows its tab), and a file gone
+/// since leaves the open document as it is.
+#[test]
+fn recent_in_the_document_menu_opens_and_focuses() {
+    let dir = std::env::temp_dir().join(format!("margin-recent-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("other.pdf");
+    std::fs::write(&path, long_fixture(3)).expect("written");
+    let path = path.to_string_lossy().into_owned();
+    let gone = dir.join("gone.pdf").to_string_lossy().into_owned();
+    let mut h = harness(Flavor::Margin);
+    h.state_mut().recent = vec![
+        pdfcraft_ui_egui::RecentFile { name: "other.pdf".into(), path: path.clone(), pages: 3, size: 0 },
+        pdfcraft_ui_egui::RecentFile { name: "gone.pdf".into(), path: gone, pages: 1, size: 0 },
+    ];
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, name: &str| {
+        click(h, "Document: save, export, print, settings");
+        h.get_by_label_contains("Recent").hover();
+        h.run_steps(3);
+        h.get_by_label_contains(name).click();
+        h.run_steps(4);
+    };
+    pick(&mut h, "other.pdf");
+    assert_eq!((h.state().views.len(), h.state().active), (2, Some(1)), "Recent opens the file");
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    pick(&mut h, "other.pdf");
+    assert_eq!((h.state().views.len(), h.state().active), (2, Some(1)), "an open file shows its tab, not a second copy");
+    pick(&mut h, "gone.pdf");
+    assert_eq!((h.state().views.len(), h.state().active), (2, Some(1)), "a missing file leaves the open document");
+    let _ = std::fs::remove_dir_all(&dir);
+}

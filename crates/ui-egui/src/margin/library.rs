@@ -973,7 +973,7 @@ fn cover_texture(app: &mut PdfCraftApp, ctx: &egui::Context, book: &Book) -> Opt
 
 /// Opens the book at `path` (or shows its tab). The sidecar restores the page as any open does;
 /// a book without a sidecar position opens at the page the library kept.
-fn open_book(app: &mut PdfCraftApp, path: &str) {
+pub(crate) fn open_book(app: &mut PdfCraftApp, path: &str) {
     let page = app.margin_library.books.iter().find(|book| book.path == path).map_or(0, |book| book.page);
     let was_open = app.views.iter().any(|view| app.session.get(view.id).and_then(|doc| doc.path.as_deref()) == Some(path));
     app.open_recent(path);

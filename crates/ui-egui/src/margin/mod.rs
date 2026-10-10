@@ -10,6 +10,7 @@
 
 pub mod contents;
 pub mod display;
+pub mod drop;
 pub mod figures;
 pub mod find;
 pub mod focus;
@@ -342,6 +343,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     if app.active.is_some() {
         history::show(app, ctx);
     }
+    drop::hint(app, ctx);
     crate::palette::show(app, ctx);
     crate::dialogs::show(app, ctx);
     keys::show(app, ctx);
