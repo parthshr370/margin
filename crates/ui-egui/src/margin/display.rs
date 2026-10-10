@@ -368,10 +368,10 @@ fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &To
             let current = view.current;
             view.margin.trim.set_margins(current, trim::to_margins(found));
         }
-        let place = reading::place(view);
+        let spot = reading::spot(view);
         view.margin.trim.on = on;
         view.margin.trim.manual = manual;
-        view.goto = Some(place);
+        reading::go(view, spot);
     }
     if !(view.margin.trim.on && view.margin.trim.manual) {
         return;
@@ -409,7 +409,8 @@ fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &To
         changed = true;
     }
     if changed {
-        view.goto = Some(reading::place(view));
+        let spot = reading::spot(view);
+        reading::go(view, spot);
     }
 }
 

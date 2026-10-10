@@ -34,9 +34,11 @@ const FIRST_FRAME_WIDTH: f32 = 800.0;
 /// The page view's zoom limits (`DocView::zoom_at`).
 const MIN_ZOOM: f32 = 0.08;
 const MAX_ZOOM: f32 = 64.0;
-/// `view.zoom`'s range in the settings schema, percent.
-const MIN_ZOOM_PERCENT: f32 = 50.0;
-const MAX_ZOOM_PERCENT: f32 = 300.0;
+/// The same limits in percent, as `view.zoom` takes them (the settings schema's range).
+const MIN_ZOOM_PERCENT: f32 = MIN_ZOOM * PERCENT;
+const MAX_ZOOM_PERCENT: f32 = MAX_ZOOM * PERCENT;
+/// A saved horizontal place outside this many page widths is not one this reader wrote.
+const X_RANGE: std::ops::RangeInclusive<f32> = -1.0..=2.0;
 const PERCENT: f32 = 100.0;
 /// Page bookmarks kept per document (the sidecar is untrusted input).
 const MAX_BOOKMARKS: usize = 10_000;
@@ -44,7 +46,7 @@ const MAX_BOOKMARKS: usize = 10_000;
 const DOC_FORMAT: &str = "pdf";
 /// The `[doc]` keys "Set as default" copies, per Display popover row.
 const PAGE_COLOR_KEYS: [&str; 5] = ["page_color", "follow_system", "keep_figures", "brightness", "contrast"];
-const LAYOUT_KEYS: [&str; 4] = ["layout", "cover_alone", "fit", "zoom"];
+const LAYOUT_KEYS: [&str; 5] = ["layout", "cover_alone", "fit", "zoom", "reading_width_px"];
 
 /// One document's reading state. Lives in its `DocView`; inert in PdfCraft (no trim, nothing
 /// read or written).
@@ -58,6 +60,9 @@ pub struct DocReading {
     pub(crate) quotes: super::highlights::Quotes,
     /// A new search's first match, kept on the reading page (`margin::find`).
     pub(crate) find_pick: Option<super::find::AutoPick>,
+    /// The horizontal half of a pending `goto`: the share of the page's width to put at the
+    /// window's centre. The canvas takes it with `goto` (R8 QoL 4).
+    pub(crate) goto_x: Option<f32>,
     /// Fit "read": the widest page `reading_width_px` wide, narrower windows permitting. Ends
     /// when the reader zooms or picks another fit.
     read_fit: Option<ReadFit>,
@@ -107,6 +112,8 @@ struct Snapshot {
     page: usize,
     /// Share of the page's height at the window's top.
     at: f32,
+    /// Share of the page's width at the window's centre, when known.
+    x: Option<f32>,
     /// The `[doc]` settings layer (`settings.view`).
     view: Map<String, Value>,
     trim: TrimRecord,
@@ -131,13 +138,27 @@ impl TrimRecord {
 
 impl Snapshot {
     fn same(&self, other: &Self) -> bool {
+        let near = |a: f32, b: f32| (a - b).abs() <= SAME_PLACE;
         self.page == other.page
-            && (self.at - other.at).abs() <= SAME_PLACE
+            && near(self.at, other.at)
+            && self.x.zip(other.x).is_none_or(|(a, b)| near(a, b))
             && self.view == other.view
             && self.trim == other.trim
             && self.bookmarks == other.bookmarks
             && self.auto_add == other.auto_add
     }
+}
+
+/// A reading spot: the document point under the window's top centre (a little below the top
+/// edge, past the gap between pages). Shares of the whole page, so a trim learned later or a
+/// refit keeps the same text there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spot {
+    pub page: usize,
+    /// Share of the page's height at the window's top.
+    pub y: f32,
+    /// Share of the page's width at the window's centre; `None` leaves the sideways scroll.
+    pub x: Option<f32>,
 }
 
 /// How far the footer's save hint is.
@@ -197,10 +218,10 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     };
     let pages = doc.info.pages.len();
     apply_view_settings(view, &settings.view, file.trim.as_ref(), &doc.info);
-    if let Some((page, at)) = file.progress.as_ref().and_then(|progress| place_of(progress, pages)) {
-        view.current = page;
-        view.page_input = (page + 1).to_string();
-        view.goto = Some((page, at));
+    if let Some(spot) = file.progress.as_ref().and_then(|progress| spot_of(progress, pages)) {
+        view.current = spot.page;
+        view.page_input = (spot.page + 1).to_string();
+        go(view, spot);
     }
     let generation = doc.edit_generation();
     let reading = &mut view.margin;
@@ -238,10 +259,10 @@ pub fn reads(view: &DocView) -> bool {
 
 /// Pick fit "read" (`width_px`: `view.reading_width_px`), keeping the reader's place.
 pub fn fit_read(view: &mut DocView, width_px: u32) {
-    let place = place(view);
+    let spot = spot(view);
     view.fit = Fit::None;
     view.margin.read_fit = Some(ReadFit { width_px: width_px as f32, zoom: view.zoom });
-    view.goto = Some(place);
+    go(view, spot);
 }
 
 /// `--trim auto|manual|on|off` (and the control channel's `set`); `on` keeps the last mode.
@@ -252,10 +273,10 @@ pub fn set_trim_option(view: &mut DocView, value: &str) -> Result<(), String> {
         "on" | "off" => view.margin.trim.manual,
         _ => return Err("trim must be auto, manual, on or off".into()),
     };
-    let place = place(view);
+    let spot = spot(view);
     view.margin.trim.on = value != "off";
     view.margin.trim.manual = manual;
-    view.goto = Some(place);
+    go(view, spot);
     Ok(())
 }
 
@@ -292,12 +313,13 @@ fn apply_view_settings(view: &mut DocView, settings: &margin_config::View, trim:
     }
 }
 
-/// The page and share of it a sidecar's progress points at, if it is a page of this document.
-fn place_of(progress: &Progress, pages: usize) -> Option<(usize, f32)> {
+/// The spot a sidecar's progress points at, if it is on a page of this document.
+fn spot_of(progress: &Progress, pages: usize) -> Option<Spot> {
     let Locator::Pdf { page, at, .. } = &progress.locator else { return None };
     let page = usize::try_from(*page).ok().filter(|page| *page < pages)?;
-    let at = at.map_or(0.0, |[_, y]| y as f32);
-    Some((page, if at.is_finite() { at.clamp(0.0, 1.0) } else { 0.0 }))
+    let y = at.map_or(0.0, |[_, y]| y as f32);
+    let x = at.map(|[x, _]| x as f32).filter(|x| X_RANGE.contains(x));
+    Some(Spot { page, y: if y.is_finite() { y.clamp(0.0, 1.0) } else { 0.0 }, x })
 }
 
 /// Fit "read": set the zoom that shows the widest page `reading_width_px` wide, or the window's
@@ -324,17 +346,47 @@ fn follow_read_fit(view: &mut DocView, info: &DocInfo) -> bool {
 /// Where the reader is: the page at the window's top and how far down it the window starts (a
 /// share of the whole page). A jump not drawn yet counts as done.
 pub fn place(view: &DocView) -> (usize, f32) {
-    if let Some((page, at)) = view.goto {
-        return (page, at.clamp(0.0, 1.0));
+    let spot = spot(view);
+    (spot.page, spot.y)
+}
+
+/// The reading spot under the window's top centre. A jump not drawn yet counts as done.
+pub fn spot(view: &DocView) -> Spot {
+    if let Some((page, y)) = view.goto {
+        return Spot { page, y: y.clamp(0.0, 1.0), x: view.margin.goto_x };
     }
-    let top = view.viewport_rect().top() + GAP;
+    let viewport = view.viewport_rect();
+    let probe = pos2(viewport.center().x, viewport.top() + GAP);
     let rects = view.visible_page_rects();
     // The first page with some of it below the probe line; a probe in the gap picks the next page.
-    let hit = rects.iter().find(|(_, rect)| rect.bottom() > top).or(rects.first());
-    match hit.and_then(|(page, _)| Some((*page, view.page_xform(*page)?))) {
-        Some((page, xf)) => (page, xf.screen_to_norm(pos2(xf.rect.center().x, top)).1.clamp(0.0, 1.0)),
-        None => (view.current, 0.0),
-    }
+    let hit = rects.iter().find(|(_, rect)| rect.bottom() > probe.y).or(rects.first());
+    let Some(xf) = hit.and_then(|(page, _)| view.page_xform(*page)) else { return Spot { page: view.current, y: 0.0, x: None } };
+    let page = hit.map_or(view.current, |(page, _)| *page);
+    // Shares of the page as drawn (rotated or not), widened from the part that frame showed (a
+    // trim box learned since has not moved it yet) to the whole page; `canvas` maps them back
+    // through the trim it lays out with.
+    let [u0, v0, u1, v1] = xf.crop;
+    let across = (probe.x - xf.rect.left()) / xf.rect.width().max(f32::EPSILON);
+    let down = ((probe.y - xf.rect.top()) / xf.rect.height().max(f32::EPSILON)).clamp(0.0, 1.0);
+    let x = (u0 + across * (u1 - u0)).clamp(*X_RANGE.start(), *X_RANGE.end());
+    Spot { page, y: v0 + down * (v1 - v0), x: Some(x) }
+}
+
+/// Go to `spot` on the next frame: its page share at the window's top and, when it has one,
+/// its width share at the window's centre (a page narrower than the window stays centred).
+pub fn go(view: &mut DocView, spot: Spot) {
+    view.goto = Some((spot.page, spot.y));
+    view.margin.goto_x = spot.x;
+}
+
+/// The sideways scroll offset that puts `spot_x`, a share of `page`'s width, at the centre of a
+/// `viewport_width` window, for `page` laid out at `rect` (content coordinates). The canvas's
+/// part of [`go`].
+pub(crate) fn goto_x_offset(view: &mut DocView, page: usize, rect: egui::Rect, viewport_width: f32) -> Option<f32> {
+    let spot_x = view.margin.goto_x.take()?;
+    let [u0, _, u1, _] = view.margin.trim.crop(page);
+    let across = (spot_x - u0) / (u1 - u0).max(f32::EPSILON);
+    Some((rect.left() + across * rect.width() - viewport_width / 2.0).max(0.0))
 }
 
 /// The page a bookmark marks.
@@ -370,9 +422,9 @@ pub fn toggle_bookmark(view: &mut DocView) -> bool {
 
 /// `view.trim.toggle`: trim on or off, keeping the reader's place.
 pub fn toggle_trim(view: &mut DocView) {
-    let place = place(view);
+    let spot = spot(view);
     view.margin.trim.on = !view.margin.trim.on;
-    view.goto = Some(place);
+    go(view, spot);
 }
 
 /// The `[doc]` settings layer of `view` as shown now (`settings.view` in the sidecar).
@@ -396,13 +448,17 @@ fn view_layer(view: &DocView) -> Map<String, Value> {
         let percent = (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32;
         layer.insert("zoom".into(), percent.into());
     }
+    // Fit "read" is only the same fit with the width it was picked at.
+    if let Some(read) = view.margin.read_fit {
+        layer.insert("reading_width_px".into(), (read.width_px.round() as u32).into());
+    }
     layer.insert("trim".into(), view.margin.trim.on.into());
     layer
 }
 
 fn snapshot(view: &DocView, auto_add: bool) -> Snapshot {
-    let (page, at) = place(view);
-    Snapshot { page, at, view: view_layer(view), trim: TrimRecord::of(&view.margin.trim), bookmarks: view.margin.bookmarks.clone(), auto_add }
+    let Spot { page, y, x } = spot(view);
+    Snapshot { page, at: y, x, view: view_layer(view), trim: TrimRecord::of(&view.margin.trim), bookmarks: view.margin.bookmarks.clone(), auto_add }
 }
 
 /// Every frame, after renders arrive: keep places, write sidecars and autosave (Margin only).
@@ -414,7 +470,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let closing = ctx.input(|i| i.viewport().close_requested());
     let autosave_on = app.margin_keys.settings().reader.autosave;
     let mut save = Vec::new();
-    let mut failures = Vec::new();
+    let mut notices = Vec::new();
     let mut wake: Option<f64> = None;
     for (index, view) in app.views.iter_mut().enumerate() {
         let Some(doc) = app.session.get(view.id) else { continue };
@@ -424,7 +480,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             view.margin.pages = pages;
         }
         // A trim box learned or a refit moves the pages: stay where the reader was.
-        let place = place(view);
+        let spot = spot(view);
         // Pages shown before auto trim was on have their pixels kept near the current page.
         if view.margin.trim.wants_boxes() {
             for page in view.current.saturating_sub(SOURCE_NEAR)..=view.current.saturating_add(SOURCE_NEAR) {
@@ -437,13 +493,13 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         let learned = view.margin.trim.take_learned().is_some();
         if (follow_read_fit(view, &doc.info) || learned) && view.goto.is_none() {
-            view.goto = Some(place);
+            go(view, spot);
         }
         let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
         match sidecar_step(view, doc, auto_add, now, closing) {
             Step::Idle => {}
             Step::WakeAt(at) => wake = Some(wake.map_or(at, |w| w.min(at))),
-            Step::Failed(message) => failures.push(message),
+            Step::Tell(message) => notices.push(message),
         }
         let generation = doc.edit_generation();
         let state = &mut view.margin.autosave;
@@ -469,7 +525,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             view.margin.autosave.failed = Some(generation);
         }
     }
-    for message in failures {
+    for message in notices {
         app.notify(message);
     }
     if let Some(at) = wake {
@@ -506,8 +562,9 @@ enum Step {
     Idle,
     /// A change waits; look again at this time.
     WakeAt(f64),
-    /// Writing failed (said once; the next change tries again).
-    Failed(String),
+    /// Something to tell the reader once: writing failed (the next change tries again), or the
+    /// sidecar had to go to Margin's data folder.
+    Tell(String),
 }
 
 /// The sidecar's part of a frame: note changes, and write once they have held still for
@@ -540,16 +597,18 @@ fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, now: f64, fl
     file.saved = Some(snap);
     file.pending = None;
     match result {
-        Ok(()) => Step::Idle,
+        Ok(None) => Step::Idle,
+        Ok(Some(moved)) => Step::Tell(moved),
         Err(err) => {
             log::warn!("sidecar: {err}");
-            Step::Failed(format!("Couldn't save the reading state: {err}"))
+            Step::Tell(format!("Couldn't save the reading state: {err}"))
         }
     }
 }
 
-/// Write `snap` into the sidecar, keeping everything else in it.
-fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Result<(), String> {
+/// Write `snap` into the sidecar, keeping everything else in it. Returns what to tell the reader
+/// when it newly went to the data folder because the document's folder can't be written.
+fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Result<Option<String>, String> {
     let mut out = file.file.clone();
     let fingerprint = store::fingerprint(&doc.bytes);
     let pages = doc.info.pages.len();
@@ -570,8 +629,14 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
     });
     let old = out.progress.take();
     let fraction = if pages == 0 { 0.0 } else { ((snap.page as f64 + f64::from(snap.at)) / pages as f64).clamp(0.0, 1.0) };
+    // Unknown sideways (a jump not drawn yet): keep what was saved; 0 restores as before R8.
+    let old_x = old.as_ref().and_then(|p| match p.locator {
+        Locator::Pdf { at: Some([x, _]), .. } => Some(x),
+        _ => None,
+    });
+    let x = snap.x.map(f64::from).or(old_x).unwrap_or(0.0);
     out.progress = Some(Progress {
-        locator: Locator::Pdf { page: u32::try_from(snap.page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some([0.0, f64::from(snap.at)]) },
+        locator: Locator::Pdf { page: u32::try_from(snap.page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some([x, f64::from(snap.at)]) },
         fraction,
         finished: old.as_ref().is_some_and(|p| p.finished),
         updated: store::now_rfc3339(),
@@ -604,9 +669,12 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
         (snap.auto_add || old.is_some()).then(|| SidecarObsidian { auto_add: snap.auto_add, extra: old.map(|o| o.extra).unwrap_or_default() });
     out.bookmarks = snap.bookmarks.clone();
     let written = store::write(&mut out, &file.document, &fingerprint, file.data.as_deref(), file.path.as_deref())?;
+    let beside = store::beside_path(&file.document);
+    let moved = (file.path.as_ref() != Some(&written) && beside.as_ref() != Some(&written))
+        .then(|| "This PDF's folder can't be written, so its reading state is kept in Margin's data folder; the PDF itself is unchanged".to_owned());
     file.path = Some(written);
     file.file = out;
-    Ok(())
+    Ok(moved)
 }
 
 /// Tab `index` is closing: write its pending reading state now.
@@ -617,7 +685,7 @@ pub(crate) fn closing(app: &mut PdfCraftApp, index: usize) {
     let Some(view) = app.views.get_mut(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-    if let Step::Failed(message) = sidecar_step(view, doc, auto_add, 0.0, true) {
+    if let Step::Tell(message) = sidecar_step(view, doc, auto_add, 0.0, true) {
         app.notify(message);
     }
     #[cfg(not(target_arch = "wasm32"))]

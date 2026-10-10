@@ -192,6 +192,55 @@ fn reopen_restores_page_zoom_page_color_and_trim() {
     assert!(shown.iter().any(|(page, _)| *page == 3), "{shown:?}");
 }
 
+/// The page rect of `page` on screen, once drawn.
+fn page_rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> egui::Rect {
+    let shown = h.state().views[0].visible_page_rects();
+    shown.iter().find(|(p, _)| *p == page).map(|(_, r)| *r).unwrap_or_else(|| panic!("page {page} not shown: {shown:?}"))
+}
+
+/// R8 QoL 4: 400 % (above the old 300 % cap), halfway down a page and panned sideways, comes
+/// back with the same document point under the same window point, in each fit and layout.
+#[test]
+fn reopen_puts_the_same_text_under_the_same_point() {
+    // Read fit never shows a page wider than the window: there only the vertical spot can move.
+    for (layout, read_fit, trim) in [("continuous", false, "off"), ("two-up", false, "auto"), ("continuous", true, "manual")] {
+        let place = Place::new(&format!("spot-{layout}-{trim}"), "paper.pdf", &paper(6));
+        let mut h = harness(&place);
+        {
+            let app = h.state_mut();
+            app.set_option("layout", layout).unwrap();
+            app.set_option("trim", trim).unwrap();
+            app.set_option("zoom", "400").unwrap();
+            if read_fit {
+                reading::fit_read(&mut app.views[0], 1100);
+            }
+        }
+        settle(&mut h);
+        reading::go(&mut h.state_mut().views[0], reading::Spot { page: 2, y: 0.55, x: Some(0.7) });
+        settle(&mut h);
+        let before = page_rect(&h, 2);
+        if !read_fit {
+            assert!(before.left() < h.state().views[0].viewport_rect().left(), "{layout} {trim}: panned sideways, {before:?}");
+        }
+        let zoom = h.state().views[0].zoom;
+        wait(&mut h, 1.5);
+        let saved = sidecar_json(&place);
+        assert_eq!(saved["progress"]["locator"]["page"], 2, "{layout} {trim}");
+        if !read_fit {
+            assert_eq!(saved["settings"]["view"]["zoom"], 400, "not clamped to 300");
+        }
+        drop(h);
+
+        let app = app(&place);
+        let mut h = Harness::builder().with_size(egui::vec2(1300.0, 900.0)).with_step_dt(STEP_SECS).build_eframe(move |_cc| app);
+        settle(&mut h);
+        assert!((h.state().views[0].zoom - zoom).abs() < zoom * 0.01, "{layout} {trim}: zoom {} was {zoom}", h.state().views[0].zoom);
+        let after = page_rect(&h, 2);
+        assert!((after.min - before.min).length() <= 2.0, "{layout} {trim}: page 2 at {after:?}, was {before:?}");
+        assert_eq!(std::fs::read(place.doc()).unwrap(), paper(6), "reading never writes the PDF");
+    }
+}
+
 #[test]
 fn auto_trim_fills_the_width_with_the_text_at_fit_width() {
     let place = Place::new("trim", "paper2col.pdf", &paper(3));
@@ -350,6 +399,8 @@ fn read_only_folders_keep_the_sidecar_in_the_data_folder() {
     std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(path.starts_with(place.0.join("data").join("sidecars")), "{}", path.display());
     assert!(!place.sidecar().exists());
+    let told = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(told.contains("data folder"), "the fallback is explained: {told:?}");
     drop(h);
     let written = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(app(&place).views[0].current, 1, "found again by fingerprint: {written}");

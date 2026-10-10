@@ -298,7 +298,7 @@ mod tests {
         let text = default_settings_jsonc();
         let parsed = crate::jsonc::parse(&text).unwrap().value.unwrap();
         assert_eq!(parsed, serde_json::to_value(Settings::default()).unwrap());
-        assert!(text.contains("\"zoom\": 100, // percent, used when fit is \"zoom\"; 50..300"), "{text}");
+        assert!(text.contains("\"zoom\": 100, // percent, used when fit is \"zoom\"; 8..6400, the page view's own zoom limits"), "{text}");
         assert!(text.contains("\"view\": { // [doc] how a document is shown"), "{text}");
     }
 
@@ -374,10 +374,11 @@ mod tests {
         let fixtures = [
             (json!({}), true),
             (defaults.clone(), true),
-            (json!({ "view": { "zoom": 50 } }), true),
-            (json!({ "view": { "zoom": 300 } }), true),
-            (json!({ "view": { "zoom": 49 } }), false),
-            (json!({ "view": { "zoom": 301 } }), false),
+            (json!({ "view": { "zoom": 8 } }), true),
+            (json!({ "view": { "zoom": 6400 } }), true),
+            (json!({ "view": { "zoom": 400 } }), true),
+            (json!({ "view": { "zoom": 7 } }), false),
+            (json!({ "view": { "zoom": 6401 } }), false),
             (json!({ "view": { "zoom": 150.0 } }), true),
             (json!({ "view": { "zoom": 150.5 } }), false),
             (json!({ "view": { "zoom": "100" } }), false),
@@ -390,8 +391,8 @@ mod tests {
             (json!({ "view": { "white_threshold": 0.3 } }), false),
             (json!({ "view": { "dewatermark": 0.96 } }), false),
             (json!({ "view": { "zoom_steps": [] } }), false),
-            (json!({ "view": { "zoom_steps": [50, 300] } }), true),
-            (json!({ "view": { "zoom_steps": [50, 301] } }), false),
+            (json!({ "view": { "zoom_steps": [8, 6400] } }), true),
+            (json!({ "view": { "zoom_steps": [50, 6401] } }), false),
             (json!({ "view": { "zoom_steps": [50, "x"] } }), false),
             (json!({ "view": { "layout": "two_up" } }), true),
             (json!({ "view": { "layout": "book" } }), false),

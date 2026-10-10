@@ -1365,6 +1365,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // `frac` is a share of the whole page; Margin's trim may show only part of it.
         let frac = view.margin.trim.shown_fraction(page, frac);
         scroll = scroll.vertical_scroll_offset((r.top() - y_shift - GAP + frac * r.height()).max(0.0));
+        // Margin's reading spot also says where across the page (R8 QoL 4); never set in PdfCraft.
+        if let Some(x) = crate::margin::reading::goto_x_offset(view, page, r, avail.width()) {
+            scroll = scroll.horizontal_scroll_offset(x);
+        }
     }
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);

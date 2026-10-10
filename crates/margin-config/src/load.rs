@@ -199,17 +199,17 @@ mod tests {
 
     #[test]
     fn cu_val_3_example() {
-        let loaded = Settings::from_user_text(r#"{ "view": { "zoom": 400, "page_colour": "night", "layout": "book" } }"#, "settings.jsonc");
+        let loaded = Settings::from_user_text(r#"{ "view": { "zoom": 7000, "page_colour": "night", "layout": "book" } }"#, "settings.jsonc");
         let shown: Vec<String> = loaded.problems.iter().map(ToString::to_string).collect();
         assert_eq!(
             shown,
             [
-                "settings.jsonc:1:13 view.zoom 400 clamped to 300",
-                "settings.jsonc:1:26 unknown key view.page_colour (did you mean view.page_color?)",
-                "settings.jsonc:1:50 view.layout \"book\" is not scroll|single|two_up; using \"scroll\"",
+                "settings.jsonc:1:13 view.zoom 7000 clamped to 6400",
+                "settings.jsonc:1:27 unknown key view.page_colour (did you mean view.page_color?)",
+                "settings.jsonc:1:51 view.layout \"book\" is not scroll|single|two_up; using \"scroll\"",
             ]
         );
-        assert_eq!(loaded.settings.view.zoom, 300);
+        assert_eq!(loaded.settings.view.zoom, 6400);
         assert_eq!(loaded.settings.view.layout, crate::settings::Layout::Scroll);
     }
 
@@ -253,9 +253,9 @@ mod tests {
     fn a_document_layer_overrides_and_bad_values_keep_the_layer_below() {
         let mut user = Settings::default();
         user.view.page_color = crate::PageColor::Sepia;
-        let layer = json!({ "view": { "zoom": 999, "layout": "two_up", "page_color": "purple" } });
+        let layer = json!({ "view": { "zoom": 9999, "layout": "two_up", "page_color": "purple" } });
         let loaded = user.with_layer(&layer, "a.pdf.margin.json");
-        assert_eq!(loaded.settings.view.zoom, 300, "clamped");
+        assert_eq!(loaded.settings.view.zoom, 6400, "clamped");
         assert_eq!(loaded.settings.view.layout, crate::Layout::TwoUp);
         assert_eq!(loaded.settings.view.page_color, crate::PageColor::Sepia, "the user's value, not the default");
         assert_eq!(loaded.problems.len(), 2, "{:?}", loaded.problems);

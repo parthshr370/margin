@@ -123,11 +123,11 @@ pub struct View {
     /// page width for fit "read"; shrinks to fit narrow windows (mockup --pw)
     #[schemars(range(min = 200, max = 4000))]
     pub reading_width_px: u32,
-    /// percent, used when fit is "zoom"; 50..300
-    #[schemars(range(min = 50, max = 300))]
+    /// percent, used when fit is "zoom"; 8..6400, the page view's own zoom limits
+    #[schemars(range(min = 8, max = 6400))]
     pub zoom: u32,
-    /// stops for view.zoom.in/out (mockup ZOOMS); each 50..300
-    #[schemars(length(min = 1, max = 64), inner(range(min = 50, max = 300)))]
+    /// stops for view.zoom.in/out, the footer's − + and its zoom menu (mockup ZOOMS); each 8..6400
+    #[schemars(length(min = 1, max = 64), inner(range(min = 8, max = 6400)))]
     pub zoom_steps: Vec<u32>,
     /// space between pages and between two_up columns
     #[schemars(range(max = 200))]
