@@ -188,6 +188,7 @@ struct Editor {
     cos: pdfcraft_cos::Document,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+    undo_limit: usize,
     keys: Keys,
 }
 
@@ -197,6 +198,10 @@ pub struct Document {
     pub path: Option<String>,
     /// The working file: what Save writes.
     pub bytes: Arc<Vec<u8>>,
+    /// Last successfully written revision, kept separately while background saves coalesce
+    /// changes against the session's original object graph.
+    saved_bytes: Arc<Vec<u8>>,
+    saved_keys: Keys,
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
     /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
     pub display: Arc<Vec<u8>>,
@@ -294,6 +299,11 @@ impl Document {
     /// A counter that changes with every edit (for caches of derived data).
     pub fn edit_generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Last revision acknowledged as successfully written (not necessarily the displayed file).
+    pub fn saved_bytes(&self) -> Arc<Vec<u8>> {
+        self.saved_bytes.clone()
     }
 
     /// Edit a PDF ▸ Edit text: the lines of existing text on `page` (0-based).
@@ -1869,6 +1879,24 @@ impl From<pdfcraft_sign::SignError> for EditError {
     }
 }
 
+/// An immutable save job. Original file data and parsed objects are shared; only the edited
+/// object overlay is copied. Serialization and file I/O belong on the caller's worker.
+pub struct SaveSnapshot {
+    pub id: DocId,
+    pub generation: u64,
+    cos: Option<pdfcraft_cos::Document>,
+    bytes: Arc<Vec<u8>>,
+    options: SaveOptions,
+    keys: Keys,
+}
+
+impl SaveSnapshot {
+    pub fn bytes(&self) -> Result<Arc<Vec<u8>>, EditError> {
+        let Some(cos) = self.cos.as_ref().filter(|cos| cos.is_modified()) else { return Ok(self.bytes.clone()) };
+        guard(|| write_incremental(cos, &self.options)).map_err(EditError::Write)?.map(Arc::new).map_err(|err| EditError::Write(err.to_string()))
+    }
+}
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<Document>,
@@ -2190,7 +2218,7 @@ impl Session {
         let (editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
-                (Some(Editor { cos, undo: Vec::new(), redo: Vec::new(), keys }), None)
+                (Some(Editor { cos, undo: Vec::new(), redo: Vec::new(), undo_limit: MAX_UNDO, keys }), None)
             }
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
@@ -2212,6 +2240,8 @@ impl Session {
             id,
             name,
             path,
+            saved_bytes: bytes.clone(),
+            saved_keys: editor.as_ref().map(|editor| editor.keys.clone()).unwrap_or_default(),
             bytes,
             display,
             info,
@@ -2323,9 +2353,6 @@ impl Session {
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
         let scope = scope_of(&edit);
         editor.undo.push((edit.label(), previous, previous_keys, scope));
-        if editor.undo.len() > MAX_UNDO {
-            editor.undo.remove(0);
-        }
         editor.redo.clear();
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
@@ -2340,6 +2367,12 @@ impl Session {
             Self::adopt_keys(doc);
             let _ = guard(|| Self::refresh(doc));
             return Err(e);
+        }
+        // Keep the rollback snapshot until refresh succeeds, even when undo is disabled.
+        if let Some(editor) = doc.editor.as_mut()
+            && editor.undo.len() > editor.undo_limit
+        {
+            editor.undo.remove(0);
         }
         doc.dirty = true;
         doc.generation += 1;
@@ -2378,6 +2411,9 @@ impl Session {
         let current = std::mem::replace(&mut editor.cos, next);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label.clone(), current, current_keys, scope));
+        if editor.undo.len() > editor.undo_limit {
+            editor.undo.remove(0);
+        }
         Self::adopt_keys(doc);
         Self::refresh_scoped(doc, scope)?;
         doc.dirty = true;
@@ -2475,6 +2511,54 @@ impl Session {
         Ok(())
     }
 
+    /// Bound history for a reader's configured undo depth, including snapshots already held.
+    pub fn set_undo_limit(&mut self, id: DocId, limit: usize) -> Result<(), EditError> {
+        let doc = self.doc_mut(id)?;
+        if let Some(editor) = doc.editor.as_mut() {
+            editor.undo_limit = limit;
+            let discard = editor.undo.len().saturating_sub(limit);
+            editor.undo.drain(..discard);
+            let discard = editor.redo.len().saturating_sub(limit);
+            editor.redo.drain(..discard);
+        }
+        Ok(())
+    }
+
+    /// Capture a save without copying file bytes, reparsing the PDF or rebuilding its renderer.
+    /// A signed file must use the normal rebasing save path to preserve every signed revision.
+    pub fn save_snapshot(&self, id: DocId) -> Result<SaveSnapshot, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.is_signed() {
+            return Err(EditError::Signed);
+        }
+        Ok(SaveSnapshot {
+            id,
+            generation: doc.generation,
+            cos: doc.editor.as_ref().map(|editor| editor.cos.clone()),
+            bytes: doc.bytes.clone(),
+            keys: doc.editor.as_ref().map(|editor| editor.keys.clone()).unwrap_or_default(),
+            options: SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() },
+        })
+    }
+
+    /// Acknowledge a background write. Newer edits remain dirty. Keeping the original graph
+    /// base coalesces this session into one incremental revision instead of appending a revision
+    /// for every small edit; the last written bytes remain the Revert target.
+    pub fn acknowledge_save(&mut self, snapshot: SaveSnapshot, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<bool, EditError> {
+        let doc = self.doc_mut(snapshot.id)?;
+        doc.saved_keys = snapshot.keys;
+        doc.saved_bytes = bytes;
+        if let Some(path) = path {
+            doc.name = std::path::Path::new(&path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
+            doc.path = Some(path);
+        }
+        let current = doc.generation == snapshot.generation;
+        if current {
+            doc.dirty = false;
+        }
+        Ok(current)
+    }
+
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
     /// with `/ModDate` stamped. Call `mark_saved` after writing them successfully.
     pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
@@ -2507,11 +2591,13 @@ impl Session {
             // password when known, so saving never downgrades this session's rights).
             editor.cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref())
                 .map_err(|e| EditError::Reopen(e.to_string()))?;
+            doc.saved_keys = editor.keys.clone();
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
             doc.path = Some(p);
         }
+        doc.saved_bytes = bytes;
         doc.dirty = false;
         doc.generation += 1;
         Self::refresh(doc)
@@ -2522,10 +2608,10 @@ impl Session {
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        let base = editor.cos.bytes().clone();
+        let base = doc.saved_bytes.clone();
         // The saved file opens with the passwords of the state that was saved: try the current
         // ones, then each earlier state's.
-        let mut candidates = vec![editor.keys.clone()];
+        let mut candidates = vec![doc.saved_keys.clone(), editor.keys.clone()];
         candidates.extend(editor.undo.iter().rev().map(|s| s.2.clone()));
         candidates.push(Keys::default());
         let (cos, keys) = candidates

@@ -17,6 +17,8 @@ const ZOOM_MATCH: f32 = 0.005;
 /// The id of the page box, shared with PdfCraft's `view.focus_page_input` (⇧⌘N).
 const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
+const DETAIL_MIN_WIDTH: f32 = 180.0;
+const DETAIL_MAX_WIDTH: f32 = 300.0;
 const ZOOM_BUTTON: f32 = 22.0;
 const FIT_BUTTON: f32 = 24.0;
 /// The page field's text size.
@@ -32,8 +34,12 @@ const PAGE_INPUT_CHARS: usize = 64;
 const HINT_TEXT_CHARS: usize = 16;
 
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if app.margin_chrome.focus_mode {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
+    let detail = reading_detail(app, index);
     let Some(doc) = app.session.get(id) else { return };
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
     let marks = super::scrubber::Marks {
@@ -82,6 +88,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                         save_command = super::saving::show(ui, &t, &save_line);
                     });
+                    if let Some(detail) = &detail
+                        && ui.available_width() >= DETAIL_MIN_WIDTH + super::scrubber::DETAIL_MIN_WIDTH + GAP_LARGE
+                    {
+                        let width = (ui.available_width() - super::scrubber::DETAIL_MIN_WIDTH - GAP_LARGE).min(DETAIL_MAX_WIDTH);
+                        ui.allocate_ui(vec2(width, HEIGHT), |ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(detail).font(theme::regular(PAGE_TEXT)).color(t.text_muted)).truncate())
+                                .on_hover_text(detail);
+                        });
+                    }
                     ui.add_space(GAP_LARGE);
                     preview = super::scrubber::show(ui, &t, view, &marks);
                 });
@@ -98,6 +113,44 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some(id) = save_command {
         super::keys::run(app, ui.ctx(), id, &Value::Null);
+    }
+}
+
+fn reading_detail(app: &mut PdfCraftApp, index: usize) -> Option<String> {
+    if !app.margin_keys.settings().reader.time_left {
+        return None;
+    }
+    let view = app.views.get(index)?;
+    let (id, current) = (view.id, view.current);
+    #[cfg(not(target_arch = "wasm32"))]
+    let seconds = {
+        let pages = app.session.get(id)?.info.pages.len();
+        let left = u32::try_from(pages.saturating_sub(current.saturating_add(1))).ok()?;
+        let book = app.margin_stats.book(id).map(str::to_owned);
+        book.and_then(|book| super::stats::summary(app, &book)).and_then(|summary| summary.seconds_left(left))
+    };
+    #[cfg(target_arch = "wasm32")]
+    let seconds = None;
+    let outline = &app.session.get(id)?.info.outline;
+    let section = super::current_section(outline, current).and_then(|path| super::outline_at(outline, &path)).map(|entry| entry.title.as_str());
+    detail_text(section, seconds)
+}
+
+fn detail_text(section: Option<&str>, seconds: Option<f64>) -> Option<String> {
+    let section = section.map(str::trim).filter(|section| !section.is_empty());
+    #[cfg(not(target_arch = "wasm32"))]
+    let remaining = seconds
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .map(|seconds| format!("~{} left", margin_config::stats::format_duration(seconds)));
+    #[cfg(target_arch = "wasm32")]
+    let remaining: Option<String> = {
+        let _ = seconds;
+        None
+    };
+    match (section, remaining) {
+        (Some(section), Some(remaining)) => Some(format!("{section} · {remaining}")),
+        (Some(section), None) => Some(section.to_owned()),
+        (None, remaining) => remaining,
     }
 }
 
@@ -263,4 +316,22 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32
         command = Some(("view.fit.toggle_width", Value::Null));
     }
     command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footer_detail_never_invents_a_pace_or_empty_section() {
+        assert_eq!(detail_text(None, None), None);
+        assert_eq!(detail_text(Some("  "), None), None);
+        assert_eq!(detail_text(Some(" Chapter 2 "), None).as_deref(), Some("Chapter 2"));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            assert_eq!(detail_text(Some("Chapter 2"), Some(120.0)).as_deref(), Some("Chapter 2 · ~2m left"));
+            assert_eq!(detail_text(None, Some(f64::NAN)), None);
+            assert_eq!(detail_text(None, Some(-1.0)), None);
+        }
+    }
 }

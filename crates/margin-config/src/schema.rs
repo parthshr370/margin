@@ -154,7 +154,7 @@ const DEFAULTS_HEADER: &str = "// default-settings.jsonc: GENERATED from crates/
 const FIRST_RUN_SETTINGS_HEADER: &str = "// Margin settings. Margin reloads this file when you save it.\n\
 // Every setting is listed below with its default, commented out. To change one, remove the `// `\n\
 // in front of its line and of the lines of its block (\"view\": { ... }), then edit the value.\n\
-// A bad value is ignored with a message and the default is used instead.\n";
+// A bad value, unknown key or removed setting is reported and ignored; other values still apply.\n";
 
 /// Spaces per nesting level.
 const INDENT: usize = 2;
@@ -384,12 +384,11 @@ mod tests {
             (json!({ "view": { "zoom": "100" } }), false),
             (json!({ "view": { "zoom": null } }), true),
             (json!({ "view": null }), true),
-            (json!({ "view": { "gamma": 0.5 } }), true),
-            (json!({ "view": { "gamma": 0.49 } }), false),
-            (json!({ "view": { "white_threshold": 0 } }), true),
-            (json!({ "view": { "white_threshold": 0.5 } }), true),
-            (json!({ "view": { "white_threshold": 0.3 } }), false),
-            (json!({ "view": { "dewatermark": 0.96 } }), false),
+            (json!({ "view": { "page_gap_px": 0 } }), true),
+            (json!({ "view": { "page_gap_px": 201 } }), false),
+            (json!({ "view": { "gamma": 1.0 } }), false),
+            (json!({ "view": { "white_threshold": 0 } }), false),
+            (json!({ "view": { "dewatermark": 0.5 } }), false),
             (json!({ "view": { "zoom_steps": [] } }), false),
             (json!({ "view": { "zoom_steps": [8, 6400] } }), true),
             (json!({ "view": { "zoom_steps": [50, 6401] } }), false),
@@ -400,14 +399,17 @@ mod tests {
             (json!({ "nope": 1 }), false),
             (json!({ "version": 2 }), false),
             (json!({ "keys": { "chord_timeout_ms": 99 } }), false),
-            (json!({ "keys": { "base": "sioyek" } }), true),
-            (json!({ "ui": { "rail": { "tool_options": { "comment.ink": { "color": "red", "width": 1.5 } } } } }), true),
-            (json!({ "ui": { "rail": { "tool_options": { "comment.ink": { "width": 1.5 } } } } }), true),
-            (json!({ "ui": { "rail": { "tool_options": { "comment.ink": { "width": 50 } } } } }), false),
-            (json!({ "ui": { "rail": { "tool_options": { "comment.ink": null } } } }), true),
+            (json!({ "keys": { "base": "margin" } }), true),
+            (json!({ "keys": { "base": "none" } }), true),
+            (json!({ "keys": { "base": "sioyek" } }), false),
+            (json!({ "keys": { "base": "okular" } }), false),
+            (json!({ "ui": { "rail": { "tool_options": {} } } }), false),
+            (json!({ "ui": { "rail": { "items": ["edit.undo", "|", "reader.tool.select"] } } }), true),
             (json!({ "ui": { "rail": { "side": "up" } } }), false),
             (json!({ "reader": { "find": { "case": true } } }), true),
-            (json!({ "perf": { "tile_px": 100000 } }), false),
+            (json!({ "reader": { "find": { "regex": true } } }), false),
+            (json!({ "reader": { "start": "home" } }), false),
+            (json!({ "perf": {} }), false),
         ];
         for (fixture, valid) in fixtures {
             assert_eq!(validator.is_valid(&fixture), valid, "schema on {fixture}");
@@ -423,6 +425,19 @@ mod tests {
     #[test]
     fn settings_schema_requires_no_key() {
         assert!(!settings_schema().to_string().contains("\"required\""));
+    }
+
+    #[test]
+    fn unsupported_settings_are_absent_from_generated_defaults_and_schema() {
+        let defaults = default_settings_jsonc();
+        let schema = settings_schema();
+        for key in ["perf", "start", "tool_options", "gamma", "saturation", "mono_threshold", "white_threshold", "dewatermark", "regex"] {
+            assert!(!defaults.contains(&format!("\"{key}\"")), "{key} still advertised in defaults");
+        }
+        assert!(schema.get("properties").and_then(|properties| properties.get("perf")).is_none());
+        for definition in ["Perf", "TileFormat", "Start", "ToolOptions"] {
+            assert!(schema.get("$defs").and_then(|definitions| definitions.get(definition)).is_none(), "{definition} still in schema");
+        }
     }
 
     #[test]

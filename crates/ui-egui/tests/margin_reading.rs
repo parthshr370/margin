@@ -603,3 +603,30 @@ fn read_only_folders_keep_the_sidecar_in_the_data_folder() {
     let written = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(app(&place).views[0].current, 1, "found again by fingerprint: {written}");
 }
+
+#[test]
+fn disabling_per_document_memory_keeps_bookmarks_but_ignores_and_preserves_view_state() {
+    let place = Place::new("remember-off", "paper.pdf", &paper(5));
+    let mut original = harness(&place);
+    original.state_mut().set_option("page", "3").unwrap();
+    original.state_mut().set_option("zoom", "150").unwrap();
+    reading::toggle_bookmark(&mut original.state_mut().views[0]);
+    settle(&mut original);
+    reading::flush(original.state_mut());
+    let saved = sidecar_json(&place);
+    drop(original);
+    std::fs::write(place.config().join("settings.jsonc"), r#"{ "reader": { "remember_per_document": false } }"#).unwrap();
+    let mut current = harness(&place);
+    assert_eq!(current.state().views[0].current, 0, "the saved page is ignored");
+    assert!(reading::reads(&current.state().views[0]), "global read-fit wins over the saved zoom");
+    assert_eq!(current.state().views[0].margin.bookmarks.len(), 1);
+    current.state_mut().set_option("page", "5").unwrap();
+    current.state_mut().set_option("zoom", "175").unwrap();
+    settle(&mut current);
+    reading::toggle_bookmark(&mut current.state_mut().views[0]);
+    reading::flush(current.state_mut());
+    let rewritten = sidecar_json(&place);
+    assert_eq!(rewritten["progress"], saved["progress"]);
+    assert_eq!(rewritten["settings"], saved["settings"]);
+    assert_eq!(rewritten["bookmarks"].as_array().unwrap().len(), 2);
+}

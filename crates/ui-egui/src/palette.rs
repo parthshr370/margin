@@ -60,6 +60,22 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ));
         }
     }
+    if app.flavor == crate::Flavor::Margin
+        && app.active.is_some()
+        && let Some(score) = score("Focus mode", &q).or_else(|| score("view.focus_mode.toggle", &q).map(|score| score + 50))
+    {
+        hits.push((
+            score,
+            Hit {
+                group: None,
+                label: "Focus mode".to_owned(),
+                detail: "View".to_owned(),
+                icon: "maximize",
+                command: Some("view.focus_mode.toggle"),
+                ready: true,
+            },
+        ));
+    }
     for g in TOOL_GROUPS {
         if let Some(s) = score(tl!(g.label), &q).or_else(|| score(g.label, &q)) {
             hits.push((
@@ -159,7 +175,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             app.left = LeftPanel::Tool(g);
         }
         if let Some(c) = command {
-            app.run_command(c);
+            if c == "view.focus_mode.toggle" && app.flavor == crate::Flavor::Margin {
+                crate::margin::run(app, c, &serde_json::Value::Null);
+            } else {
+                app.run_command(c);
+            }
         }
     }
 }

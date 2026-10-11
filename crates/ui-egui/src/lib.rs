@@ -531,6 +531,8 @@ pub struct PdfCraftApp {
     last_autosave: f64,
     pending_recovered: Option<RecoveryMeta>,
     allow_quit: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    margin_saves: margin::saves::SaveQueue,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
@@ -740,6 +742,8 @@ impl PdfCraftApp {
             last_autosave: 0.0,
             pending_recovered: None,
             allow_quit: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            margin_saves: Default::default(),
             deferred_commands: Vec::new(),
             dialog_seen: None,
             dialog_epoch: 0,
@@ -1092,12 +1096,12 @@ impl PdfCraftApp {
     }
 
     pub fn close_tab(&mut self, index: usize) {
-        if index >= self.views.len() {
-            return;
-        }
+        let Some(id) = self.views.get(index).map(|view| view.id) else { return };
         // Margin writes the tab's pending reading state first.
         margin::reading::closing(self, index);
-        let id = self.views.remove(index).id;
+        // Waiting for a save can run a close-after-save callback and remove this tab.
+        let Some(index) = self.views.iter().position(|view| view.id == id) else { return };
+        self.views.remove(index);
         self.forget_recovery(id);
         self.session.close(id);
         self.active = match self.active {
@@ -1674,6 +1678,8 @@ impl eframe::App for PdfCraftApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_margin_saves();
         self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);

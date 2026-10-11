@@ -20,8 +20,8 @@ use serde_json::{Map, Value};
 
 use super::display::{DisplayState, SOURCE_NEAR};
 use super::trim::{Margins, Trim};
-use crate::canvas::{Fit, GAP, PT, PageLayout, SIDE};
-use crate::{DocView, Flavor, PdfCraftApp, SaveTarget};
+use crate::canvas::{Fit, PT, PageLayout, SIDE};
+use crate::{DocView, Flavor, PdfCraftApp};
 
 /// Sidecar writes and autosaves wait this long after the last change.
 pub const DEBOUNCE_SECS: f64 = 1.0;
@@ -76,6 +76,10 @@ pub struct DocReading {
     autosave: Autosave,
     /// The page count the trim boxes were learned for.
     pages: usize,
+    reader_defaults: Option<(u32, margin_config::FindOptions)>,
+    restored_place: bool,
+    #[cfg(test)]
+    snapshots_built: std::cell::Cell<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -124,6 +128,8 @@ struct Snapshot {
     x: Option<f32>,
     /// The `[doc]` settings layer (`settings.view`).
     view: Map<String, Value>,
+    view_state: ViewState,
+    remember: bool,
     trim: TrimRecord,
     bookmarks: Vec<Bookmark>,
     auto_add: bool,
@@ -138,6 +144,34 @@ struct TrimRecord {
     even: Margins,
 }
 
+/// Allocation-free state used to decide whether the JSON layer needs rebuilding.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ViewState {
+    display: DisplayState,
+    layout: PageLayout,
+    cover: bool,
+    fit: Fit,
+    zoom: u32,
+    read_width: Option<u32>,
+    trim: bool,
+    page_gap: Option<u32>,
+}
+
+impl ViewState {
+    fn of(view: &DocView) -> Self {
+        Self {
+            display: view.margin.display,
+            layout: view.layout,
+            cover: view.cover,
+            fit: view.fit,
+            zoom: (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32,
+            read_width: view.margin.read_fit.map(|read| read.width_px.round() as u32),
+            trim: view.margin.trim.on,
+            page_gap: view.page_gap_px,
+        }
+    }
+}
+
 impl TrimRecord {
     fn of(trim: &Trim) -> Self {
         Self { manual: trim.manual, separate: trim.separate, odd: trim.odd, even: trim.even }
@@ -145,15 +179,18 @@ impl TrimRecord {
 }
 
 impl Snapshot {
-    fn same(&self, other: &Self) -> bool {
-        let near = |a: f32, b: f32| (a - b).abs() <= SAME_PLACE;
-        self.page == other.page
-            && near(self.at, other.at)
-            && self.x.zip(other.x).is_none_or(|(a, b)| near(a, b))
-            && self.view == other.view
-            && self.trim == other.trim
-            && self.bookmarks == other.bookmarks
-            && self.auto_add == other.auto_add
+    fn matches(&self, view: &DocView, auto_add: bool, remember: bool) -> bool {
+        let Spot { page, y, x } = spot(view);
+        let near = |left: f32, right: f32| (left - right).abs() <= SAME_PLACE;
+        self.remember == remember
+            && (!remember
+                || (self.page == page
+                    && near(self.at, y)
+                    && self.x.zip(x).is_none_or(|(left, right)| near(left, right))
+                    && self.view_state == ViewState::of(view)))
+            && self.trim == TrimRecord::of(&view.margin.trim)
+            && self.bookmarks == view.margin.bookmarks
+            && self.auto_add == auto_add
     }
 }
 
@@ -205,6 +242,9 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     }
     let defaults = app.margin_keys.settings_for_open();
     let data = app.margin_keys.data_dir();
+    let remember = defaults.reader.remember_per_document;
+    let undo_limit = defaults.reader.undo_steps as usize;
+    let find_defaults = defaults.reader.find;
     let Some(view) = app.views.get_mut(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let document = doc.path.as_ref().map(PathBuf::from);
@@ -217,8 +257,8 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
         Found::Sidecar { sidecar, path } => (*sidecar, Some(path), None),
         Found::Locked { path, reason } => (Sidecar::new(), Some(path), Some(reason)),
     };
-    let settings = match (&file.settings, &path) {
-        (Some(layer), Some(path)) => {
+    let settings = match (&file.settings, &path, remember) {
+        (Some(layer), Some(path), true) => {
             let loaded = defaults.with_layer(layer, &path.display().to_string());
             loaded.problems.iter().for_each(|problem| log::warn!("{problem}"));
             loaded.settings
@@ -227,7 +267,10 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     };
     let pages = doc.info.pages.len();
     apply_view_settings(view, &settings.view, file.trim.as_ref(), &doc.info);
-    if let Some(spot) = file.progress.as_ref().and_then(|progress| spot_of(progress, pages)) {
+    view.find_defaults = Some(find_defaults);
+    view.margin.reader_defaults = Some((settings.reader.undo_steps, find_defaults));
+    if remember && let Some(spot) = file.progress.as_ref().and_then(|progress| spot_of(progress, pages)) {
+        view.margin.restored_place = true;
         view.current = spot.page;
         view.page_input = (spot.page + 1).to_string();
         go(view, spot);
@@ -251,6 +294,11 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
             app.notes.autoadd.remove(&path);
         }
     }
+    let id = view.id;
+    super::history::set_depth(view, settings.reader.back_stack);
+    if let Err(error) = app.session.set_undo_limit(id, undo_limit) {
+        log::warn!("Couldn't apply undo depth: {error}");
+    }
     if let Some(notice) = notice {
         app.notify(notice);
     }
@@ -260,7 +308,7 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
 
 /// Whether the document's sidecar had a reading position to restore.
 pub(crate) fn has_saved_place(view: &DocView) -> bool {
-    view.margin.sidecar.as_ref().is_some_and(|file| file.file.progress.is_some())
+    view.margin.restored_place
 }
 
 /// Whether fit "read" holds the zoom.
@@ -324,6 +372,7 @@ pub fn set_trim_option(view: &mut DocView, value: &str) -> Result<(), String> {
 
 /// Show `view` as the `[doc]` settings `settings` and the sidecar's trim block say.
 fn apply_view_settings(view: &mut DocView, settings: &margin_config::View, trim: Option<&margin_config::Trim>, info: &DocInfo) {
+    view.page_gap_px = Some(settings.page_gap_px);
     view.margin.display = DisplayState::from_settings(settings);
     let mut trim_state = Trim::default();
     trim_state.on = settings.trim;
@@ -378,7 +427,7 @@ fn follow_read_fit(view: &mut DocView, info: &DocInfo) -> bool {
     // Two-up fits the spread: two pages and the gap between them, as `DocView::fit_zoom` lays
     // out a row (a cover shown alone is one page of such a row).
     let per_row = if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
-    let page_room = ((window - 2.0 * SIDE - GAP * (per_row - 1.0)) / per_row).max(1.0);
+    let page_room = ((window - 2.0 * SIDE - view.page_gap() * (per_row - 1.0)) / per_row).max(1.0);
     let zoom = (read.width_px.min(page_room) / (widest * PT)).clamp(MIN_ZOOM, MAX_ZOOM);
     let moved = (zoom - view.zoom).abs() > view.zoom * READ_ZOOM_STEP;
     if moved {
@@ -401,7 +450,7 @@ pub fn spot(view: &DocView) -> Spot {
         return Spot { page, y: y.clamp(0.0, 1.0), x: view.margin.goto_x };
     }
     let viewport = view.viewport_rect();
-    let probe = pos2(viewport.center().x, viewport.top() + GAP);
+    let probe = pos2(viewport.center().x, viewport.top() + view.page_gap());
     let rects = view.visible_page_rects();
     // The first page with some of it below the probe line; a probe in the gap picks the next page.
     let hit = rects.iter().find(|(_, rect)| rect.bottom() > probe.y).or(rects.first());
@@ -498,12 +547,27 @@ fn view_layer(view: &DocView) -> Map<String, Value> {
         layer.insert("reading_width_px".into(), (read.width_px.round() as u32).into());
     }
     layer.insert("trim".into(), view.margin.trim.on.into());
+    if let Some(gap) = view.page_gap_px {
+        layer.insert("page_gap_px".into(), gap.into());
+    }
     layer
 }
 
-fn snapshot(view: &DocView, auto_add: bool) -> Snapshot {
+fn snapshot(view: &DocView, auto_add: bool, remember: bool) -> Snapshot {
+    #[cfg(test)]
+    view.margin.snapshots_built.set(view.margin.snapshots_built.get().saturating_add(1));
     let Spot { page, y, x } = spot(view);
-    Snapshot { page, at: y, x, view: view_layer(view), trim: TrimRecord::of(&view.margin.trim), bookmarks: view.margin.bookmarks.clone(), auto_add }
+    Snapshot {
+        page,
+        at: y,
+        x,
+        view: view_layer(view),
+        view_state: ViewState::of(view),
+        remember,
+        trim: TrimRecord::of(&view.margin.trim),
+        bookmarks: view.margin.bookmarks.clone(),
+        auto_add,
+    }
 }
 
 /// Every frame, after renders arrive: keep places, write sidecars and autosave (Margin only).
@@ -514,6 +578,18 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let closing = ctx.input(|i| i.viewport().close_requested());
     let autosave_on = app.margin_keys.settings().reader.autosave;
+    let remember = app.margin_keys.settings().reader.remember_per_document;
+    let undo_limit = app.margin_keys.settings().reader.undo_steps as usize;
+    let find_defaults = app.margin_keys.settings().reader.find;
+    for view in &mut app.views {
+        if view.margin.reader_defaults != Some((undo_limit as u32, find_defaults)) {
+            view.margin.reader_defaults = Some((undo_limit as u32, find_defaults));
+            view.find_defaults = Some(find_defaults);
+            if let Err(error) = app.session.set_undo_limit(view.id, undo_limit) {
+                log::warn!("Couldn't apply undo depth: {error}");
+            }
+        }
+    }
     let mut save = Vec::new();
     let mut notices = Vec::new();
     let mut wake: Option<f64> = None;
@@ -541,7 +617,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             go(view, spot);
         }
         let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-        match sidecar_step(view, doc, auto_add, now, closing) {
+        match sidecar_step(view, doc, auto_add, remember, now, closing) {
             Step::Idle => {}
             Step::WakeAt(at) => wake = Some(wake.map_or(at, |w| w.min(at))),
             Step::Tell(message) => notices.push(message),
@@ -553,6 +629,10 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             state.changed_at = now;
         }
         if autosave_on && autosave_possible(doc, state) && doc.dirty && generation != state.opened && state.failed != Some(generation) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if app.margin_saves.contains(view.id) {
+                continue;
+            }
             let ready = view.pending_edit.is_none() && view.forms.focus.is_none();
             if ready && now - state.changed_at >= DEBOUNCE_SECS {
                 save.push((index, generation));
@@ -563,12 +643,16 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
     }
     for (index, generation) in save {
-        // PdfCraft's Save: incremental, atomic, and it clears the recovery entry.
-        if !app.save_view(index, SaveTarget::InPlace)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((id, path)) =
+            app.views.get(index).and_then(|view| app.session.get(view.id)).and_then(|doc| doc.path.clone().map(|path| (doc.id, path)))
+            && !app.queue_margin_save(id, path, None)
             && let Some(view) = app.views.get_mut(index)
         {
             view.margin.autosave.failed = Some(generation);
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (index, generation);
     }
     for message in notices {
         app.notify(message);
@@ -596,6 +680,10 @@ pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
     let Some(view) = app.views.get(index) else { return SaveStatus::Saved { autosave: autosave_on } };
     let Some(doc) = app.session.get(view.id) else { return SaveStatus::Saved { autosave: autosave_on } };
     let state = &view.margin.autosave;
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.margin_save_pending(doc.id) {
+        return SaveStatus::Saving;
+    }
     if doc.read_only_reason.is_some() || state.file_read_only {
         return SaveStatus::ReadOnly { dirty: doc.dirty };
     }
@@ -615,6 +703,22 @@ pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_failed(app: &mut PdfCraftApp, id: pdfcraft_engine::DocId, generation: u64) {
+    if let Some(view) = app.views.iter_mut().find(|view| view.id == id) {
+        view.margin.autosave.failed = Some(generation);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn saved_pdf(app: &mut PdfCraftApp, id: pdfcraft_engine::DocId) {
+    if let Some(view) = app.views.iter_mut().find(|view| view.id == id) {
+        // Atomic replacement creates a writable file, including after Save As from read-only.
+        view.margin.autosave.file_read_only = false;
+        view.margin.autosave.failed = None;
+    }
+}
+
 enum Step {
     Idle,
     /// A change waits; look again at this time.
@@ -626,33 +730,40 @@ enum Step {
 
 /// The sidecar's part of a frame: note changes, and write once they have held still for
 /// [`DEBOUNCE_SECS`] (at once when `flush`).
-fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, now: f64, flush: bool) -> Step {
-    if view.margin.sidecar.is_none() {
+fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, remember: bool, now: f64, flush: bool) -> Step {
+    let Some(file) = view.margin.sidecar.as_ref() else { return Step::Idle };
+    if file.locked.is_some() {
         return Step::Idle;
     }
-    let snap = snapshot(view, auto_add);
+    if file.saved.is_none() {
+        let snap = snapshot(view, auto_add, remember);
+        if let Some(file) = view.margin.sidecar.as_mut() {
+            file.saved = Some(snap);
+        }
+        return Step::Idle;
+    }
+    if file.saved.as_ref().is_some_and(|saved| saved.matches(view, auto_add, remember)) {
+        if let Some(file) = view.margin.sidecar.as_mut() {
+            file.pending = None;
+        }
+        return Step::Idle;
+    }
+    let unchanged = file.pending.as_ref().is_some_and(|(pending, _)| pending.matches(view, auto_add, remember));
+    if !unchanged {
+        let snap = snapshot(view, auto_add, remember);
+        if let Some(file) = view.margin.sidecar.as_mut() {
+            file.pending = Some((snap, now));
+        }
+    }
     let Some(file) = view.margin.sidecar.as_mut() else { return Step::Idle };
-    let Some(saved) = &file.saved else {
-        // The first frame: the state as opened, never written for itself.
-        file.saved = Some(snap);
-        return Step::Idle;
-    };
-    if file.locked.is_some() || saved.same(&snap) {
-        file.pending = None;
-        return Step::Idle;
-    }
-    let since = match &file.pending {
-        Some((pending, since)) if pending.same(&snap) => *since,
-        _ => now,
-    };
-    file.pending = Some((snap.clone(), since));
+    let Some((_, since)) = file.pending.as_ref() else { return Step::Idle };
     if !flush && now - since < DEBOUNCE_SECS {
         return Step::WakeAt(since + DEBOUNCE_SECS);
     }
+    let Some((snap, _)) = file.pending.take() else { return Step::Idle };
     let result = write_sidecar(file, &snap, doc);
-    // Either way this state is done: a failure is reported once, the next change retries.
+    // A failure is reported once; the next state change retries.
     file.saved = Some(snap);
-    file.pending = None;
     match result {
         Ok(None) => Step::Idle,
         Ok(Some(moved)) => Step::Tell(moved),
@@ -684,34 +795,36 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
         path_hint: Some(file.document.display().to_string()),
         extra: old.map(|d| d.extra).unwrap_or_default(),
     });
-    let old = out.progress.take();
-    let fraction = if pages == 0 { 0.0 } else { ((snap.page as f64 + f64::from(snap.at)) / pages as f64).clamp(0.0, 1.0) };
-    // Unknown sideways (a jump not drawn yet): keep what was saved; 0 restores as before R8.
-    let old_x = old.as_ref().and_then(|p| match p.locator {
-        Locator::Pdf { at: Some([x, _]), .. } => Some(x),
-        _ => None,
-    });
-    let x = snap.x.map(f64::from).or(old_x).unwrap_or(0.0);
-    out.progress = Some(Progress {
-        locator: Locator::Pdf { page: u32::try_from(snap.page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some([x, f64::from(snap.at)]) },
-        fraction,
-        finished: old.as_ref().is_some_and(|p| p.finished),
-        updated: store::now_rfc3339(),
-        extra: old.map(|p| p.extra).unwrap_or_default(),
-    });
-    // Other `[doc]` keys someone wrote into the layer stay.
-    let mut settings = match out.settings.take() {
-        Some(Value::Object(settings)) => settings,
-        _ => Map::new(),
-    };
-    let view = settings.entry("view").or_insert_with(|| Value::Object(Map::new()));
-    if !view.is_object() {
-        *view = Value::Object(Map::new());
+    if snap.remember {
+        let old = out.progress.take();
+        let fraction = if pages == 0 { 0.0 } else { ((snap.page as f64 + f64::from(snap.at)) / pages as f64).clamp(0.0, 1.0) };
+        // Unknown sideways (a jump not drawn yet): keep what was saved; 0 restores as before R8.
+        let old_x = old.as_ref().and_then(|p| match p.locator {
+            Locator::Pdf { at: Some([x, _]), .. } => Some(x),
+            _ => None,
+        });
+        let x = snap.x.map(f64::from).or(old_x).unwrap_or(0.0);
+        out.progress = Some(Progress {
+            locator: Locator::Pdf { page: u32::try_from(snap.page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some([x, f64::from(snap.at)]) },
+            fraction,
+            finished: old.as_ref().is_some_and(|p| p.finished),
+            updated: store::now_rfc3339(),
+            extra: old.map(|p| p.extra).unwrap_or_default(),
+        });
+        // Other `[doc]` keys someone wrote into the layer stay.
+        let mut settings = match out.settings.take() {
+            Some(Value::Object(settings)) => settings,
+            _ => Map::new(),
+        };
+        let view = settings.entry("view").or_insert_with(|| Value::Object(Map::new()));
+        if !view.is_object() {
+            *view = Value::Object(Map::new());
+        }
+        if let Value::Object(view) = view {
+            view.extend(snap.view.clone());
+        }
+        out.settings = Some(Value::Object(settings));
     }
-    if let Value::Object(view) = view {
-        view.extend(snap.view.clone());
-    }
-    out.settings = Some(Value::Object(settings));
     let old = out.trim.take();
     let wide = |m: Margins| m.map(f64::from);
     out.trim = Some(margin_config::Trim {
@@ -739,10 +852,15 @@ pub(crate) fn closing(app: &mut PdfCraftApp, index: usize) {
     if app.flavor != Flavor::Margin {
         return;
     }
+    let Some(id) = app.views.get(index).map(|view| view.id) else { return };
+    #[cfg(not(target_arch = "wasm32"))]
+    app.wait_margin_saves();
+    let Some(index) = app.views.iter().position(|view| view.id == id) else { return };
+    let remember = app.margin_keys.settings().reader.remember_per_document;
     let Some(view) = app.views.get_mut(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-    if let Step::Tell(message) = sidecar_step(view, doc, auto_add, 0.0, true) {
+    if let Step::Tell(message) = sidecar_step(view, doc, auto_add, remember, 0.0, true) {
         app.notify(message);
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -751,10 +869,11 @@ pub(crate) fn closing(app: &mut PdfCraftApp, index: usize) {
 
 /// Marks the document open in view `index` finished (or not) in its sidecar, written now.
 pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) -> Result<(), String> {
+    let remember = app.margin_keys.settings().reader.remember_per_document;
     let Some(view) = app.views.get_mut(index) else { return Ok(()) };
     let Some(doc) = app.session.get(view.id) else { return Ok(()) };
     let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-    let snap = snapshot(view, auto_add);
+    let snap = snapshot(view, auto_add, remember);
     let Some(file) = view.margin.sidecar.as_mut() else { return Ok(()) };
     if let Some(reason) = &file.locked {
         return Err(reason.clone());
@@ -775,8 +894,11 @@ pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) 
 
 /// Write every open document's pending reading state now (tests, embedders shutting down).
 pub fn flush(app: &mut PdfCraftApp) {
-    for index in 0..app.views.len() {
-        closing(app, index);
+    let documents: Vec<_> = app.views.iter().map(|view| view.id).collect();
+    for id in documents {
+        if let Some(index) = app.views.iter().position(|view| view.id == id) {
+            closing(app, index);
+        }
     }
 }
 
@@ -803,5 +925,43 @@ pub fn set_as_default(app: &mut PdfCraftApp, index: usize, row: DefaultRow) -> S
             DefaultRow::Layout => "Layout saved as the default for new documents".to_owned(),
         },
         Err(err) => format!("Couldn't set the default: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn idle_and_pending_frames_keep_the_existing_snapshot_allocations() {
+        let mut session = pdfcraft_engine::Session::new();
+        let bytes = session.create_blank(300.0, 400.0, 2).unwrap();
+        let id = session.open("synthetic.pdf", None, bytes, None).unwrap();
+        let doc = session.get(id).unwrap();
+        let mut view = DocView::new(id, &doc.info, Default::default());
+        view.margin.sidecar = Some(SidecarFile {
+            document: PathBuf::from("synthetic.pdf"),
+            data: None,
+            file: Sidecar::new(),
+            path: None,
+            locked: None,
+            saved: None,
+            pending: None,
+        });
+        assert!(toggle_bookmark(&mut view));
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 0.0, false), Step::Idle));
+        assert_eq!(view.margin.snapshots_built.get(), 1);
+        let bookmark_allocation = view.margin.sidecar.as_ref().unwrap().saved.as_ref().unwrap().bookmarks.as_ptr();
+        for frame in 1..20 {
+            assert!(matches!(sidecar_step(&mut view, doc, false, true, f64::from(frame), false), Step::Idle));
+            assert_eq!(view.margin.sidecar.as_ref().unwrap().saved.as_ref().unwrap().bookmarks.as_ptr(), bookmark_allocation);
+            assert_eq!(view.margin.snapshots_built.get(), 1, "idle frames must not rebuild JSON or clone bookmarks");
+        }
+        view.zoom = 1.5;
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.0, false), Step::WakeAt(_)));
+        let pending_allocation = view.margin.sidecar.as_ref().unwrap().pending.as_ref().unwrap().0.bookmarks.as_ptr();
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.5, false), Step::WakeAt(_)));
+        assert_eq!(view.margin.sidecar.as_ref().unwrap().pending.as_ref().unwrap().0.bookmarks.as_ptr(), pending_allocation);
+        assert_eq!(view.margin.snapshots_built.get(), 2, "a pending unchanged state is captured once");
     }
 }

@@ -2172,3 +2172,54 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
         assert!(reopened.get(r).as_dict().is_some_and(|d| !d.contains(b"AP")), "{r:?} is saved without /AP");
     }
 }
+
+#[test]
+fn background_save_keeps_newer_edits_and_reverts_to_written_revision() {
+    let (mut session, id) = session_with(2);
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "written".into() }).unwrap();
+    let snapshot = session.save_snapshot(id).unwrap();
+    let saved = snapshot.bytes().unwrap();
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "newer".into() }).unwrap();
+    assert!(!session.acknowledge_save(snapshot, saved.clone(), None).unwrap());
+    assert!(session.get(id).unwrap().dirty);
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("newer"));
+    assert!(Arc::ptr_eq(&session.get(id).unwrap().saved_bytes(), &saved));
+    session.revert(id).unwrap();
+    assert!(!session.get(id).unwrap().dirty);
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("written"));
+}
+
+#[test]
+fn background_saves_coalesce_one_increment_without_losing_original_bytes() {
+    let (mut session, id) = session_with(2);
+    let original = session.get(id).unwrap().bytes.clone();
+    let original_revisions = pdfcraft_cos::Document::open(original.clone()).unwrap().revisions().len();
+    for title in ["first", "second", "third"] {
+        session.apply(id, Edit::SetInfo { key: "Title".into(), value: title.into() }).unwrap();
+        let snapshot = session.save_snapshot(id).unwrap();
+        let saved = snapshot.bytes().unwrap();
+        assert!(saved.starts_with(&original));
+        let reopened = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+        assert_eq!(reopened.revisions().len(), original_revisions + 1);
+        assert!(session.acknowledge_save(snapshot, saved, None).unwrap());
+        assert!(!session.get(id).unwrap().dirty);
+    }
+    session.undo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("second"));
+    assert!(session.get(id).unwrap().dirty);
+}
+
+#[test]
+fn configured_undo_depth_trims_existing_history_and_allows_zero() {
+    let (mut session, id) = session_with(1);
+    for title in ["first", "second", "third"] {
+        session.apply(id, Edit::SetInfo { key: "Title".into(), value: title.into() }).unwrap();
+    }
+    session.set_undo_limit(id, 1).unwrap();
+    session.undo(id).unwrap();
+    assert!(matches!(session.undo(id), Err(EditError::NothingToUndo)));
+    session.set_undo_limit(id, 0).unwrap();
+    assert!(matches!(session.redo(id), Err(EditError::NothingToRedo)));
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "fourth".into() }).unwrap();
+    assert!(matches!(session.undo(id), Err(EditError::NothingToUndo)));
+}

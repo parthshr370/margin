@@ -24,7 +24,7 @@ const KNOB_RADIUS_HOVER: f32 = 6.0;
 /// Below this the footer has no room for a track at all.
 const MIN_WIDTH: f32 = 40.0;
 /// Below this the track leaves out its section ticks and highlight dots.
-const DETAIL_MIN_WIDTH: f32 = 160.0;
+pub(crate) const DETAIL_MIN_WIDTH: f32 = 160.0;
 /// The closest two ticks, or two dots, are drawn; nearer ones share the first's mark.
 const MARK_SPACING: f32 = 4.0;
 /// A section tick's half height, and a highlight dot's radius and height above the line.

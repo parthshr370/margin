@@ -222,10 +222,6 @@ impl Loaded {
             }
         }
         let keys = &self.settings.keys;
-        if matches!(keys.base, KeymapBase::Okular | KeymapBase::Sioyek) {
-            let file = self.dir.as_ref().map(|dir| dir.join(margin_config::SETTINGS_FILE).display().to_string()).unwrap_or_default();
-            problems.push(problem(&file, "keys.base", "this keymap is not shipped yet; using the built-in one".to_owned(), Severity::Info));
-        }
         self.compiled = self.registry.as_ref().map(|registry| {
             let mut sources = Vec::with_capacity(2);
             if keys.base != KeymapBase::None {
@@ -639,8 +635,14 @@ fn close_layer(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if view.selected_text().is_some() {
         view.clear_selection();
-    } else {
+        return;
+    }
+    if view.find.is_some() {
         view.find = None;
+        return;
+    }
+    if super::focus::active(app) {
+        super::focus::leave(app);
     }
 }
 

@@ -316,13 +316,26 @@ impl PdfCraftApp {
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
-                        if app.save_doc_to(id, &dest.to_string_lossy()) {
-                            after(app);
+                        if !app.commit_typing_in(id) {
+                            return;
+                        }
+                        if app.flavor == crate::Flavor::Margin && app.session.get(id).is_some_and(|doc| !doc.is_signed()) {
+                            app.queue_margin_save(id, dest.to_string_lossy().into_owned(), Some(Box::new(after)));
+                        } else {
+                            app.wait_margin_saves();
+                            if app.save_doc_to(id, &dest.to_string_lossy()) {
+                                after(app);
+                            }
                         }
                     });
                     return false;
                 }
             };
+            if self.flavor == crate::Flavor::Margin && self.session.get(id).is_some_and(|doc| !doc.is_signed()) {
+                self.queue_margin_save(id, destination, Some(Box::new(after)));
+                return false;
+            }
+            self.wait_margin_saves();
             let saved = self.save_doc_to(id, &destination);
             if saved {
                 after(self);
@@ -382,6 +395,7 @@ impl PdfCraftApp {
         }
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
+                crate::margin::reading::saved_pdf(self, id);
                 self.forget_recovery(id);
                 if let Some(doc) = self.session.get(id)
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
@@ -428,12 +442,16 @@ impl PdfCraftApp {
     /// File ▸ Revert (after the confirmation).
     pub fn revert_active(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        self.wait_margin_saves();
+        if self.session.get(id).is_none() {
+            return;
+        }
         match self.session.revert(id) {
             Ok(()) => {
-                if let Some(i) = self.active
-                    && let Some(d) = self.session.get(id)
+                if let Some(d) = self.session.get(id)
+                    && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
                 {
-                    let view = &mut self.views[i];
                     view.document_changed(&d.info);
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
@@ -522,6 +540,8 @@ impl PdfCraftApp {
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.wait_margin_saves();
         // `first_dirty` counts text typed into a field as an unsaved change.
         if !self.allow_quit && self.first_dirty().is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
