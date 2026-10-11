@@ -445,9 +445,12 @@ fn run(data: &Path, cancel: &AtomicBool, done: &AtomicUsize, total: &AtomicUsize
     result
 }
 
+/// Where a search thread leaves its hits (or why it failed) for the UI to take.
+type SearchOutcome = Arc<Mutex<Option<Result<Vec<TextHit>, String>>>>;
+
 /// One search of the library's text on its own thread. Dropping it interrupts the query.
 pub struct TextSearch {
-    result: Arc<Mutex<Option<Result<Vec<TextHit>, String>>>>,
+    result: SearchOutcome,
     interrupt: Arc<Mutex<Option<InterruptHandle>>>,
     dropped: Arc<AtomicBool>,
 }

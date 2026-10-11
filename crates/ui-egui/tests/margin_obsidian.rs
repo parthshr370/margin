@@ -81,10 +81,11 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
 fn await_note(h: &mut Harness<'static, PdfCraftApp>, note: &Path, expected: &str) -> String {
     for _ in 0..200 {
         h.run_steps(1);
-        if let Ok(contents) = std::fs::read_to_string(note) {
-            if contents.contains(expected) && h.state().views[0].comments.notes.progress.is_none() {
-                return contents;
-            }
+        if let Ok(contents) = std::fs::read_to_string(note)
+            && contents.contains(expected)
+            && h.state().views[0].comments.notes.progress.is_none()
+        {
+            return contents;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

@@ -160,7 +160,7 @@ fn read_highlights(input: Input, progress: &Arc<Mutex<WorkerState>>) -> Result<R
     let mut extracted = input.loaded;
     let mut highlights = Vec::with_capacity(input.info.annotations.len() + input.marks.len());
     for annotation in &input.info.annotations {
-        if !extracted.contains_key(&annotation.page) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = extracted.entry(annotation.page) {
             let rendered = renderer
                 .get_or_insert_with(|| PageRenderer::new(input.source.bytes.clone(), input.source.config.clone()))
                 .render(RenderRequest { page: annotation.page, kind: RequestKind::Text, ..RenderRequest::default() });
@@ -168,7 +168,7 @@ fn read_highlights(input: Input, progress: &Arc<Mutex<WorkerState>>) -> Result<R
                 return Err(format!("Couldn't extract page {}: {error}", annotation.page.saturating_add(1)));
             }
             if let Some(text) = rendered.text {
-                extracted.insert(annotation.page, text);
+                slot.insert(text);
             }
         }
         highlights.push(highlight_of(&input.notes, &input.info, annotation, extracted.get(&annotation.page).map(Arc::as_ref)));
