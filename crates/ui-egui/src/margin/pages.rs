@@ -127,7 +127,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         top += height + ROW_GAP;
     }
     let total = (top - ROW_GAP).max(0.0);
-    let dots = highlight_dots(info);
+    let dots = highlight_dots(info, &view.margin.marks, &app.notes);
 
     let seen_id = egui::Id::new(("margin-pages-seen", view.id.0));
     let pass = ui.ctx().cumulative_pass_nr();
@@ -237,12 +237,20 @@ fn paint_cell(ui: &egui::Ui, t: &Tokens, resp: &egui::Response, cell: &Cell<'_>)
     }
 }
 
-/// Each page's highlight colours, in order, one per highlight (also the footer scrubber's dots).
-pub(crate) fn highlight_dots(info: &pdfcraft_render::DocInfo) -> HashMap<usize, Vec<Color32>> {
+/// Each page's highlight colours, in order, one per highlight: the PDF's text marks, then those
+/// kept in the sidecar (also the footer scrubber's dots).
+pub(crate) fn highlight_dots(info: &pdfcraft_render::DocInfo, marks: &super::marks::Marks, notes: &obsidian::Notes) -> HashMap<usize, Vec<Color32>> {
     let mut dots: HashMap<usize, Vec<Color32>> = HashMap::new();
+    let rgb8 = |rgb: [f32; 3]| rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
     for a in obsidian::markup_comments(info) {
-        let [r, g, b] = a.color.unwrap_or(UNCOLORED_MARK).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let [r, g, b] = rgb8(a.color.unwrap_or(UNCOLORED_MARK));
         dots.entry(a.page).or_default().push(Color32::from_rgb(r, g, b));
+    }
+    for h in marks.highlights() {
+        if let Some(page) = margin_config::marks::locator_page(&h.locator) {
+            let [r, g, b] = rgb8(super::marks::shown_rgb(notes, h));
+            dots.entry(page).or_default().push(Color32::from_rgb(r, g, b));
+        }
     }
     dots
 }

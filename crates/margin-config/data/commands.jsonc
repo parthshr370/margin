@@ -44,6 +44,15 @@
   { "id": "reader.tool.select", "title": "Select", "group": "Mark", "when": "Reader" },
   { "id": "reader.bookmark.toggle", "title": "Bookmark this page", "icon": "bookmark", "group": "Go", "when": "Reader && format == pdf" },
   { "id": "view.trim.toggle", "title": "Trim margins", "icon": "crop", "group": "View", "when": "Reader && format == pdf" },
+  { "id": "reader.save_with_highlights", "title": "Save a copy with highlights", "icon": "file-down", "group": "File", "when": "Reader && format == pdf",
+    "aliases": ["export highlights", "write annotations", "sidecar"] },
+
+  { "id": "note.add", "title": "Add a page note", "icon": "sticky-note", "group": "Mark", "when": "Reader && format == pdf", "aliases": ["comment", "margin note"] },
+  { "id": "note.edit", "title": "Edit note", "icon": "pencil", "group": "Mark", "when": "Reader && format == pdf" },
+  { "id": "note.delete", "title": "Delete page note", "icon": "trash-2", "group": "Mark", "when": "Reader && format == pdf" },
+  { "id": "note.next", "title": "Next page note", "icon": "chevron-down", "group": "Go", "when": "Reader && format == pdf" },
+  { "id": "note.prev", "title": "Previous page note", "icon": "chevron-up", "group": "Go", "when": "Reader && format == pdf" },
+  { "id": "note.list", "title": "Show page notes", "icon": "sticky-note", "group": "Mark", "when": "Reader && format == pdf" },
 
   { "id": "annotation.delete", "title": "Delete comment", "icon": "trash-2", "group": "Mark", "when": "Annotation" },
   { "id": "annotation.color", "title": "Comment colour", "icon": "palette", "group": "Mark", "when": "Annotation || Selection",

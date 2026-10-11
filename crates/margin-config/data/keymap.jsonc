@@ -26,6 +26,7 @@
       "secondary-3": ["view.sidebar.tab", { "tab": "pages" }], "secondary-4": ["view.sidebar.tab", { "tab": "bookmarks" }],
       "ctrl-secondary-h": "view.focus_mode.toggle",
       "[": "view.sidebar.toggle", "a": "reader.annotate.toggle", "b": "reader.bookmark.toggle", "shift-t": "view.trim.toggle",
+      "shift-n": "note.add",
       "secondary-r": "view.rotate.cw", "secondary-shift-r": "view.rotate.ccw",
       "w": "view.fit.toggle_width", "f": "view.focus_mode.toggle", "g": "view.focus_page_input",
       "alt-left": "reader.back", "alt-right": "reader.forward", "secondary-[": "reader.back", "secondary-]": "reader.forward",

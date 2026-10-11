@@ -24,6 +24,7 @@ pub mod keysheet;
 pub mod library;
 pub mod links;
 pub mod look;
+pub mod marks;
 pub mod motion;
 pub mod obsidian;
 pub mod pagecolor;
@@ -239,8 +240,9 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
 /// Run a Margin-only action (the keymap's ids): `view.focus_mode.toggle` (also `view.read_mode`),
 /// `view.sidebar.toggle`, `view.sidebar.tab` with `{"tab": "contents" | "highlights" | "pages" |
 /// "bookmarks" | "find" | "tools"}`, `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
-/// (a page bookmark on the current page), `view.trim.toggle`, and the library's `library.open`,
-/// `library.search` and `app.stats`. Returns `false` for an unknown id or tab.
+/// (a page bookmark on the current page), `view.trim.toggle`, the page notes' `note.*` and "Save a
+/// copy with highlights" (`margin::marks`), and the library's `library.open`, `library.search` and
+/// `app.stats`. Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
         "view.read_mode" | "view.focus_mode.toggle" => focus::toggle(app),
@@ -254,8 +256,7 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
         "reader.bookmark.toggle" => {
             let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
             let page = view.current + 1;
-            let message =
-                if reading::toggle_bookmark(view) { format!("Bookmarked page {page}") } else { format!("Removed the bookmark on page {page}") };
+            let message = reading::toggle_bookmark(view).message(page);
             app.notify(message);
         }
         "view.trim.toggle" => {
@@ -263,6 +264,13 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
             reading::toggle_trim(view);
         }
         highlights::DELETE_ID | highlights::COLOR_ID => return highlights::run(app, id, args),
+        marks::NOTE_ADD_ID
+        | marks::NOTE_EDIT_ID
+        | marks::NOTE_DELETE_ID
+        | marks::NOTE_NEXT_ID
+        | marks::NOTE_PREV_ID
+        | marks::NOTE_LIST_ID
+        | marks::SAVE_COPY_ID => return marks::run(app, id),
         #[cfg(not(target_arch = "wasm32"))]
         "library.open" | "library.search" | "app.stats" => return library::run(app, id),
         _ => return false,
@@ -377,6 +385,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 ui.set_opacity(opacity);
             }
             crate::canvas::document_area(app, i, ui);
+            marks::paint(app, ui, i);
             selection::show(app, ui.ctx(), i, ui.clip_rect());
             scan_prompt::show(app, ui.ctx(), i);
         }

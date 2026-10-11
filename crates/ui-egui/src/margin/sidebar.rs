@@ -339,14 +339,17 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// Highlights, underlines, strikethroughs and squiggles as cards (`margin::highlights`).
+/// Highlights, underlines, strikethroughs and squiggles, and page notes, as cards
+/// (`margin::highlights`).
 fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
-    let Some((_, id)) = app.active_ids() else { return };
-    let Some(doc) = app.session.get(id) else { return };
-    let count = doc.info.annotations.iter().filter(|a| super::obsidian::is_markup(a)).count();
+    let count = super::highlights::count(app, index);
     pane_title(ui, t, "Highlights", Some(count));
-    if count == 0 {
-        empty(ui, t, &["No highlights yet.", "Pick Highlight in the rail, then select text."]);
+    let drafting = app.views.get(index).is_some_and(|view| view.margin.marks.draft.is_some());
+    if count == 0 && !drafting {
+        let note_hint = look::shortcut(app, super::marks::NOTE_ADD_ID).map(|keys| format!("{keys} adds a note to the page."));
+        let mut lines = vec!["No highlights yet.", "Pick Highlight in the rail, then select text."];
+        lines.extend(note_hint.as_deref());
+        empty(ui, t, &lines);
         return;
     }
     let nav = super::highlights::show(app, ui, t, index);
@@ -366,15 +369,37 @@ fn navigate(view: Option<&mut DocView>, nav: Option<Nav>) {
     }
 }
 
-/// Margin's page bookmarks (`reader.bookmark.toggle`), listed above the PDF's own bookmarks.
+/// A page bookmark's row: its id, page, shown title, page label and its own name.
+struct BookmarkRow {
+    id: String,
+    page: usize,
+    title: String,
+    label: String,
+    name: String,
+}
+
+/// What the reader did to the page bookmarks this frame.
+#[derive(Default)]
+struct BookmarkActions {
+    toggle: bool,
+    go: Option<String>,
+    remove: Option<String>,
+    /// Rename this bookmark to this name.
+    rename: Option<(String, String)>,
+}
+
+/// Margin's page bookmarks (`reader.bookmark.toggle`), listed above the PDF's own bookmarks. A
+/// click goes to the exact spot the bookmark was added at; a double-click or the menu's Rename
+/// names it in place (Enter keeps the name, Esc puts the old one back).
 fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
     let key = look::shortcut(app, "reader.bookmark.toggle");
     let Some(view) = app.views.get(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let scroll_id = ("margin-page-bookmarks", view.id.0);
+    let renaming_id = egui::Id::new(("margin-bookmark-rename", view.id.0));
     let info = &doc.info;
     // Unnamed bookmarks show the section they are in.
-    let rows: Vec<(usize, String, String)> = view
+    let rows: Vec<BookmarkRow> = view
         .margin
         .bookmarks
         .iter()
@@ -382,22 +407,21 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
             let page = reading::bookmark_page(bookmark).filter(|page| *page < info.pages.len())?;
             let section =
                 || current_section(&info.outline, page).and_then(|path| outline_at(&info.outline, &path)).map(|item| item.title.trim().to_owned());
-            let title = Some(bookmark.name.trim().to_owned())
-                .filter(|name| !name.is_empty())
-                .or_else(section)
-                .unwrap_or_else(|| format!("Page {}", page + 1));
-            Some((page, title, info.pages.get(page).map(|p| p.label.clone()).unwrap_or_default()))
+            let name = bookmark.name.trim().to_owned();
+            let title = Some(name.clone()).filter(|name| !name.is_empty()).or_else(section).unwrap_or_else(|| format!("Page {}", page + 1));
+            let label = info.pages.get(page).map(|p| p.label.clone()).unwrap_or_default();
+            Some(BookmarkRow { id: bookmark.id.clone(), page, title, label, name })
         })
         .collect();
     let current = view.current;
-    let marked = rows.iter().any(|(page, ..)| *page == current);
-    let (mut toggle, mut go, mut remove) = (false, None, None);
+    let marked = rows.iter().any(|row| row.page == current);
+    let mut actions = BookmarkActions::default();
     ui.add_space(GAP_LARGE);
     ui.horizontal(|ui| {
         look::section_label(ui, t, "Page bookmarks", Some(rows.len()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let label = if marked { "Remove this page's bookmark" } else { "Bookmark this page" };
-            toggle = look::icon_button(ui, if marked { "bookmark" } else { "bookmark-plus" }, 26.0, marked, label, key.as_deref()).clicked();
+            actions.toggle = look::icon_button(ui, if marked { "bookmark" } else { "bookmark-plus" }, 26.0, marked, label, key.as_deref()).clicked();
         });
     });
     ui.add_space(GAP);
@@ -411,48 +435,127 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
             ui.label(egui::RichText::new(hint).font(theme::regular(12.0)).color(t.text_muted));
         });
     } else {
+        let mut renaming: Option<(String, String)> = ui.data(|d| d.get_temp(renaming_id));
         egui::ScrollArea::vertical().id_salt(scroll_id).max_height(PAGE_BOOKMARKS_MAX_HEIGHT).auto_shrink([false, true]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = ROW_SPACING;
-            for (page, title, label) in &rows {
-                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *page == current, title));
-                look::row_fill(ui, t, rect, &resp, *page == current);
-                let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
-                icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
-                // Hovered rows trade the page label for a remove button.
-                let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
-                let label_width = if resp.hovered() || ui.rect_contains_pointer(side) {
-                    let x = ui.interact(side, ui.id().with(("remove-page-bookmark", *page)), Sense::click());
-                    icons::paint(ui, side, "x", 12.0, look::icon_tint(t, false, x.hovered()));
-                    if look::tooltip(x, "Remove bookmark", None).clicked() {
-                        remove = Some(*page);
+            for row in &rows {
+                let typed = match renaming.as_mut() {
+                    Some((id, text)) if *id == row.id => {
+                        Some(rename_row(ui, t, row, text).map(|keep| if keep { text.clone() } else { row.name.clone() }))
                     }
-                    ROW_BUTTON
-                } else {
-                    ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, label, theme::regular(11.0), t.text_muted);
-                    ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(11.0), t.text_muted).size().x)
+                    _ => None,
                 };
-                let text_left = icon.right() + GAP;
-                let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
-                let color = look::row_text(t, *page == current, t.text);
-                crate::widgets::row_text(ui, egui::pos2(text_left, rect.center().y), title.as_str(), theme::regular(12.5), color, max_width);
-                if resp.clicked() && remove.is_none() {
-                    go = Some(*page);
+                match typed {
+                    Some(Some(name)) => actions.rename = Some((row.id.clone(), name)),
+                    Some(None) => {}
+                    None => bookmark_row(ui, t, row, current, &mut actions, &mut renaming),
                 }
             }
+        });
+        if actions.rename.is_some() {
+            renaming = None;
+        }
+        ui.data_mut(|d| match renaming {
+            Some(state) => {
+                d.insert_temp(renaming_id, state);
+            }
+            None => d.remove::<(String, String)>(renaming_id),
         });
     }
     ui.add_space(GAP);
     let Some(view) = app.views.get_mut(index) else { return };
-    if toggle {
-        reading::toggle_bookmark(view);
+    let page = view.current + 1;
+    if actions.toggle && reading::toggle_bookmark(view) == reading::BookmarkToggle::Full {
+        app.notify(reading::BookmarkToggle::Full.message(page));
+        return;
     }
-    if let Some(page) = remove {
-        view.margin.bookmarks.retain(|bookmark| reading::bookmark_page(bookmark) != Some(page));
+    if let Some(id) = actions.remove {
+        reading::remove_bookmark(view, &id);
     }
-    if let Some(page) = go {
-        view.go_to_page(page);
+    if let Some((id, name)) = actions.rename {
+        reading::rename_bookmark(view, &id, &name);
     }
+    if let Some(id) = actions.go {
+        reading::go_to_bookmark(view, &id);
+    }
+}
+
+/// One page bookmark's row: hovered, it trades the page label for a remove button; its menu
+/// renames or removes it.
+fn bookmark_row(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    row: &BookmarkRow,
+    current: usize,
+    actions: &mut BookmarkActions,
+    renaming: &mut Option<(String, String)>,
+) {
+    let here = row.page == current;
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, here, &row.title));
+    look::row_fill(ui, t, rect, &resp, here);
+    let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
+    icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
+    let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
+    let mut removing = false;
+    let label_width = if resp.hovered() || ui.rect_contains_pointer(side) {
+        let x = ui.interact(side, ui.id().with(("remove-page-bookmark", &row.id)), Sense::click());
+        icons::paint(ui, side, "x", 12.0, look::icon_tint(t, false, x.hovered()));
+        if look::tooltip(x, "Remove bookmark", None).clicked() {
+            removing = true;
+        }
+        ROW_BUTTON
+    } else {
+        ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, &row.label, theme::regular(11.0), t.text_muted);
+        ui.fonts_mut(|f| f.layout_no_wrap(row.label.clone(), theme::regular(11.0), t.text_muted).size().x)
+    };
+    let text_left = icon.right() + GAP;
+    let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
+    let color = look::row_text(t, here, t.text);
+    crate::widgets::row_text(ui, egui::pos2(text_left, rect.center().y), row.title.as_str(), theme::regular(12.5), color, max_width);
+    resp.context_menu(|ui| {
+        if ui.button("Rename").clicked() {
+            *renaming = Some((row.id.clone(), row.name.clone()));
+            ui.close();
+        }
+        if ui.button("Remove bookmark").clicked() {
+            removing = true;
+            ui.close();
+        }
+    });
+    if resp.double_clicked() {
+        *renaming = Some((row.id.clone(), row.name.clone()));
+    } else if removing {
+        actions.remove = Some(row.id.clone());
+    } else if resp.clicked() {
+        actions.go = Some(row.id.clone());
+    }
+}
+
+/// A bookmark being renamed: a field in its row, focused as it appears. `Some(true)` keeps the
+/// typed name (Enter, or a click elsewhere), `Some(false)` puts the old one back (Esc).
+fn rename_row(ui: &mut egui::Ui, t: &Tokens, row: &BookmarkRow, text: &mut String) -> Option<bool> {
+    let id = ui.make_persistent_id(("margin-bookmark-name", &row.id));
+    let appearing = ui.ctx().read_response(id).is_none();
+    let resp = look::input_frame(t, true)
+        .inner_margin(egui::Margin::symmetric(ROW_PAD as i8, 4))
+        .show(ui, |ui| {
+            let field = egui::TextEdit::singleline(text)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .hint_text(row.title.as_str())
+                .font(theme::regular(12.5))
+                .desired_width(ui.available_width());
+            ui.add(field)
+        })
+        .inner;
+    if appearing {
+        resp.request_focus();
+    }
+    if resp.lost_focus() {
+        return Some(!ui.input(|i| i.key_pressed(egui::Key::Escape)));
+    }
+    None
 }
 
 #[cfg(test)]

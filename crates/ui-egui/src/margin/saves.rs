@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(std::fs::read(&original).unwrap(), before);
         assert!(std::fs::metadata(&original).unwrap().permissions().readonly(), "a rename never strips the flag");
         assert!(app.session.get(id).unwrap().dirty);
-        assert_eq!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::ReadOnly { dirty: true });
+        assert!(matches!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::ReadOnly { dirty: true, .. }));
         set_read_only(&original, false);
         drop(app);
         std::fs::remove_dir_all(root).unwrap();
@@ -476,7 +476,7 @@ mod tests {
         readonly.set_readonly(true);
         std::fs::set_permissions(&original, readonly).unwrap();
         super::super::reading::opened(&mut app, 0);
-        assert_eq!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::ReadOnly { dirty: false });
+        assert!(matches!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::ReadOnly { dirty: false, .. }));
         edit(&mut app, "copy");
         app.save_override = Some(root.join("copy.pdf").to_string_lossy().into_owned());
         assert!(!app.save_active(crate::SaveTarget::As), "the write completes asynchronously");

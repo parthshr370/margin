@@ -9,7 +9,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::canvas::Fit;
 use pdfcraft_ui_egui::margin::pagecolor::PageMode;
-use pdfcraft_ui_egui::margin::reading::{self, SaveStatus};
+use pdfcraft_ui_egui::margin::reading::{self, MarksKept, SaveStatus};
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
 const LETTER: (f32, f32) = (612.0, 792.0);
@@ -522,20 +522,22 @@ fn highlight(h: &mut Harness<'static, PdfCraftApp>) {
 }
 
 /// R8 QoL 7: a failed autosave stays visible and offers Save and Save as, the change stays
-/// unsaved until a save works; a read-only file says so and is never written by itself.
+/// unsaved until a save works; a read-only file says so, is never written by itself, and keeps
+/// its highlights beside it with "Save copy…" offered.
 #[cfg(unix)]
 #[test]
 fn the_footer_tells_the_truth_about_saving() {
     use std::os::unix::fs::PermissionsExt as _;
     let place = Place::new("save-fails", "text.pdf", &text_page());
     let docs = place.doc().parent().unwrap().to_path_buf();
+    // Opened writable; the folder turns read-only afterwards, so autosave fails.
+    let mut h = harness(&place);
     std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o555)).unwrap();
     // Root ignores permissions: nothing to show there.
     if std::fs::write(docs.join(".probe"), b"").is_ok() {
         std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
         return;
     }
-    let mut h = harness(&place);
     highlight(&mut h);
     wait(&mut h, 2.0);
     let id = h.state().views[0].id;
@@ -556,12 +558,16 @@ fn the_footer_tells_the_truth_about_saving() {
     let place = Place::new("read-only-file", "text.pdf", &text_page());
     std::fs::set_permissions(place.doc(), std::fs::Permissions::from_mode(0o444)).unwrap();
     let mut h = harness(&place);
-    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: false });
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: false, marks: MarksKept::Beside { any: false } });
     h.get_by_label("Read-only");
     highlight(&mut h);
     wait(&mut h, 2.0);
-    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: true });
-    h.get_by_label("Save as…");
+    assert_eq!(
+        reading::save_status(h.state(), 0),
+        SaveStatus::ReadOnly { dirty: false, marks: MarksKept::Beside { any: true } },
+        "the highlight went to the sidecar, not into the document"
+    );
+    h.get_by_label("Save copy…");
     assert_eq!(std::fs::read(place.doc()).unwrap(), text_page(), "never written by itself");
     std::fs::set_permissions(place.doc(), std::fs::Permissions::from_mode(0o644)).unwrap();
 }

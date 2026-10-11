@@ -10,8 +10,9 @@
 //! keymap files (the shipped [`MARGIN_KEYMAP`], then the user's `keymap.jsonc`) into one
 //! [`CompiledKeymap`]; [`resolve::step`] matches a keystroke against it for a context stack.
 //!
-//! Sidecars: [`Sidecar`] is the v1 file format and [`store`] reads and writes it. Theme and
-//! profile file formats are here too; nothing loads them yet.
+//! Sidecars: [`Sidecar`] is the v1 file format and [`store`] reads and writes it; [`marks`]
+//! merges two writers' highlights, notes and bookmarks and writes them into a PDF copy. Theme
+//! and profile file formats are here too; nothing loads them yet.
 //!
 //! Library and stats (desktop only): [`library`] keeps `<data>/library.sqlite` (books, covers,
 //! collections) and scans folders as a cancellable job; [`stats`] keeps `<data>/stats.sqlite`
@@ -28,6 +29,7 @@ mod keystroke;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod library;
 mod load;
+pub mod marks;
 mod problem;
 mod profile;
 mod registry;

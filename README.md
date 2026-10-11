@@ -90,7 +90,15 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   and Copy callout. The default colours are the PDF++ set: Yellow, Red, Note and Important.
 - Highlights, underlines, strikethroughs, squiggles, sticky notes, ink, text boxes and shapes are
   real PDF annotations, so other PDF readers see them too.
-- The Highlights tab lists every mark as a card with the text it covers, its page, date and note.
+- A PDF Margin can't write (a read-only file or folder, a signed PDF, one that forbids comment
+  changes) keeps its highlights in its sidecar instead. They show on the page and in the lists
+  like the rest, and **Save a copy with highlights** (footer, palette) writes them into a new PDF
+  as real annotations.
+- Page notes: <kbd>Shift</kbd>+<kbd>N</kbd> adds a note to the page you are reading (beside the
+  selected text, if any). Notes live in the sidecar for every PDF and show as small markers on
+  the page.
+- The Highlights tab lists every mark and page note as a card with the text it covers, its page,
+  date and note. Search the text and notes, filter by colour or kind, sort by page or newest.
   Change a colour, copy, open or delete from the card.
 - Obsidian: copy a highlight as a PDF++ style callout
   (`> [!PDF|yellow] [[paper.pdf#page=4|paper, p.4]]` followed by the quote), open the page in
@@ -108,9 +116,11 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   applied redactions, changed encryption) do so once and later saves append to it. Save As and
   Save asked for during a write all happen, in order. A file made read-only after opening is
   never replaced. Quitting waits for pending writes.
-- Your place, layout, page colour, trim and page bookmarks live in a small sidecar file next to
-  the PDF (`paper.pdf.margin.json`), or in Margin's data folder when that folder is not writable.
-  Sidecars are never written just because you opened a file.
+- Your place, layout, page colour, trim, page bookmarks, page notes and kept highlights live in a
+  small sidecar file next to the PDF (`paper.pdf.margin.json`), or in Margin's data folder when
+  that folder is not writable. Sidecars are never written just because you opened a file. Two
+  Margins writing the same sidecar merge their highlights, notes and bookmarks instead of losing
+  one side's changes.
   Set `reader.remember_per_document` to false to use your global view defaults and stop restoring
   or updating per-document positions and view settings; bookmarks and annotations still persist.
 
@@ -316,6 +326,7 @@ from your keymap.
 | Toggle sidebar | <kbd>[</kbd> |
 | Contents / Highlights / Pages / Bookmarks tab | <kbd>Ctrl</kbd>+<kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> / <kbd>4</kbd> |
 | Bookmark this page | <kbd>B</kbd> |
+| Add a note to the page | <kbd>Shift</kbd>+<kbd>N</kbd> |
 | Annotate tools | <kbd>A</kbd> |
 | With text selected: highlight, underline, strikethrough, squiggly | <kbd>H</kbd>, <kbd>U</kbd>, <kbd>S</kbd>, <kbd>Q</kbd> |
 | With text or a mark selected: Yellow, Red, Note, Important | <kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd>, <kbd>4</kbd> |

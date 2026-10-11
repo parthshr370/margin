@@ -84,6 +84,12 @@ impl PdfCraftApp {
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
         }
+        // Margin: highlights and notes kept beside a PDF have their own history (`margin::marks`).
+        if matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo)
+            && crate::margin::marks::can_step(self, spec.needs == commands::Needs::Undo)
+        {
+            return true;
+        }
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
     }
@@ -197,6 +203,8 @@ impl PdfCraftApp {
             }
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
             "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
+            "edit.undo" if crate::margin::marks::step(self, true) => {}
+            "edit.redo" if crate::margin::marks::step(self, false) => {}
             "edit.undo" => self.undo(),
             "edit.redo" => self.redo(),
             "edit.find" => {

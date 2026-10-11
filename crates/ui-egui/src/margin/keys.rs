@@ -529,8 +529,9 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         if view.selected_text().is_some() {
             stack.push(node("Selection", &[("selection", "text")]));
         }
-        // A comment picked on the page or in the Highlights tab: its delete and colour keys.
-        if view.comments.selected.is_some() {
+        // A mark picked on the page or in the Highlights tab (a PDF comment or one kept in the
+        // sidecar): its delete and colour keys.
+        if view.comments.selected.is_some() || view.margin.marks.selected.is_some() {
             stack.push(node("Annotation", &[]));
         }
     }
@@ -785,7 +786,7 @@ mod tests {
     }
 
     /// The ids `margin::run` (the reader chrome, reading state and library) handles.
-    const CHROME_COMMANDS: [&str; 11] = [
+    const CHROME_COMMANDS: [&str; 18] = [
         "view.focus_mode.toggle",
         "view.sidebar.toggle",
         "view.sidebar.tab",
@@ -797,6 +798,13 @@ mod tests {
         "app.stats",
         "annotation.delete",
         "annotation.color",
+        "note.add",
+        "note.edit",
+        "note.delete",
+        "note.next",
+        "note.prev",
+        "note.list",
+        "reader.save_with_highlights",
     ];
 
     /// Every id the built-in keymap binds is one the app runs.
