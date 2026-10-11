@@ -431,6 +431,8 @@ mod tests {
             (json!({ "notes": { "colors": [{ "name": "x".repeat(65), "rgb": [0, 0, 0] }] } }), false),
             // A relative vault is a valid string; the notes panel reports it instead of using it.
             (json!({ "notes": { "vault": "relative" } }), true),
+            (json!({ "library": { "metadata_lookup": true } }), true),
+            (json!({ "library": { "metadata_lookup": "yes" } }), false),
         ];
         for (fixture, valid) in fixtures {
             assert_eq!(validator.is_valid(&fixture), valid, "schema on {fixture}");

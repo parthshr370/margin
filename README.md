@@ -152,6 +152,9 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   and adds an image embed and PDF page link to the reading note.
 - With **Add highlights to this note** on, every highlight change (new, edited, recoloured,
   deleted) reaches the note in the background; a write that changes nothing says nothing.
+- Highlights and page notes kept in the sidecar (a read-only or signed PDF) go to the note and to
+  every export as the PDF's own do, after them on each page; a page note has no quote and takes
+  the palette's Note colour.
 - Configure the vault, reading-note path, front matter, header, highlight template, palette and
   export target in the live-reloaded `notes` block of `settings.jsonc`, or in Settings ▸ Notes.
   The vault and notes settings of an older Margin move from its saved state into
