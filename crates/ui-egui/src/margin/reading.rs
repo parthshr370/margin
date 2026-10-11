@@ -41,7 +41,11 @@ const MAX_ZOOM_PERCENT: f32 = MAX_ZOOM * PERCENT;
 const X_RANGE: std::ops::RangeInclusive<f32> = -1.0..=2.0;
 const PERCENT: f32 = 100.0;
 /// Page bookmarks kept per document (the sidecar is untrusted input).
-const MAX_BOOKMARKS: usize = 10_000;
+pub const MAX_BOOKMARKS: usize = 10_000;
+/// The longest bookmark name kept, in characters.
+const MAX_BOOKMARK_NAME: usize = 200;
+/// The width share a bookmark keeps when the sideways place isn't known: the page's middle.
+const CENTRE: f32 = 0.5;
 /// The `format` of a PDF's sidecar.
 const DOC_FORMAT: &str = "pdf";
 /// The `[doc]` keys "Set as default" copies, per Display popover row.
@@ -58,6 +62,10 @@ pub struct DocReading {
     pub bookmarks: Vec<Bookmark>,
     /// The page text the Highlights tab's cards quote.
     pub(crate) quotes: super::highlights::Quotes,
+    /// The Highlights tab's search, filters and laid-out list.
+    pub(crate) list: super::highlights::List,
+    /// Highlights and page notes kept in the sidecar (`margin::marks`).
+    pub(crate) marks: super::marks::Marks,
     /// A new search's first match, kept on the reading page (`margin::find`).
     pub(crate) find_pick: Option<super::find::AutoPick>,
     /// The horizontal half of a pending `goto`: the share of the page's width to put at the
@@ -126,6 +134,8 @@ struct Snapshot {
     view: Map<String, Value>,
     trim: TrimRecord,
     bookmarks: Vec<Bookmark>,
+    /// `Marks::generation`: sidecar highlights, page notes and tombstones.
+    marks: u64,
     auto_add: bool,
 }
 
@@ -153,6 +163,7 @@ impl Snapshot {
             && self.view == other.view
             && self.trim == other.trim
             && self.bookmarks == other.bookmarks
+            && self.marks == other.marks
             && self.auto_add == other.auto_add
     }
 }
@@ -183,11 +194,22 @@ pub enum SaveStatus {
     /// Autosave couldn't write this change: still in the document, unsaved.
     Failed,
     /// Can't be changed or saved in place: PdfCraft opened it read-only
-    /// (`Document::read_only_reason`) or the file itself is read-only.
-    ReadOnly { dirty: bool },
+    /// (`Document::read_only_reason`) or the file or its folder is read-only.
+    ReadOnly { dirty: bool, marks: MarksKept },
     /// Signed: Margin never writes it unasked; Save adds an incremental update, which keeps the
     /// signatures valid.
-    Signed { dirty: bool },
+    Signed { dirty: bool, marks: MarksKept },
+}
+
+/// Where the text marks of a PDF Margin doesn't write go (`margin::marks`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarksKept {
+    /// Into the PDF, like any edit: nothing is kept beside it.
+    InPdf,
+    /// Into its sidecar; `any`: the sidecar holds highlights or notes a copy can take.
+    Beside { any: bool },
+    /// Nowhere: its sidecar was written by a newer Margin or can't be read.
+    Refused,
 }
 
 /// The Display popover rows "Set as default" belongs to.
@@ -217,6 +239,12 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
         Found::Sidecar { sidecar, path } => (*sidecar, Some(path), None),
         Found::Locked { path, reason } => (Sidecar::new(), Some(path), Some(reason)),
     };
+    // A sidecar from a newer Margin is never written, but the highlights and notes this
+    // version can read still show, read-only.
+    let newer = match (&locked, &path) {
+        (Some(_), Some(path)) => store::read(path).ok().flatten(),
+        _ => None,
+    };
     let settings = match (&file.settings, &path) {
         (Some(layer), Some(path)) => {
             let loaded = defaults.with_layer(layer, &path.display().to_string());
@@ -233,10 +261,17 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
         go(view, spot);
     }
     let generation = doc.edit_generation();
+    let beside = document.as_deref().and_then(|path| super::marks::beside_reason(doc, path));
+    let refused = match (&document, &locked) {
+        (None, _) => Some("it has no file yet".to_owned()),
+        (Some(_), Some(reason)) => Some(format!("its sidecar can't be changed: {}", reason.trim_end_matches("; it is not changed"))),
+        (Some(_), None) => None,
+    };
     let reading = &mut view.margin;
+    reading.marks = super::marks::Marks::load(newer.as_ref().or(Some(&file)), beside, refused);
     reading.bookmarks = file.bookmarks.iter().take(MAX_BOOKMARKS).cloned().collect();
     reading.bookmarks.sort_by_key(|bookmark| bookmark_page(bookmark).unwrap_or(usize::MAX));
-    let file_read_only = doc.path.as_ref().and_then(|path| std::fs::metadata(path).ok()).is_some_and(|meta| meta.permissions().readonly());
+    let file_read_only = document.as_deref().is_some_and(super::marks::path_unwritable);
     reading.autosave = Autosave { opened: generation, seen: generation, file_read_only, ..Autosave::default() };
     reading.pages = pages;
     reading.history.exact = true;
@@ -442,27 +477,87 @@ pub fn bookmark_page(bookmark: &Bookmark) -> Option<usize> {
     }
 }
 
-/// `reader.bookmark.toggle`: bookmark the current page, or remove its bookmark. True when added.
-pub fn toggle_bookmark(view: &mut DocView) -> bool {
+/// What `reader.bookmark.toggle` did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BookmarkToggle {
+    Added,
+    Removed,
+    /// Not added: the document has [`MAX_BOOKMARKS`] already.
+    Full,
+}
+
+impl BookmarkToggle {
+    /// What to tell the reader about page `page_number` (1-based).
+    pub fn message(self, page_number: usize) -> String {
+        match self {
+            Self::Added => format!("Bookmarked page {page_number}"),
+            Self::Removed => format!("Removed the bookmark on page {page_number}"),
+            Self::Full => format!("Can't bookmark page {page_number}: this document already has {MAX_BOOKMARKS} bookmarks"),
+        }
+    }
+}
+
+/// `reader.bookmark.toggle`: bookmark the current page at the reading spot, or remove its
+/// bookmark.
+pub fn toggle_bookmark(view: &mut DocView) -> BookmarkToggle {
     let page = view.current;
-    let bookmarks = &mut view.margin.bookmarks;
-    if let Some(i) = bookmarks.iter().position(|bookmark| bookmark_page(bookmark) == Some(page)) {
-        bookmarks.remove(i);
-        return false;
+    if let Some(id) = view.margin.bookmarks.iter().find(|bookmark| bookmark_page(bookmark) == Some(page)).map(|b| b.id.clone()) {
+        remove_bookmark(view, &id);
+        return BookmarkToggle::Removed;
     }
-    if bookmarks.len() >= MAX_BOOKMARKS {
-        return false;
+    if view.margin.bookmarks.len() >= MAX_BOOKMARKS {
+        return BookmarkToggle::Full;
     }
+    // The exact spot when the window's top is on this page; else the page's top.
+    let here = spot(view);
+    let at = if here.page == page { [f64::from(here.x.unwrap_or(CENTRE)), f64::from(here.y)] } else { [f64::from(CENTRE), 0.0] };
     let bookmark = Bookmark {
         id: store::new_ulid(),
-        locator: Locator::Pdf { page: u32::try_from(page).unwrap_or(u32::MAX), quads: Vec::new(), at: None },
+        locator: Locator::Pdf { page: u32::try_from(page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some(at) },
         name: String::new(),
+        modified: None,
         created: store::now_rfc3339(),
         extra: Map::new(),
     };
-    let at = bookmarks.partition_point(|other| bookmark_page(other).is_some_and(|p| p < page));
-    bookmarks.insert(at, bookmark);
-    true
+    let bookmarks = &mut view.margin.bookmarks;
+    let index = bookmarks.partition_point(|other| bookmark_page(other).is_some_and(|p| p < page));
+    bookmarks.insert(index, bookmark);
+    BookmarkToggle::Added
+}
+
+/// Remove bookmark `id`, leaving a tombstone so another writer's copy doesn't bring it back.
+pub fn remove_bookmark(view: &mut DocView, id: &str) {
+    let reading = &mut view.margin;
+    let before = reading.bookmarks.len();
+    reading.bookmarks.retain(|bookmark| bookmark.id != id);
+    if reading.bookmarks.len() != before {
+        reading.marks.bookmark_removed(id);
+    }
+}
+
+/// Name bookmark `id` `name` ("" shows its section again).
+pub fn rename_bookmark(view: &mut DocView, id: &str, name: &str) {
+    let name: String = name.trim().chars().take(MAX_BOOKMARK_NAME).collect();
+    if let Some(bookmark) = view.margin.bookmarks.iter_mut().find(|bookmark| bookmark.id == id && bookmark.name != name) {
+        bookmark.name = name;
+        bookmark.modified = Some(store::now_rfc3339());
+    }
+}
+
+/// Go to bookmark `id`: the spot it was added at, or its page's top for one without.
+pub fn go_to_bookmark(view: &mut DocView, id: &str) {
+    let Some(bookmark) = view.margin.bookmarks.iter().find(|bookmark| bookmark.id == id) else { return };
+    let Some(page) = bookmark_page(bookmark).filter(|page| *page < view.margin.pages) else { return };
+    let at = match bookmark.locator {
+        Locator::Pdf { at: Some([x, y]), .. } if x.is_finite() && y.is_finite() => Some((x as f32, y as f32)),
+        _ => None,
+    };
+    let here = view.here();
+    view.remember(here);
+    view.current = page;
+    view.page_input = (page + 1).to_string();
+    let (x, y) = at.map_or((None, 0.0), |(x, y)| (Some(x).filter(|x| X_RANGE.contains(x)), y.clamp(0.0, 1.0)));
+    go(view, Spot { page, y, x });
 }
 
 /// `view.trim.toggle`: trim on or off, keeping the reader's place.
@@ -503,7 +598,9 @@ fn view_layer(view: &DocView) -> Map<String, Value> {
 
 fn snapshot(view: &DocView, auto_add: bool) -> Snapshot {
     let Spot { page, y, x } = spot(view);
-    Snapshot { page, at: y, x, view: view_layer(view), trim: TrimRecord::of(&view.margin.trim), bookmarks: view.margin.bookmarks.clone(), auto_add }
+    let reading = &view.margin;
+    let (trim, bookmarks, marks) = (TrimRecord::of(&reading.trim), reading.bookmarks.clone(), reading.marks.generation());
+    Snapshot { page, at: y, x, view: view_layer(view), trim, bookmarks, marks, auto_add }
 }
 
 /// Every frame, after renders arrive: keep places, write sidecars and autosave (Margin only).
@@ -596,11 +693,17 @@ pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
     let Some(view) = app.views.get(index) else { return SaveStatus::Saved { autosave: autosave_on } };
     let Some(doc) = app.session.get(view.id) else { return SaveStatus::Saved { autosave: autosave_on } };
     let state = &view.margin.autosave;
+    let marks = &view.margin.marks;
+    let kept = match (marks.beside(), marks.refused()) {
+        (_, Some(_)) => MarksKept::Refused,
+        (Some(_), None) => MarksKept::Beside { any: marks.has_marks() },
+        (None, None) => MarksKept::InPdf,
+    };
     if doc.read_only_reason.is_some() || state.file_read_only {
-        return SaveStatus::ReadOnly { dirty: doc.dirty };
+        return SaveStatus::ReadOnly { dirty: doc.dirty, marks: kept };
     }
     if doc.is_signed() {
-        return SaveStatus::Signed { dirty: doc.dirty };
+        return SaveStatus::Signed { dirty: doc.dirty, marks: kept };
     }
     let autosave = autosave_on && autosave_possible(doc, state);
     let generation = doc.edit_generation();
@@ -630,8 +733,9 @@ fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, now: f64, fl
     if view.margin.sidecar.is_none() {
         return Step::Idle;
     }
-    let snap = snapshot(view, auto_add);
-    let Some(file) = view.margin.sidecar.as_mut() else { return Step::Idle };
+    let mut snap = snapshot(view, auto_add);
+    let reading = &mut view.margin;
+    let Some(file) = reading.sidecar.as_mut() else { return Step::Idle };
     let Some(saved) = &file.saved else {
         // The first frame: the state as opened, never written for itself.
         file.saved = Some(snap);
@@ -649,7 +753,7 @@ fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, now: f64, fl
     if !flush && now - since < DEBOUNCE_SECS {
         return Step::WakeAt(since + DEBOUNCE_SECS);
     }
-    let result = write_sidecar(file, &snap, doc);
+    let result = write_sidecar(file, &mut snap, doc, Records { marks: &mut reading.marks, bookmarks: &mut reading.bookmarks });
     // Either way this state is done: a failure is reported once, the next change retries.
     file.saved = Some(snap);
     file.pending = None;
@@ -663,9 +767,41 @@ fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, now: f64, fl
     }
 }
 
-/// Write `snap` into the sidecar, keeping everything else in it. Returns what to tell the reader
-/// when it newly went to the data folder because the document's folder can't be written.
-fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Result<Option<String>, String> {
+/// The records a sidecar write carries besides the reading state; a write that merges another
+/// writer's copy puts the merged records back.
+struct Records<'a> {
+    marks: &'a mut super::marks::Marks,
+    bookmarks: &'a mut Vec<Bookmark>,
+}
+
+/// The sidecar on disk as `file` must take it into account before writing over it: `Ok(None)`
+/// when it is the copy last read or written (or gone), `Ok(Some(theirs))` when another writer
+/// saved it since, and an error when it must be left alone (a newer Margin wrote it, or it can't
+/// be read any more).
+fn on_disk(file: &SidecarFile) -> Result<Option<Sidecar>, String> {
+    let Some(path) = file.path.as_deref() else { return Ok(None) };
+    match store::read(path)? {
+        Some(theirs) if theirs.version > store::SIDECAR_VERSION => {
+            Err(format!("{} was written by a newer Margin (version {}) since it was opened; it is not changed", path.display(), theirs.version))
+        }
+        Some(theirs) if theirs.revision > file.file.revision => Ok(Some(theirs)),
+        Some(_) | None => Ok(None),
+    }
+}
+
+/// Write `snap` and `records` into the sidecar, keeping everything else in it, merged with
+/// what another writer saved there since (`margin_config::marks::merge`): `snap` and `records`
+/// then hold the merged records. Returns what to tell the reader when it newly went to the data
+/// folder because the document's folder can't be written.
+fn write_sidecar(file: &mut SidecarFile, snap: &mut Snapshot, doc: &Document, records: Records<'_>) -> Result<Option<String>, String> {
+    let theirs = match on_disk(file) {
+        Ok(theirs) => theirs,
+        Err(reason) => {
+            records.marks.refuse(format!("its sidecar can't be changed: {}", reason.trim_end_matches("; it is not changed")));
+            file.locked = Some(reason.clone());
+            return Err(reason);
+        }
+    };
     let mut out = file.file.clone();
     let fingerprint = store::fingerprint(&doc.bytes);
     let pages = doc.info.pages.len();
@@ -725,6 +861,16 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
     out.obsidian =
         (snap.auto_add || old.is_some()).then(|| SidecarObsidian { auto_add: snap.auto_add, extra: old.map(|o| o.extra).unwrap_or_default() });
     out.bookmarks = snap.bookmarks.clone();
+    records.marks.write_into(&mut out);
+    if let Some(theirs) = &theirs {
+        margin_config::marks::merge(&mut out, theirs);
+        out.bookmarks.sort_by_key(|bookmark| bookmark_page(bookmark).unwrap_or(usize::MAX));
+        out.bookmarks.truncate(MAX_BOOKMARKS);
+        records.marks.adopt(&out);
+        records.bookmarks.clone_from(&out.bookmarks);
+        snap.bookmarks.clone_from(&out.bookmarks);
+        snap.marks = records.marks.generation();
+    }
     let written = store::write(&mut out, &file.document, &fingerprint, file.data.as_deref(), file.path.as_deref())?;
     let beside = store::beside_path(&file.document);
     let moved = (file.path.as_ref() != Some(&written) && beside.as_ref() != Some(&written))
@@ -754,8 +900,9 @@ pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) 
     let Some(view) = app.views.get_mut(index) else { return Ok(()) };
     let Some(doc) = app.session.get(view.id) else { return Ok(()) };
     let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-    let snap = snapshot(view, auto_add);
-    let Some(file) = view.margin.sidecar.as_mut() else { return Ok(()) };
+    let mut snap = snapshot(view, auto_add);
+    let reading = &mut view.margin;
+    let Some(file) = reading.sidecar.as_mut() else { return Ok(()) };
     if let Some(reason) = &file.locked {
         return Err(reason.clone());
     }
@@ -767,7 +914,7 @@ pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) 
         extra: Map::new(),
     });
     progress.finished = finished;
-    write_sidecar(file, &snap, doc)?;
+    write_sidecar(file, &mut snap, doc, Records { marks: &mut reading.marks, bookmarks: &mut reading.bookmarks })?;
     file.saved = Some(snap);
     file.pending = None;
     Ok(())

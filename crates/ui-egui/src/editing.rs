@@ -30,6 +30,10 @@ pub enum SaveTarget {
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
+        // Margin keeps text marks of a PDF it can't write in the document's sidecar.
+        if let Some(kept) = crate::margin::marks::take_edit(self, &edit) {
+            return kept;
+        }
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
         match self.session.apply(id, edit.clone()) {

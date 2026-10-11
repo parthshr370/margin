@@ -356,6 +356,11 @@ impl Document {
         self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l.as_str())
     }
 
+    /// How many steps Undo can take back (an embedder interleaving its own undo history).
+    pub fn undo_depth(&self) -> usize {
+        self.editor.as_ref().map_or(0, |e| e.undo.len())
+    }
+
     pub fn editable(&self) -> bool {
         self.editor.is_some()
     }

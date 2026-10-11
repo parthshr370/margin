@@ -1,11 +1,13 @@
 //! What the footer says about saving (R8 QoL 7): the real state from `reading::save_status`,
-//! why a document isn't saved, and the PdfCraft command that helps (`file.save`,
-//! `file.save_as`). Presentation only: saving itself is PdfCraft's Save and Margin's autosave.
+//! why a document isn't saved, where the highlights of a PDF Margin doesn't write are kept, and
+//! the command that helps (`file.save`, `file.save_as`, "Save a copy with highlights").
+//! Presentation only: saving itself is PdfCraft's Save, Margin's autosave and `margin::marks`.
 
 use egui::{Align, Layout};
 
 use super::look;
-use super::reading::SaveStatus;
+use super::marks::SAVE_COPY_ID;
+use super::reading::{MarksKept, SaveStatus};
 use crate::theme::{self, Tokens};
 
 /// The status text's size, as the rest of the footer.
@@ -53,27 +55,50 @@ pub(crate) fn line(status: SaveStatus, why: &Context<'_>) -> SaveLine {
             None,
             vec![("Save", "file.save"), ("Save as…", "file.save_as")],
         ),
-        SaveStatus::ReadOnly { dirty } => {
+        SaveStatus::ReadOnly { dirty, marks } => {
             let reason = match why.read_only_reason {
                 Some(reason) => format!("This PDF opened read-only ({reason}), so it can't be changed or saved in place"),
                 None => "The PDF file is read-only, so Margin can't save into it; Save as writes a copy".to_owned(),
             };
-            let buttons = if dirty { vec![("Save as…", "file.save_as")] } else { vec![] };
-            ("Read-only".to_owned(), reason, dirty, None, buttons)
+            let mut buttons = copy_button(marks);
+            if dirty {
+                buttons.push(("Save as…", "file.save_as"));
+            }
+            ("Read-only".to_owned(), format!("{reason}{}", marks_kept(marks)), dirty, None, buttons)
         }
-        SaveStatus::Signed { dirty } => {
+        SaveStatus::Signed { dirty, marks } => {
             let tip = format!(
-                "This PDF is signed, so Margin doesn't save it by itself. {} adds your changes as an incremental update, which keeps the signatures valid",
-                key.unwrap_or("Save")
+                "This PDF is signed, so Margin doesn't save it by itself. {} adds your changes as an incremental update, which keeps the signatures valid{}",
+                key.unwrap_or("Save"),
+                marks_kept(marks)
             );
             if dirty {
-                (with_key("Signed · Unsaved"), tip, true, Some("file.save"), vec![])
+                (with_key("Signed · Unsaved"), tip, true, Some("file.save"), copy_button(marks))
             } else {
-                ("Signed".to_owned(), tip, false, None, vec![])
+                ("Signed".to_owned(), tip, false, None, copy_button(marks))
             }
         }
     };
     SaveLine { text, tip, alert, click, buttons }
+}
+
+/// Where the highlights of a PDF Margin doesn't write go, for the tooltip.
+fn marks_kept(marks: MarksKept) -> &'static str {
+    match marks {
+        MarksKept::InPdf => "",
+        MarksKept::Beside { .. } => {
+            ". Your highlights and notes are kept beside it, in its sidecar file; Save copy writes them into a new PDF as real annotations"
+        }
+        MarksKept::Refused => ". Highlights and notes can't be kept: its sidecar was written by a newer Margin or can't be read",
+    }
+}
+
+/// "Save copy…" when the sidecar holds highlights or notes a copy can take.
+fn copy_button(marks: MarksKept) -> Vec<(&'static str, &'static str)> {
+    match marks {
+        MarksKept::Beside { any: true } => vec![("Save copy…", SAVE_COPY_ID)],
+        MarksKept::Beside { any: false } | MarksKept::InPdf | MarksKept::Refused => Vec::new(),
+    }
 }
 
 /// Why Margin isn't saving this document by itself.
@@ -137,13 +162,25 @@ mod tests {
         let failed = line(SaveStatus::Failed, &why(true));
         assert_eq!(failed.buttons, [("Save", "file.save"), ("Save as…", "file.save_as")]);
         assert!(failed.alert);
-        let read_only = line(SaveStatus::ReadOnly { dirty: true }, &Context { read_only_reason: Some("encrypted"), ..why(true) });
+        let read_only =
+            line(SaveStatus::ReadOnly { dirty: true, marks: MarksKept::InPdf }, &Context { read_only_reason: Some("encrypted"), ..why(true) });
         assert_eq!(read_only.text, "Read-only");
         assert!(read_only.tip.contains("encrypted"));
         assert_eq!(read_only.buttons, [("Save as…", "file.save_as")]);
-        let signed = line(SaveStatus::Signed { dirty: false }, &why(true));
+        let signed = line(SaveStatus::Signed { dirty: false, marks: MarksKept::InPdf }, &why(true));
         assert_eq!(signed.text, "Signed");
         assert!(signed.tip.contains("signatures valid") && signed.click.is_none() && signed.buttons.is_empty());
-        assert_eq!(line(SaveStatus::Signed { dirty: true }, &why(true)).click, Some("file.save"));
+        assert_eq!(line(SaveStatus::Signed { dirty: true, marks: MarksKept::InPdf }, &why(true)).click, Some("file.save"));
+    }
+
+    #[test]
+    fn highlights_kept_beside_the_pdf_are_said_and_offer_a_copy() {
+        let beside = line(SaveStatus::ReadOnly { dirty: false, marks: MarksKept::Beside { any: true } }, &why(true));
+        assert!(beside.tip.contains("kept beside it"), "{}", beside.tip);
+        assert_eq!(beside.buttons, [("Save copy…", SAVE_COPY_ID)]);
+        let nothing_yet = line(SaveStatus::Signed { dirty: false, marks: MarksKept::Beside { any: false } }, &why(true));
+        assert!(nothing_yet.tip.contains("kept beside it") && nothing_yet.buttons.is_empty());
+        let refused = line(SaveStatus::ReadOnly { dirty: false, marks: MarksKept::Refused }, &why(true));
+        assert!(refused.tip.contains("can't be kept") && refused.buttons.is_empty(), "{}", refused.tip);
     }
 }
