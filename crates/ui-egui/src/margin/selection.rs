@@ -87,7 +87,7 @@ enum Action {
 /// area). Called after the page is drawn, so the selection and the page positions are this
 /// frame's.
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) {
-    if !app.margin_keys.settings().reader.selection_popover || app.margin_chrome.focus_mode {
+    if !app.margin_keys.settings().reader.selection_popover {
         return;
     }
     let Some(view) = app.views.get_mut(i) else { return };

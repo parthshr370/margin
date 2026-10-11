@@ -130,7 +130,7 @@ pub(crate) fn drive(app: &mut PdfCraftApp, ctx: &Context) {
 
 /// The previous screen edge follows the page, rather than staying fixed over new text.
 pub(crate) fn show_marker(app: &PdfCraftApp, index: usize, ui: &egui::Ui) {
-    if !app.margin_keys.settings().view.overlap_marker || app.margin_chrome.focus_mode {
+    if !app.margin_keys.settings().view.overlap_marker {
         return;
     }
     let Some(view) = app.views.get(index) else { return };
