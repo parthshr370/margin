@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/margin/screenshots/reader-display.png" alt="The Margin reader with a two-column paper open, the Contents sidebar on the left, the annotate rail beside the page and the Display popover showing the Paper, Sepia, Night, Ink and Mono page colours" width="100%">
+  <img src="docs/margin/screenshots/reader-display.png" alt="The Margin reader with 'Attention Is All You Need' open in the Night page colour, the Contents sidebar on the left, the annotate rail beside the page and the Display popover showing the Paper, Sepia, Night, Ink and Mono page colours" width="100%">
 </p>
 
 Margin is a desktop PDF reader for papers, books and long documents. It opens into your library,

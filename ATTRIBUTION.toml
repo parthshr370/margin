@@ -2849,8 +2849,8 @@ source = "this repository"
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "image"
-usage = "Margin README screenshots. Shows only Margin UI (Inter, Lucide icons) and the synthetic corpus PDF paper2col.pdf (standard-14 Helvetica via hayro's substitute fonts); no ArtCraft marks"
-sha256 = "2ba9362bc905d005d8a71f0ce3e143ca3cc0c4038faf926b6e13b06f2ef25fd3"
+usage = "Margin README hero screenshot. Shows Margin UI (Inter, Lucide icons) with the first page of 'Attention Is All You Need' (arXiv:1706.03762, Vaswani et al.) open, shown as a scholarly reading example under the paper's own attribution notice; no ArtCraft marks"
+sha256 = "7b584eb378ea0e92b641bc95aa414052f13b706a29d2d5e9565f5e3f13d1fedb"
 
 [[asset]]
 path = "docs/margin/screenshots/stats.png"
