@@ -125,7 +125,9 @@ fn markdown_export_writes_a_root_confined_note_atomically() {
     let doc = ok(&mut automation, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let result = ok(&mut automation, "doc_export_markdown", json!({ "doc": doc, "path": "out/note.md" }));
     let note = std::fs::read_to_string(dir.join("out/note.md")).unwrap();
-    assert_eq!(result["path"], dir.join("out/note.md").to_string_lossy().as_ref());
+    // The tool reports the resolved path (macOS's temp folder is behind the /private symlink).
+    let written = dir.join("out/note.md").canonicalize().unwrap();
+    assert_eq!(result["path"], written.to_string_lossy().as_ref());
     assert!(note.contains("Page 1"), "{note}");
     assert!(result["images"].as_array().is_some_and(Vec::is_empty));
     assert!(matches!(automation.call("doc_export_markdown", &json!({ "doc": doc, "path": "../outside.md" })), Err(ToolError::Failed(_))));

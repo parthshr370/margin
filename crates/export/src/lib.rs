@@ -849,17 +849,34 @@ mod tests {
 
     #[test]
     fn markdown_writes_headings_tables_lists_and_separate_images() {
+        // The heading and list sit on a page of their own: upstream's table detection takes a
+        // block whose left edge lines up with the grid's first column into the table.
+        let mut prose = Page { width: 612.0, height: 792.0, ..Page::default() };
+        prose.blocks.push(Block {
+            text: "A heading".into(),
+            rect: [72.0, 700.0, 300.0, 730.0],
+            size: 22.0,
+            bold: true,
+            italic: false,
+            color: [0.0; 3],
+        });
+        prose.blocks.push(Block {
+            text: "• item".into(),
+            rect: [72.0, 480.0, 300.0, 491.0],
+            size: 11.0,
+            bold: false,
+            italic: false,
+            color: [0.0; 3],
+        });
         let mut p = table_page();
-        p.blocks.push(Block { text: "A heading".into(), rect: [72.0, 700.0, 300.0, 730.0], size: 22.0, bold: true, italic: false, color: [0.0; 3] });
-        p.blocks.push(Block { text: "• item".into(), rect: [72.0, 480.0, 300.0, 491.0], size: 11.0, bold: false, italic: false, color: [0.0; 3] });
         p.images.push(Image { ext: "png", bytes: vec![1, 2, 3], rect: [72.0, 400.0, 100.0, 430.0] });
-        let standard = markdown(vec![p.clone()], &PLAIN).unwrap();
+        let standard = markdown(vec![prose.clone(), p.clone()], &PLAIN).unwrap();
         assert!(standard.text.contains("## A heading"), "{}", standard.text);
         assert!(standard.text.contains("| Meter | Unit | Reading |"), "{}", standard.text);
         assert!(standard.text.contains("- item\n\n"), "a blank line closes the list: {}", standard.text);
         assert!(standard.text.contains("![image](<image-0001.png>)"), "{}", standard.text);
         assert_eq!(standard.images, [("image-0001.png".into(), vec![1, 2, 3])]);
-        let obsidian = markdown(vec![p], &MarkdownOptions { obsidian: true, image_prefix: "paper-", ..PLAIN }).unwrap();
+        let obsidian = markdown(vec![prose, p], &MarkdownOptions { obsidian: true, image_prefix: "paper-", ..PLAIN }).unwrap();
         assert!(obsidian.text.contains("![[paper-image-0001.png]]"), "{}", obsidian.text);
         assert_eq!(obsidian.images, [("paper-image-0001.png".into(), vec![1, 2, 3])]);
     }
