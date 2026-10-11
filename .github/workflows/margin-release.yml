@@ -78,7 +78,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
-            desktop-file-utils appstream zsync
+            desktop-file-utils appstream zsync rpm
           curl -fsSL -o "$RUNNER_TEMP/nfpm.deb" \
             "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${{ matrix.deb }}.deb"
           sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
@@ -86,8 +86,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: margin-release-linux-${{ matrix.arch }}
-      - name: Fetch verified OCR models and licences
-        run: cargo xtask models
       - name: Build and package (AppImage, deb, rpm, tar.gz)
         run: packaging/margin/linux/package.sh
       - name: Check the packages
@@ -95,15 +93,28 @@ jobs:
           dpkg-deb --info dist/release/*.deb
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/margin$|metainfo|applications|hicolor/512x512'
           ldd target/release/margin
-          for model in text-detection.rten text-recognition.rten; do
-            test -s "target/margin-linux-package/root/usr/share/margin/models/$model"
-            test -s "target/margin-linux-package/root/usr/share/margin/models/$model.LICENCE.txt"
-          done
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
             APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version | grep -Fx "margin $MARGIN_VERSION"
             "$appimage" --appimage-updateinformation | grep -F 'gh-releases-zsync|'
             test -s "$appimage.zsync"
+          done
+          # Every format ships the OCR models, their CC-BY-SA licence texts and the attribution.
+          # The tarball's tree has no usr/ (bin/, share/), so match from share/ on.
+          lists="$RUNNER_TEMP/package-lists"
+          mkdir -p "$lists"
+          dpkg-deb --contents dist/release/*.deb >"$lists/deb"
+          rpm -qlp dist/release/*.rpm >"$lists/rpm"
+          tar -tzf dist/release/*.tar.gz >"$lists/tar"
+          for appimage in dist/release/*.AppImage; do
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null && find squashfs-root)
+          done >"$lists/appimage"
+          for list in "$lists"/*; do
+            for file in margin/models/text-detection.rten margin/models/text-detection.rten.LICENCE.txt \
+              margin/models/text-recognition.rten margin/models/text-recognition.rten.LICENCE.txt \
+              doc/margin/NOTICE doc/margin/ATTRIBUTION.md; do
+              grep -Eq "/share/$file\$" "$list" || { echo "::error::${list##*/} lacks share/$file"; exit 1; }
+            done
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -126,8 +137,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: margin-release-macos-universal
-      - name: Fetch verified OCR models and licences
-        run: cargo xtask models
       - name: Build, sign ad-hoc, make the DMG
         run: packaging/margin/macos/package.sh --arch universal
       - name: Check the DMG
@@ -141,6 +150,9 @@ jobs:
           for model in text-detection.rten text-recognition.rten; do
             cmp "assets/models/$model" "$mnt/Margin.app/Contents/Resources/models/$model"
             cmp "assets/models/$model.LICENCE.txt" "$mnt/Margin.app/Contents/Resources/models/$model.LICENCE.txt"
+          done
+          for file in NOTICE ATTRIBUTION.md; do
+            test -s "$mnt/Margin.app/Contents/Resources/$file"
           done
           # The signature survived packaging. Not --strict: the HFS image that makehybrid builds
           # reports com.apple.FinderInfo attributes on files in the bundle, which --strict calls detritus;

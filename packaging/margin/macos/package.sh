@@ -9,6 +9,8 @@
 # Margin.icns from apps/margin/assets/margin-macos-1024.png (sips and iconutil, both part of
 # macOS) and signs ad-hoc by default. Margin is not notarized, so on another Mac Gatekeeper
 # asks the user to allow it once (right-click > Open, or System Settings > Privacy & Security).
+# The OCR models go in Contents/Resources/models (`cargo xtask models` fetches and verifies them
+# with curl on the first run).
 #
 # Signing (env):
 #   MACOS_SIGN_IDENTITY   codesign identity (name or SHA-1). Default "-" = ad-hoc.
@@ -24,7 +26,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
-    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
