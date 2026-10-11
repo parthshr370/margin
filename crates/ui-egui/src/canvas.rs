@@ -635,6 +635,14 @@ impl DocView {
         self.panel_drag = None;
     }
 
+    /// The document now reads from a file Margin itself just wrote in full (a repaired file's
+    /// first save): the same pages and text, served by a new renderer. The renders asked of the
+    /// old one are asked again next frame; the selection, find matches, pending jumps and the
+    /// pixels already drawn stay, because nothing the reader sees changed.
+    pub(crate) fn renderer_replaced(&mut self) {
+        self.last_queue.clear();
+    }
+
     /// Pages an organize command acts on: the selection, or the current page.
     pub fn target_pages(&self) -> Vec<usize> {
         if self.selected.is_empty() { vec![self.current] } else { self.selected.iter().copied().collect() }

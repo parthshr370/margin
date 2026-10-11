@@ -18,7 +18,9 @@ use std::sync::LazyLock;
 
 use egui::{Event, Key, Modifiers};
 use margin_config::resolve::{self, Outcome};
-use margin_config::{CompileOptions, Compiled, CompiledKeymap, ContextNode, KeymapBase, KeymapSource, Os, Problem, Registry, Settings, Severity};
+use margin_config::{
+    CompileOptions, Compiled, CompiledKeymap, ContextNode, KeymapBase, KeymapSource, LoadedSettings, Os, Problem, Registry, Settings, Severity,
+};
 use pdfcraft_engine::commands::{self, CommandSpec, Shortcut};
 use serde_json::Value;
 
@@ -86,6 +88,25 @@ struct Loaded {
     /// First keystrokes some binding or unbind uses.
     bound_strokes: HashSet<String>,
     watch: Option<SettingsWatch>,
+    /// What the files said at the last load; `None` without a config folder.
+    files: Option<Files>,
+}
+
+/// `settings.jsonc` and `keymap.jsonc` as read from `<config>`. A change event that leaves them
+/// saying the same (Margin's own write, which [`reload_now`] applied as it was made) reloads
+/// nothing, so it can't reset a chord in progress or cover a message with "reloaded".
+#[derive(PartialEq)]
+struct Files {
+    settings: LoadedSettings,
+    /// The keymap's text, `None` without one, or why it couldn't be read.
+    keymap: Result<Option<String>, String>,
+}
+
+impl Files {
+    fn read(dir: &Path) -> Self {
+        let keymap = margin_config::read_capped(&dir.join(margin_config::KEYMAP_FILE), margin_config::MAX_SETTINGS_BYTES);
+        Self { settings: Settings::load(dir), keymap }
+    }
 }
 
 impl MarginKeys {
@@ -210,21 +231,32 @@ impl Loaded {
             bound_ids: HashSet::new(),
             bound_strokes: HashSet::new(),
             watch,
+            files: None,
         };
         let problems = loaded.reload();
         (loaded, problems)
     }
 
     fn reload(&mut self) -> Vec<Problem> {
+        let files = self.dir.as_deref().map(Files::read);
+        self.apply(files)
+    }
+
+    /// After a change event: reloads unless the files say what they said at the last load.
+    /// `None` when nothing changed.
+    fn reload_if_changed(&mut self) -> Option<Vec<Problem>> {
+        let files = self.dir.as_deref().map(Files::read);
+        (files != self.files).then(|| self.apply(files))
+    }
+
+    fn apply(&mut self, files: Option<Files>) -> Vec<Problem> {
         let mut problems = Vec::new();
-        let mut user_keymap: Option<(String, String)> = None;
-        if let Some(dir) = &self.dir {
-            let loaded = Settings::load(dir);
-            self.settings = loaded.settings;
-            problems = loaded.problems;
-            let path = dir.join(margin_config::KEYMAP_FILE);
-            let shown = path.display().to_string();
-            match margin_config::read_capped(&path, margin_config::MAX_SETTINGS_BYTES) {
+        let mut user_keymap: Option<(String, &str)> = None;
+        if let (Some(dir), Some(files)) = (&self.dir, &files) {
+            self.settings = files.settings.settings.clone();
+            problems.clone_from(&files.settings.problems);
+            let shown = dir.join(margin_config::KEYMAP_FILE).display().to_string();
+            match &files.keymap {
                 Ok(Some(text)) => user_keymap = Some((shown, text)),
                 Ok(None) => {}
                 Err(message) => problems.push(problem(&shown, "", format!("{message}; file ignored"), Severity::Error)),
@@ -248,6 +280,7 @@ impl Loaded {
             self.bound_ids = bindings.iter().filter_map(|binding| binding.command.clone()).collect();
             self.bound_strokes = bindings.iter().filter_map(|binding| binding.keys.first().cloned()).collect();
         }
+        self.files = files;
         self.problems = problems.clone();
         problems
     }
@@ -353,7 +386,7 @@ fn report(app: &mut PdfCraftApp, problems: &[Problem], reloaded: bool) {
     }
 }
 
-/// A watched file changed: reload once the saves settle.
+/// A watched file changed: reload once the saves settle, if the files now say something new.
 fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let now = ctx.input(|input| input.time);
     let keys = &mut app.margin_keys;
@@ -367,8 +400,8 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     }
     keys.reload_at = None;
+    let Some(problems) = loaded.reload_if_changed() else { return };
     keys.pending.clear();
-    let problems = loaded.reload();
     keys.revision = keys.revision.wrapping_add(1);
     super::obsidian::settings_loaded(app);
     report(app, &problems, true);
@@ -376,7 +409,8 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// Margin itself just wrote `settings.jsonc` (the Settings window): read it again now, so what
 /// that window shows and the next document opened follow at once. Problems are reported as on
-/// any reload. The watch still sees the save and reloads once more after the debounce.
+/// any reload. The watch still sees the save; by then the files say what was read here, so it
+/// reloads nothing.
 pub(crate) fn reload_now(app: &mut PdfCraftApp) {
     let Some(loaded) = app.margin_keys.loaded.as_mut() else { return };
     let problems = loaded.reload();
@@ -784,6 +818,44 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
+    /// Margin's own settings write applies as it is made; the change event the watch then sees
+    /// reloads nothing, so the message the write led to stays and a chord in progress isn't
+    /// dropped. An edit from another program still reloads and says so.
+    #[test]
+    fn only_an_edit_from_outside_reloads_when_the_watch_fires() {
+        let dir = std::env::temp_dir().join(format!("margin-keys-own-write-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = PdfCraftApp::with_flavor(crate::Flavor::Margin);
+        app.margin_keys.set_config_dir(dir.clone());
+        app.margin_keys.set_data_dir(dir.join("data"));
+        let ctx = egui::Context::default();
+        ensure_loaded(&mut app, &ctx);
+        // The OS delivers the real watch's events whenever it likes: the test says when one came.
+        app.margin_keys.loaded.as_mut().unwrap().watch = None;
+        let watch_fired = |app: &mut PdfCraftApp| {
+            app.margin_keys.reload_at = Some(0.0);
+            poll(app, &ctx);
+        };
+
+        super::super::obsidian::write_user_settings(&mut app, &[("view.scroll_line_px", Value::from(120))]).unwrap();
+        assert_eq!(app.margin_keys.settings().view.scroll_line_px, 120, "applied as it is written");
+        app.notify("Vault connected");
+        app.margin_keys.pending = vec!["ctrl-k".to_owned()];
+        let revision = app.margin_keys.revision();
+        watch_fired(&mut app);
+        assert_eq!(app.toast.as_ref().map(|toast| toast.0.as_str()), Some("Vault connected"));
+        assert_eq!(app.margin_keys.pending, ["ctrl-k"]);
+        assert_eq!(app.margin_keys.revision(), revision, "the keymap wasn't loaded again");
+
+        std::fs::write(dir.join(margin_config::SETTINGS_FILE), "{ \"view\": { \"scroll_line_px\": 200 } }").unwrap();
+        watch_fired(&mut app);
+        assert_eq!(app.margin_keys.settings().view.scroll_line_px, 200);
+        assert_eq!(app.toast.as_ref().map(|toast| toast.0.as_str()), Some("Settings and keymap reloaded"));
+        assert!(app.margin_keys.pending.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn strokes_match_the_keymap_syntax() {
         let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
@@ -881,6 +953,7 @@ mod tests {
                 bound_strokes: bindings.iter().filter_map(|b| b.keys.first().cloned()).collect(),
                 compiled: Some(compiled),
                 watch: None,
+                files: None,
             }),
             ..MarginKeys::default()
         };

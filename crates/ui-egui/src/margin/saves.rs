@@ -181,11 +181,12 @@ impl PdfCraftApp {
                 }
                 Ok(ack) => {
                     super::reading::saved_pdf(self, id);
+                    // A full rewrite gives the document a new renderer and nothing else: the
+                    // reader's selection and place must survive their own save landing.
                     if ack == SaveAck::Reopened
-                        && let Some(doc) = self.session.get(id)
                         && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
                     {
-                        view.document_changed(&doc.info);
+                        view.renderer_replaced();
                     }
                     ack != SaveAck::Superseded
                 }
@@ -448,6 +449,38 @@ mod tests {
         let disk = Arc::new(std::fs::read(&destination).unwrap());
         let info = pdfcraft_render::inspect(disk, None).unwrap();
         assert_eq!(info.title.as_deref(), Some("second"));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A file with no cross-reference table: it opens repaired, so its first save rewrites it
+    /// in full and the document continues from the written file (`SaveAck::Reopened`).
+    const NEEDS_REPAIR: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 55 >> stream
+BT /F1 14 Tf 20 150 Td (The quick brown fox) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    /// An autosave landing while the reader selects text must not take the selection away:
+    /// the rewritten file reads the same, only the renderer behind the view is new.
+    #[test]
+    fn a_save_that_rewrites_the_file_keeps_the_text_selection() {
+        let (mut app, id, root) = app("rewrite-keeps-selection", NEEDS_REPAIR.to_vec());
+        assert!(!app.session.get(id).unwrap().repair_log().is_empty(), "the fixture needs repair");
+        edit(&mut app, "rewritten");
+        assert!(app.queue_margin_save(id, text(&root.join("document.pdf")), None));
+        app.views[0].select_text(0, 4, 14);
+        let selected = app.views[0].selection_range();
+        app.wait_margin_saves();
+        let doc = app.session.get(id).unwrap();
+        assert!(!doc.dirty && doc.repair_log().is_empty(), "the write rewrote the file and the document reads from it");
+        assert!(selected.is_some());
+        assert_eq!(app.views[0].selection_range(), selected);
         drop(app);
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -177,8 +177,11 @@ fn reopen_restores_page_zoom_page_color_and_trim() {
         app.set_option("page_color", "sepia").unwrap();
         app.set_option("trim", "auto").unwrap();
     }
-    settle(&mut h);
+    // Half a second of app time: `settle` would run as many steps as the renders take, which
+    // on a slow machine is past the second the sidecar waits.
+    h.run_steps((0.5 / STEP_SECS).round() as usize);
     assert!(!place.sidecar().exists(), "waits a second after the last change");
+    settle(&mut h);
     wait(&mut h, 1.5);
     let saved = sidecar_json(&place);
     assert_eq!(saved["format"], "margin-sidecar");
