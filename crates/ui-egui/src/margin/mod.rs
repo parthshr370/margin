@@ -22,6 +22,7 @@ pub mod keys;
 pub mod keysheet;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod library;
+pub mod links;
 pub mod look;
 pub mod motion;
 pub mod obsidian;

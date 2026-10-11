@@ -7,8 +7,8 @@
 //! deliberate jump (anything that changes the Back history: the outline, links, the page field,
 //! Back itself) and on "Reveal current". While the reader reads on, the list follows the
 //! section only if its row was in view, so a list scrolled away stays put. A chevron only
-//! opens or closes; a row goes to its page. Sections are tracked by page (`current_section`)
-//! until the outline exposes destination positions.
+//! opens or closes; a row goes to its destination. Sections follow the reading line,
+//! including multiple section starts on the same page.
 
 use std::collections::HashMap;
 
@@ -17,7 +17,7 @@ use pdfcraft_render::{DocInfo, OutlineItem};
 
 use super::look::{self, ButtonSize, ROW_PAD};
 use super::sidebar::{ROW_HEIGHT, ROW_SPACING, empty, pane_title};
-use super::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, current_section};
+use super::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, links, reading};
 use crate::canvas::ViewPlace;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
@@ -65,7 +65,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     }
     let tree_id = egui::Id::new(("margin-contents", view.id.0));
     let mut tree: Tree = ui.data(|d| d.get_temp(tree_id)).unwrap_or_default();
-    let current = current_section(&info.outline, view.current).unwrap_or_default();
+    let current = current_section_at(info, reading::spot(view), view.rotation).unwrap_or_default();
     let pass = ui.ctx().cumulative_pass_nr();
     let history = (view.back.len(), view.back.last().copied());
     let expandable = info.outline.iter().any(|item| !item.children.is_empty());
@@ -107,8 +107,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     }
     tree.marked_in_view = marked_in_view;
     ui.data_mut(|d| d.insert_temp(tree_id, tree));
-    if let (Some(page), Some(view)) = (go, app.views.get_mut(index)) {
-        view.go_to_page(page);
+    if let (Some(destination), Some(view)) = (go, app.views.get_mut(index)) {
+        links::jump(view, info, destination);
     }
 }
 
@@ -166,7 +166,7 @@ struct Rows<'a> {
     /// Scroll the marked row into view (and how) this frame.
     scroll: Option<Option<Align>>,
     /// A row's page was clicked.
-    go: Option<usize>,
+    go: Option<links::Destination>,
     /// A chevron was clicked: the entry and its new state.
     flip: Option<(Vec<usize>, bool)>,
     drawn: usize,
@@ -218,7 +218,7 @@ impl Rows<'_> {
         if resp.clicked()
             && let Some(page) = item.page
         {
-            self.go = Some(page);
+            self.go = Some((page, item.view));
         }
         if open {
             for (i, child) in item.children.iter().enumerate() {
@@ -228,4 +228,43 @@ impl Rows<'_> {
             }
         }
     }
+}
+
+/// The last section start at or before the reading line, including starts on the
+/// same page. Missing positions mean the top of the page.
+pub fn current_section_at(info: &pdfcraft_render::DocInfo, spot: reading::Spot, rotation: u16) -> Option<Vec<usize>> {
+    let mut best = None;
+    let mut best_start = None;
+    let mut stack: Vec<(&[pdfcraft_render::OutlineItem], usize)> = vec![(&info.outline, 0)];
+    let mut path = Vec::new();
+    let mut visited = 0usize;
+    while let Some((entries, next)) = stack.pop() {
+        path.truncate(stack.len());
+        let Some(entry) = entries.get(next) else { continue };
+        visited += 1;
+        if visited > MAX_OUTLINE_ITEMS {
+            break;
+        }
+        stack.push((entries, next + 1));
+        path.push(next);
+        if let Some(page) = entry.page {
+            let y = links::destination_spot(info, (page, entry.view), rotation).map_or(0.0, |spot| spot.y);
+            let start = (page, y);
+            // The canvas rounds scroll offsets to device pixels; a line reached by
+            // a jump can be fractionally above its requested PDF coordinate.
+            let tolerance = info.pages.get(page).map_or(0.0, |geometry| {
+                let height = if rotation % 180 == 90 { geometry.width } else { geometry.height };
+                1.0 / height.max(1.0)
+            });
+            let reached = page < spot.page || (page == spot.page && y <= spot.y + tolerance);
+            if reached && best_start.is_none_or(|previous| start >= previous) {
+                best_start = Some(start);
+                best = Some(path.clone());
+            }
+        }
+        if !entry.children.is_empty() && stack.len() < MAX_OUTLINE_DEPTH {
+            stack.push((&entry.children, 0));
+        }
+    }
+    best
 }

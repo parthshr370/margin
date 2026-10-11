@@ -1844,7 +1844,7 @@ fn info(d: &Document) -> Value {
         "links": i.links.iter().map(|l| json!({
             "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
             "target": match &l.target {
-                pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
+                pdfcraft_render::LinkTarget::Page(page, view) => destination_json(*page, *view),
                 pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
                 pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
                     "layers": changes.iter().map(|(op, ocg)| json!({
@@ -1877,7 +1877,27 @@ fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32;
 }
 
 fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
-    Value::Array(items.iter().map(|o| json!({ "title": o.title, "page": o.page.map(|p| p + 1), "children": outline(&o.children) })).collect())
+    Value::Array(
+        items
+            .iter()
+            .map(|o| {
+                json!({
+                    "title": o.title, "page": o.page.map(|p| p + 1),
+                    "destination": o.page.map(|page| destination_json(page, o.view)), "children": outline(&o.children)
+                })
+            })
+            .collect(),
+    )
+}
+
+/// PDF destinations retain null coordinates and the PDF's bottom-left user space.
+fn destination_json(page: usize, view: pdfcraft_render::DestView) -> Value {
+    let (left, top) = view.point();
+    json!({
+        "page": page.saturating_add(1), "top": top,
+        "left": left, "zoom": view.zoom(),
+        "coordinate_space": "pdf_user_space"
+    })
 }
 
 fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> {

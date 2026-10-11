@@ -5,8 +5,9 @@
 use egui::{Align, Layout};
 use pdfcraft_engine::commands;
 
+use crate::margin::contents::current_section_at;
 use crate::margin::look::{self, GAP_LARGE};
-use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at};
+use crate::margin::{SidebarTab, motion, open_tab, outline_at, reading};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
@@ -173,8 +174,8 @@ pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui
         Some((view, doc)) => {
             let name = doc.info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
             job.append(&name, 0.0, format(12.5, t.text_muted));
-            let section =
-                current_section(&doc.info.outline, view.current).and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.trim().to_owned()));
+            let section = current_section_at(&doc.info, reading::spot(view), view.rotation)
+                .and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.trim().to_owned()));
             if let Some(section) = &section {
                 job.append("  ·  ", 0.0, format(12.5, t.text_faint));
                 job.append(section, 0.0, format(12.5, t.text));

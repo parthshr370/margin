@@ -64,6 +64,31 @@ fn page_text(a: &mut Automation, doc: u64) -> Vec<String> {
 }
 
 #[test]
+fn link_and_outline_inspection_preserve_named_destination_positions() {
+    let dir = workdir("destination-positions");
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Dests << /cite [3 0 R /XYZ null 120 null] >> /Outlines 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >> endobj
+4 0 obj << /Subtype /Link /Rect [10 10 20 20] /Dest /cite >> endobj
+5 0 obj << /First 6 0 R >> endobj
+6 0 obj << /Title (Reference) /Dest /cite >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    std::fs::write(dir.join("citation.pdf"), pdf).unwrap();
+    let mut automation = auto(&dir);
+    let doc = ok(&mut automation, "doc_open", json!({ "path": "citation.pdf" }))["doc"].clone();
+    let info = ok(&mut automation, "doc_info", json!({ "doc": doc }));
+    let links = ok(&mut automation, "link_list", json!({ "doc": doc }));
+    let destination = json!({ "page": 1, "top": 120.0, "left": null, "zoom": null, "coordinate_space": "pdf_user_space" });
+    assert_eq!(info["links"][0]["target"], destination);
+    assert_eq!(info["outline"][0]["destination"], destination);
+    assert_eq!(links["links"][0]["destination"], destination);
+    assert_eq!(links["links"][0]["to_page"], 1);
+    assert!(links["links"][0].get("other").is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
 fn tool_table_is_well_formed() {
     let all = tools();
     let mut names = std::collections::HashSet::new();

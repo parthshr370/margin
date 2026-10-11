@@ -35,6 +35,8 @@ const TILE: u32 = 1024;
 pub(crate) const BASE_SIDE: f32 = 2048.0;
 /// Print-preview rasters (distinct from thumbnails and from organize-grid renders).
 const PRINT_TAG: u64 = 1 << 60;
+/// Margin's link-preview band (`margin::links`): one bounded raster the preview keeps itself.
+pub(crate) const PREVIEW_TAG: u64 = 1 << 59;
 /// Thumbnail slot before density scaling. The pages panel draws at most 150 logical points and
 /// the organize grid about 146; when the byte budget allows, density reaches the screen so those
 /// images are sampled down instead of stretched.
@@ -311,6 +313,7 @@ pub struct DocView {
     /// Margin's per-document reading state: trim, page colour, page bookmarks, sidecar and
     /// autosave (inert in PdfCraft: no trim, nothing saved).
     pub margin: crate::margin::reading::DocReading,
+    pub(crate) link_preview: crate::margin::links::Preview,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
@@ -540,6 +543,7 @@ impl DocView {
             pages: HashMap::new(),
             page_color: Default::default(),
             margin: Default::default(),
+            link_preview: Default::default(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
@@ -680,6 +684,7 @@ impl DocView {
     /// was toggled). Out-of-date rasters stay on screen until their replacements arrive, so the
     /// view never flashes blank.
     pub fn invalidate_content(&mut self) {
+        self.link_preview.clear();
         for p in self.pages.values_mut() {
             p.tag = STALE_TAG;
         }
@@ -705,6 +710,7 @@ impl DocView {
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
     /// re-read its text, keep everything else.
     pub fn page_changed(&mut self, page: usize) {
+        self.link_preview.clear();
         if let Some(p) = self.pages.get_mut(&page) {
             p.tag = STALE_TAG;
         }
@@ -922,7 +928,7 @@ impl DocView {
     }
 
     /// Show `page` from its top, without touching the view history.
-    fn show_page(&mut self, page: usize) {
+    pub(crate) fn show_page(&mut self, page: usize) {
         // Partial wheel motion belongs to the old place.
         self.wheel.clear_motion();
         self.goto = Some((page, 0.0));
@@ -1234,6 +1240,7 @@ impl DocView {
         self.signature_drag = Default::default();
         // Margin keeps the source pixels of pages it recolours; they go with the textures.
         self.page_color.forget_sources();
+        self.link_preview.clear();
         if !self.last_queue.is_empty() {
             pool.set_queue(Vec::new());
             self.last_queue.clear();
@@ -1285,6 +1292,10 @@ impl DocView {
                 if !self.errors.contains_key(&req.page) {
                     queue.push(*req);
                 }
+                continue;
+            }
+            if req.tag & PREVIEW_TAG != 0 {
+                queue.push(*req);
                 continue;
             }
             // On-screen work is always admitted (the viewport bounds it); the limits only
@@ -1392,7 +1403,7 @@ impl DocView {
     /// keep their pixels; so does everything in PdfCraft, which has no trim or page colour.
     fn margin_raster(&mut self, doc: &pdfcraft_engine::Document, r: &mut pdfcraft_render::RenderedPage) {
         let size = [r.width as usize, r.height as usize];
-        let main = r.request.kind == RequestKind::Pixels && r.request.tag & (THUMB_TAG | GRID_TAG | PRINT_TAG) == 0;
+        let main = r.request.kind == RequestKind::Pixels && r.request.tag & (THUMB_TAG | GRID_TAG | PRINT_TAG | PREVIEW_TAG) == 0;
         if !main || r.error.is_some() || rgba_bytes(size[0], size[1]) != r.rgba.len() || !self.last_queue.contains(&r.request) {
             return;
         }
@@ -1413,6 +1424,10 @@ impl DocView {
             return 0;
         }
         ctx.request_repaint();
+        if r.request.tag & PREVIEW_TAG != 0 {
+            self.link_preview.receive(r);
+            return 0;
+        }
         if r.request.kind == RequestKind::Text {
             match r.text {
                 Some(t) => {
@@ -2031,6 +2046,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         _ => (0.0, rects.last().map(|r| r.bottom() + MARGIN).unwrap_or(0.0)),
     };
+    // Margin can put a destination near the last page's bottom on the reading
+    // line too. Without trailing room egui clamps that jump above its target.
+    let content_h = content_h + if app.flavor == crate::Flavor::Margin { (avail.height() - 2.0 * MARGIN).max(0.0) } else { 0.0 };
 
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
         drag: if middle_gesture {
@@ -2115,6 +2133,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_signature = false;
     let mut hover_text: Option<(Pos2, String)> = None;
     let mut clicked_link: Option<LinkTarget> = None;
+    let mut preview_hover = None;
     let mut canvas_action: Option<comments::CanvasAction> = None;
     let mut field_menu: Option<FieldMenu> = None;
     let mut open_props: Option<(usize, usize)> = None;
@@ -2658,19 +2677,26 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if !matches!(tool, QuickTool::Fill(_))
                 && let Some(p) = pointer
             {
-                for l in info.links.iter().filter(|l| l.page == i) {
+                for (link_index, l) in info.links.iter().enumerate().filter(|(_, l)| l.page == i) {
                     let sr = xf.user_rect(info, i, l.rect);
                     if sr.contains(p) {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        let label = match &l.target {
-                            LinkTarget::Page(n, _) => {
-                                crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))])
-                            }
-                            LinkTarget::Uri(u) => u.clone(),
-                            LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
-                            LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
-                        };
-                        hover_text = Some((p, label));
+                        if flavor == crate::Flavor::Margin
+                            && app.margin_keys.settings().reader.link_preview
+                            && let LinkTarget::Page(page, dest) = l.target
+                        {
+                            preview_hover = Some((link_index, p, (page, dest)));
+                        } else {
+                            let label = match &l.target {
+                                LinkTarget::Page(n, _) => {
+                                    crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))])
+                                }
+                                LinkTarget::Uri(u) => u.clone(),
+                                LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
+                                LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+                            };
+                            hover_text = Some((p, label));
+                        }
                         if resp.clicked() && tool == QuickTool::Select && !consumed {
                             clicked_link = Some(l.target.clone());
                         }
@@ -2682,7 +2708,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 let gesturing = view.comments.gesture.is_some() || freehand;
                 for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
                     let sr = xf.user_rect(info, i, a.rect);
-                    if sr.contains(p) && hover_text.is_none() {
+                    if sr.contains(p) && hover_text.is_none() && preview_hover.is_none() {
                         let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
                         let body = a.contents.clone().unwrap_or_default();
                         hover_text = Some((p, if body.is_empty() { who } else { format!("{who}\n{body}") }));
@@ -2813,6 +2839,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let mut queue: Vec<RenderRequest> =
         wanted.iter().map(|&(page, scale, tag, tile)| RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag }).collect();
+    if flavor == crate::Flavor::Margin
+        && let Some(request) =
+            view.link_preview.update(ui.ctx(), info, preview_hover, app.margin_keys.settings().reader.link_preview && unobstructed, avail)
+    {
+        queue.push(request);
+    }
     // Text layers: visible pages for selection, every page while a search is active.
     let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
     let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
@@ -2833,6 +2865,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 ui.label(text);
             });
         });
+    }
+    if flavor == crate::Flavor::Margin
+        && let Some(color) = page_color
+    {
+        view.link_preview.show(ui.ctx(), info, avail, color, &t);
     }
     // Margin shows the search in its header and Find tab (`margin::find`).
     if app.flavor == crate::Flavor::PdfCraft {
@@ -2899,7 +2936,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     match clicked_link {
-        Some(LinkTarget::Page(p, dest)) => view.go_to_dest(p, dest, info),
+        Some(LinkTarget::Page(p, dest)) => {
+            if flavor == crate::Flavor::Margin {
+                crate::margin::links::jump(view, info, (p, dest));
+            } else {
+                view.go_to_dest(p, dest, info);
+            }
+        }
         Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
         Some(LinkTarget::SetLayers { changes, preserve_rb }) => set_layers(app, index, &changes, preserve_rb),
         Some(LinkTarget::Other(s)) => app.notify_fmt("{s} actions run in the JavaScript engine (M6)", &[("s", &s)]),

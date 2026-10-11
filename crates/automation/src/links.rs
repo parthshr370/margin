@@ -74,6 +74,22 @@ impl Automation {
                     LinkAction::Uri(u) => v["url"] = json!(u),
                     LinkAction::Other(o) => v["other"] = json!(o),
                 }
+                if let Some((to_page, view)) = doc.info.links.iter().find_map(|link| {
+                    if link.page == l.page
+                        && link.index == l.index
+                        && let pdfcraft_render::LinkTarget::Page(to_page, view) = link.target
+                    {
+                        Some((to_page, view))
+                    } else {
+                        None
+                    }
+                }) {
+                    v["to_page"] = json!(to_page.saturating_add(1));
+                    v["destination"] = crate::destination_json(to_page, view);
+                    if let Some(object) = v.as_object_mut() {
+                        object.remove("other");
+                    }
+                }
                 v
             })
             .collect();

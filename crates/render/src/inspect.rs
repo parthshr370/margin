@@ -36,6 +36,8 @@ const OUTLINE_WINDOW: usize = 10_000;
 
 /// Deepest level `DocInfo::outline` nests (the top level is 0); deeper bookmarks are left out.
 const OUTLINE_DEPTH: usize = 32;
+/// Destination aliases and indirect values can form hostile cycles.
+const MAX_DESTINATION_DEPTH: u32 = 16;
 
 fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
@@ -170,6 +172,8 @@ impl PageInfo {
 #[derive(Clone, Debug)]
 pub struct Link {
     pub page: usize,
+    /// Index in the page's `/Annots`, shared with editable links.
+    pub index: usize,
     pub rect: [f32; 4],
     pub target: LinkTarget,
 }
@@ -237,6 +241,33 @@ impl DestView {
             },
             _ => Self::Top,
         }
+    }
+
+    /// The point the view goes to, `(left, top)` in PDF user space; `None` for a part the
+    /// destination leaves as it is. A `/FitR` rectangle goes to its top-left corner.
+    pub fn point(self) -> (Option<f32>, Option<f32>) {
+        match self {
+            Self::Xyz { left, top, .. } => (left, top),
+            Self::FitH { top } => (None, top),
+            Self::FitV { left } => (left, None),
+            Self::FitR { rect } => (Some(rect[0]), Some(rect[3])),
+            Self::Top | Self::Fit => (None, None),
+        }
+    }
+
+    /// The explicit `/XYZ` zoom (1.0 = 100%), the only destination that names one.
+    pub fn zoom(self) -> Option<f32> {
+        match self {
+            Self::Xyz { zoom, .. } => zoom,
+            _ => None,
+        }
+    }
+
+    /// [`Self::point`] in displayed-page points (after the PDF's rotation); a missing
+    /// coordinate falls back to the crop box's top-left.
+    pub fn view_position(self, page: &PageInfo) -> [f32; 2] {
+        let (left, top) = self.point();
+        page.user_to_view(left.unwrap_or(page.crop[0]), top.unwrap_or(page.crop[3]))
     }
 }
 
@@ -597,12 +628,12 @@ impl<'a> Inspector<'a> {
     /// The page and view of a destination: an explicit array (`[page /XYZ left top zoom]`, …),
     /// a dictionary with `/D`, or a named destination that resolves to one.
     fn dest(&self, dest: &Object, depth: u32) -> Option<(usize, DestView)> {
-        if depth > 8 {
+        if depth > MAX_DESTINATION_DEPTH {
             return None;
         }
         match self.resolve(dest) {
             Object::Array(a) => {
-                let page = a.first().and_then(|p| self.page_of(p))?;
+                let page = a.first().and_then(|p| self.page_of(p)).filter(|p| *p < self.page_index.len())?;
                 let kind = a.get(1).map(|k| self.resolve(k)).and_then(|k| k.as_name().ok());
                 let operands: Vec<Option<f32>> = a.iter().skip(2).take(4).map(|o| self.resolve(o).as_float().ok()).collect();
                 Some((page, DestView::from_operands(kind, &operands)))
@@ -873,7 +904,7 @@ impl<'a> Inspector<'a> {
                     info.attachments.push(self.attachment(name, fs, AttachmentSource::Annotation { page, index }));
                 }
                 if subtype == "Link" {
-                    if let Some(link) = self.link(page, d) {
+                    if let Some(link) = self.link(page, index, d) {
                         if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                             info.has_javascript = true;
                         }
@@ -939,7 +970,7 @@ impl<'a> Inspector<'a> {
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
     }
 
-    fn link(&self, page: usize, d: &Dictionary) -> Option<Link> {
+    fn link(&self, page: usize, index: usize, d: &Dictionary) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
@@ -959,7 +990,7 @@ impl<'a> Inspector<'a> {
                 None => return None,
             }
         };
-        Some(Link { page, rect, target })
+        Some(Link { page, index, rect, target })
     }
 
     /// A set-OCG-state action: `/State` is `ON`, `OFF` or `Toggle`, each followed by the groups
@@ -1315,6 +1346,61 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn destinations_preserve_explicit_named_and_outline_positions() {
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Dests << /legacy << /D [3 0 R /FitH 120] >> /cycle /cycle >> /Names << /Dests << /Names [(citation) [3 0 R /XYZ 12 150 1.5]] >> >> /Outlines 9 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Subtype /Link /Rect [0 0 10 10] /Dest [3 0 R /XYZ 10 160 2] >> endobj
+5 0 obj << /Subtype /Link /Rect [10 0 20 10] /A << /S /GoTo /D (citation) >> >> endobj
+6 0 obj << /Subtype /Link /Rect [20 0 30 10] /Dest /legacy >> endobj
+7 0 obj << /Subtype /Link /Rect [30 0 40 10] /Dest [3 0 R /XYZ null null 0] >> endobj
+8 0 obj << /Subtype /Link /Rect [40 0 50 10] /Dest /cycle >> endobj
+9 0 obj << /First 10 0 R >> endobj
+10 0 obj << /Title (Citation) /Dest (citation) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let info = inspect(Arc::new(pdf.to_vec()), None).expect("synthetic PDF opens");
+        let explicit = DestView::Xyz { left: Some(10.0), top: Some(160.0), zoom: Some(2.0) };
+        let named = DestView::Xyz { left: Some(12.0), top: Some(150.0), zoom: Some(1.5) };
+        assert_eq!(info.links.len(), 4, "cyclic destination is ignored");
+        assert_eq!(info.links[0].target, LinkTarget::Page(0, explicit));
+        assert_eq!(info.links[1].target, LinkTarget::Page(0, named));
+        assert_eq!(info.links[2].target, LinkTarget::Page(0, DestView::FitH { top: Some(120.0) }));
+        assert_eq!(info.links[3].target, LinkTarget::Page(0, DestView::Xyz { left: None, top: None, zoom: None }));
+        assert_eq!((info.outline[0].page, info.outline[0].view), (Some(0), named));
+        assert_eq!(named.view_position(&info.pages[0]), [12.0, 50.0]);
+    }
+
+    #[test]
+    fn hostile_destination_values_and_reference_cycles_are_bounded() {
+        use lopdf::dictionary;
+        let mut doc = Document::with_version("1.7");
+        let pages = doc.new_object_id();
+        let page =
+            doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()] });
+        doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }.into());
+        let cycle = doc.new_object_id();
+        doc.objects.insert(cycle, Object::Reference(cycle));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        let inspector = Inspector::new(&doc);
+        let parse = |mode: &str, values: Vec<Object>| {
+            let mut array = vec![page.into(), Object::Name(mode.as_bytes().to_vec())];
+            array.extend(values);
+            inspector.dest(&Object::Array(array), 0)
+        };
+        let unpositioned = Some((0, DestView::Xyz { left: None, top: None, zoom: None }));
+        assert_eq!(parse("XYZ", vec![Object::Boolean(true), Object::Real(f32::NAN), (-1).into()]), unpositioned);
+        assert_eq!(parse("XYZ", vec![cycle.into(), Object::Real(f32::INFINITY), Object::Real(f32::NEG_INFINITY)]), unpositioned);
+        assert_eq!(parse("FitBH", vec![80.into()]).unwrap().1.point().1, Some(80.0));
+        assert_eq!(parse("FitR", vec![10.into(), 20.into(), 100.into(), 180.into()]).unwrap().1.point().1, Some(180.0));
+        assert_eq!(inspector.dest(&Object::Reference(cycle), 0), None);
+        assert_eq!(inspector.dest(&Object::Array(vec![(-1).into(), Object::Name(b"Fit".to_vec())]), 0), None);
+        assert_eq!(inspector.dest(&Object::Array(vec![i64::MAX.into(), Object::Name(b"Fit".to_vec())]), 0), None);
+    }
+
     #[test]
     fn png_predictor_rows_longer_than_the_data_are_refused_before_allocating() {
         // Vendored lopdf patch: a fuzzed `/Columns 4294967295` allocated two 4 GiB rows before
