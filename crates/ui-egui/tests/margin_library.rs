@@ -405,6 +405,78 @@ fn context_menu_actions_change_the_library() {
     assert!(Path::new(&path).exists(), "the file stays on disk");
 }
 
+/// The text field showing `placeholder`.
+fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, placeholder: &'a str) -> egui_kittest::Node<'a> {
+    h.query_all_by(|node| node.placeholder() == Some(placeholder)).next().unwrap_or_else(|| panic!("no field {placeholder:?}"))
+}
+
+/// Steps until `done` holds or `limit` passes.
+fn step_until(h: &mut Harness<'static, PdfCraftApp>, limit: Duration, done: impl Fn(&Harness<'static, PdfCraftApp>) -> bool) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < limit {
+        h.run_steps(1);
+        if done(h) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
+#[test]
+fn the_details_sheet_tags_and_edits_a_book_and_in_text_search_opens_a_page() {
+    let place = Place::new("details-text");
+    let path = place.add("tagged.pdf", &pdf("Tagged Book", 3));
+    place.add("other.pdf", &pdf("Other Book", 2));
+    place.watch_books();
+    let mut h = harness(app(&place));
+    wait_for_scan(&mut h, 2, Instant::now(), SCAN_BUDGET);
+
+    // Details: a tag and a year, saved as the user's.
+    h.get_by_label("Tagged Book").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Details\u{2026}").click();
+    h.run_steps(3);
+    assert!(h.state().margin_library.sheet_open());
+    field(&h, "Add a tag").focus();
+    h.run_steps(1);
+    field(&h, "Add a tag").type_text("Physics");
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    field(&h, "2024").focus();
+    h.run_steps(1);
+    field(&h, "2024").type_text("1999");
+    h.run_steps(1);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert!(!h.state().margin_library.sheet_open(), "saving closes the sheet");
+    let book = h.state().margin_library.books().iter().find(|book| book.title == "Tagged Book").cloned().expect("listed");
+    assert_eq!(book.year, Some(1999));
+    let tags = h.state().margin_library.tags().to_vec();
+    assert_eq!(tags.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>(), ["Physics"]);
+    assert_eq!(book.tags, [tags[0].id]);
+    let details = h.state().margin_library.db().unwrap().details(book.id).unwrap();
+    assert_ne!(details.user_fields, 0, "the year is the user's now");
+
+    // The search finds a book by its tag.
+    h.state_mut().margin_library.query = "physics".into();
+    h.run_steps(2);
+    assert!(h.query_all_by_label("Tagged Book").next().is_some());
+    assert!(h.query_all_by_label("Other Book").next().is_none(), "only the tagged book matches");
+
+    // In text: the pages' words, once the background pass read them; a hit opens its page.
+    h.state_mut().margin_library.in_text = true;
+    h.state_mut().margin_library.query = "margin".into();
+    let found = step_until(&mut h, SCAN_BUDGET, |h| h.query_all_by_label("Tagged Book, page 2").next().is_some());
+    assert!(found, "the text of every page is searchable");
+    h.get_by_label("Tagged Book, page 2").click();
+    h.run_steps(4);
+    let app = h.state();
+    let index = app.active.expect("the book opened");
+    assert_eq!(app.session.get(app.views[index].id).and_then(|doc| doc.path.as_deref()), Some(path.as_str()));
+    assert_eq!(app.views[index].current, 1, "at the page of the hit");
+}
+
 /// Scan and grid timings on the perf corpus (`cargo xtask perf --gen-library` in the margin
 /// repo): `MARGIN_LIBRARY_CORPUS=<dir with PDFs> cargo test --test margin_library -- --ignored`.
 #[test]

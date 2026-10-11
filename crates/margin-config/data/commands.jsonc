@@ -11,6 +11,7 @@
   { "id": "app.stats", "title": "Reading stats", "icon": "clock", "group": "View", "aliases": ["statistics", "calendar", "time read"] },
   { "id": "library.open", "title": "Library", "icon": "book-open", "group": "Go", "aliases": ["home", "books", "shelf"] },
   { "id": "library.search", "title": "Search library", "icon": "search", "group": "Find", "when": "Library" },
+  { "id": "library.import", "title": "Import BibTeX or Zotero", "icon": "file-input", "group": "File", "aliases": ["bibtex", "zotero", "references"] },
 
   { "id": "view.zoom.in", "title": "Zoom in", "icon": "zoom-in", "group": "View", "when": "Reader", "aliases": ["bigger", "magnify"] },
   { "id": "view.zoom.out", "title": "Zoom out", "icon": "zoom-out", "group": "View", "when": "Reader", "aliases": ["smaller"] },

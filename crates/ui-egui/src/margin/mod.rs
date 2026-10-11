@@ -232,7 +232,8 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
 /// Run a Margin-only action (the keymap's ids): `view.sidebar.toggle`, `view.sidebar.tab` with
 /// `{"tab": "contents" | "highlights" | "pages" | "bookmarks" | "find" | "tools"}`,
 /// `reader.annotate.toggle` (the rail), `reader.bookmark.toggle` (a page bookmark on the current
-/// page), `view.trim.toggle`, and the library's `library.open`, `library.search` and `app.stats`.
+/// page), `view.trim.toggle`, and the library's `library.open`, `library.search`,
+/// `library.import` and `app.stats`.
 /// Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
@@ -256,7 +257,7 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
         }
         highlights::DELETE_ID | highlights::COLOR_ID => return highlights::run(app, id, args),
         #[cfg(not(target_arch = "wasm32"))]
-        "library.open" | "library.search" | "app.stats" => return library::run(app, id),
+        "library.open" | "library.search" | "library.import" | "app.stats" => return library::run(app, id),
         _ => return false,
     }
     true
