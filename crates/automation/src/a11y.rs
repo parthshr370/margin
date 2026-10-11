@@ -269,6 +269,7 @@ impl Automation {
         write_atomic(&path, &bytes)?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "format": format.extension() }))
     }
+
     pub(crate) fn doc_export_markdown(&self, a: &Args) -> Result<Value> {
         let path = self.resolve(a.str("path")?, true)?;
         if path.is_dir() {
@@ -279,20 +280,25 @@ impl Automation {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
         };
-        let markdown = pdfcraft_engine::export::markdown(
-            &doc.export_source(),
-            &pages,
-            &doc.info.title.clone().unwrap_or_else(|| doc.name.clone()),
-            a.opt_bool("obsidian")?.unwrap_or(false),
-        )
-        .map_err(failed)?;
-        write_atomic(&path, markdown.text.as_bytes())?;
+        let title = doc.info.title.clone().unwrap_or_else(|| doc.name.clone());
+        // Images are named after the note, so two notes exported into one folder keep their own.
+        let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let image_prefix = if stem.is_empty() { String::new() } else { format!("{stem}-") };
+        let options = pdfcraft_engine::export::MarkdownOptions {
+            title: &title,
+            obsidian: a.opt_bool("obsidian")?.unwrap_or(false),
+            image_prefix: &image_prefix,
+        };
+        let markdown = pdfcraft_engine::export::markdown(&doc.export_source(), &pages, &options).map_err(failed)?;
+        let folder = path.parent().unwrap_or_else(|| std::path::Path::new("."));
         let mut image_paths = Vec::with_capacity(markdown.images.len());
-        for (name, bytes) in markdown.images {
-            let image_path = child(path.parent().unwrap_or_else(|| std::path::Path::new(".")), &name);
-            write_atomic(&image_path, &bytes)?;
+        // Images first: the note never points at a file that isn't there yet.
+        for (name, bytes) in &markdown.images {
+            let image_path = child(folder, name);
+            write_atomic(&image_path, bytes)?;
             image_paths.push(image_path.to_string_lossy().into_owned());
         }
+        write_atomic(&path, markdown.text.as_bytes())?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": markdown.text.len(), "images": image_paths }))
     }
 

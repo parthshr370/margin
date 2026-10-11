@@ -98,17 +98,48 @@ impl Exporter {
     }
 }
 
-/// Structured Markdown for selected pages, with image assets returned separately.
-pub fn markdown(src: &ExportSource, pages: &[usize], title: &str, obsidian: bool) -> Result<pdfcraft_export::Markdown, String> {
+pub use pdfcraft_export::{MAX_MARKDOWN_TEXT_BYTES, Markdown, MarkdownOptions};
+
+/// The most image bytes one Markdown export holds in memory before they are written out.
+pub const MAX_MARKDOWN_IMAGE_BYTES: usize = 256 << 20;
+/// The most image files one Markdown export writes.
+pub const MAX_MARKDOWN_IMAGES: usize = 10_000;
+
+/// Structured Markdown for `pages` (0-based), with image files returned separately. Pages are
+/// extracted one at a time, and the export stops with an error as soon as their text passes
+/// [`pdfcraft_export::MAX_MARKDOWN_TEXT_BYTES`] or their images pass [`MAX_MARKDOWN_IMAGE_BYTES`]
+/// or [`MAX_MARKDOWN_IMAGES`], before the next page is read.
+pub fn markdown(src: &ExportSource, pages: &[usize], options: &pdfcraft_export::MarkdownOptions<'_>) -> Result<pdfcraft_export::Markdown, String> {
     let mut session = crate::Session::new();
     let id = session.open("Markdown export", None, src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
     let document = session.get(id).ok_or("the export document could not be read")?;
-    let available = document.export_pages();
-    let mut selected = Vec::with_capacity(pages.len());
+    let page_count = document.info.pages.len();
+    let mut selected = Vec::with_capacity(pages.len().min(page_count));
+    let (mut text_bytes, mut image_bytes, mut image_count) = (0usize, 0usize, 0usize);
     for &page in pages {
-        selected.push(available.get(page).cloned().ok_or_else(|| format!("page {} does not exist", page + 1))?);
+        let shown = page.saturating_add(1);
+        if page >= page_count {
+            return Err(format!("page {shown} does not exist"));
+        }
+        let exported = document.export_page(page).ok_or_else(|| format!("page {shown} could not be read"))?;
+        text_bytes = exported.blocks.iter().fold(text_bytes, |sum, block| sum.saturating_add(block.text.len()));
+        image_bytes = exported.images.iter().fold(image_bytes, |sum, image| sum.saturating_add(image.bytes.len()));
+        image_count = image_count.saturating_add(exported.images.len());
+        if text_bytes > pdfcraft_export::MAX_MARKDOWN_TEXT_BYTES {
+            return Err(format!(
+                "By page {shown} the text passes {} MiB; export fewer pages at a time.",
+                pdfcraft_export::MAX_MARKDOWN_TEXT_BYTES >> 20
+            ));
+        }
+        if image_bytes > MAX_MARKDOWN_IMAGE_BYTES || image_count > MAX_MARKDOWN_IMAGES {
+            return Err(format!(
+                "By page {shown} the images pass {} MiB or {MAX_MARKDOWN_IMAGES} files; export fewer pages at a time.",
+                MAX_MARKDOWN_IMAGE_BYTES >> 20
+            ));
+        }
+        selected.push(exported);
     }
-    Ok(pdfcraft_export::markdown(&selected, title, obsidian))
+    pdfcraft_export::markdown(selected, options)
 }
 
 /// Premultiplied RGBA → an image file of `format`.

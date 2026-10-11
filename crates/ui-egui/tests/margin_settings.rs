@@ -116,25 +116,30 @@ fn escape_closes_settings() {
     std::fs::remove_dir_all(&config).ok();
 }
 
+/// A Margin app on `config` restored from the app state `state`, after its first frames (which
+/// load the settings and migrate the state's notes block).
+fn restored_harness(config: std::path::PathBuf, state: serde_json::Value) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.margin_keys.set_config_dir(config);
+        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-settings-data-{}", std::process::id())));
+        app.restore(&state.to_string());
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
 #[test]
 fn legacy_notes_migrate_before_app_state_is_stripped() {
     let config = config_dir("notes-migration");
     std::fs::create_dir_all(&config).unwrap();
     let settings_path = config.join(margin_config::SETTINGS_FILE);
     std::fs::write(&settings_path, r#"{"notes":{"vault":"","note_template":""}}"#).unwrap();
-
-    let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
-    app.margin_keys.set_config_dir(config.clone());
-    app.restore(
-        &serde_json::json!({
-            "notes": {
-                "vault": "/legacy-vault",
-                "note_template": "reading/legacy.md",
-                "colors": [["Purple", "#123456"]]
-            }
-        })
-        .to_string(),
-    );
+    let legacy = serde_json::json!({
+        "notes": { "vault": "/legacy-vault", "note_template": "reading/legacy.md", "colors": [["Purple", "#123456"]] }
+    });
+    let h = restored_harness(config.clone(), legacy);
 
     let settings = margin_config::Settings::load(&config).settings;
     assert_eq!(settings.notes.vault, None, "an explicitly empty vault disables Obsidian");
@@ -142,7 +147,7 @@ fn legacy_notes_migrate_before_app_state_is_stripped() {
     assert_eq!(settings.notes.colors.first().map(|color| color.name.as_str()), Some("Purple"));
     let written = std::fs::read_to_string(settings_path).unwrap();
     assert!(written.contains("\"vault\":\"\""), "{written}");
-    let state: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    let state: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
     assert!(state.get("notes").is_none(), "successful migration removes legacy app-state notes");
     std::fs::remove_dir_all(config).ok();
 }
@@ -152,12 +157,10 @@ fn failed_notes_migration_keeps_its_app_state_source() {
     let config = config_dir("notes-migration-error");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(config.join(margin_config::SETTINGS_FILE), "{").unwrap();
+    let legacy = serde_json::json!({ "notes": { "vault": "/legacy-vault", "note_template": "reading/legacy.md" } });
+    let h = restored_harness(config.clone(), legacy);
 
-    let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
-    app.margin_keys.set_config_dir(config.clone());
-    app.restore(r#"{"notes":{"vault":"/legacy-vault","note_template":"reading/legacy.md"}}"#);
-
-    let state: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    let state: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
     assert_eq!(state["notes"]["vault"], "/legacy-vault");
     assert_eq!(state["notes"]["note_template"], "reading/legacy.md");
     std::fs::remove_dir_all(config).ok();

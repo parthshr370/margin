@@ -366,8 +366,6 @@ pub struct PdfCraftApp {
     pub flavor: Flavor,
     /// Margin's Obsidian notes settings (`notes.*`); unused in PdfCraft.
     pub notes: margin::obsidian::Notes,
-    /// Legacy app-state source retained until its notes settings are durably migrated.
-    notes_migration_source: Option<serde_json::Value>,
     /// Margin's reader chrome: sidebar tab, rail (used when `flavor` is Margin).
     pub margin_chrome: margin::ReaderChrome,
     /// Margin flavor: settings, keymap and the keyboard sheet (empty in the PdfCraft flavor).
@@ -642,7 +640,6 @@ impl PdfCraftApp {
             session: Session::new(),
             flavor: Flavor::PdfCraft,
             notes: Default::default(),
-            notes_migration_source: None,
             margin_chrome: Default::default(),
             margin_keys: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1281,9 +1278,7 @@ impl PdfCraftApp {
             "comments_panel_closed": self.comments_panel_closed,
         });
         if self.flavor == Flavor::Margin {
-            if let Some(source) = &self.notes_migration_source {
-                state["notes"] = source.clone();
-            }
+            self.notes.save_state(&mut state);
             state["margin_chrome"] = self.margin_chrome.to_json();
         }
         state.to_string()
@@ -1319,10 +1314,7 @@ impl PdfCraftApp {
         if let Some(closed) = v["comments_panel_closed"].as_bool() {
             self.comments_panel_closed = closed;
         }
-        self.notes.restore(&v["notes"]);
-        if self.flavor == Flavor::Margin {
-            self.notes_migration_source = v.get("notes").filter(|source| source.is_object()).cloned();
-        }
+        self.notes.restore_state(&v);
         self.margin_chrome.restore(&v["margin_chrome"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
@@ -1361,34 +1353,6 @@ impl PdfCraftApp {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.session.set_trusted_certificates(certs);
         }
-        if self.notes_migration_source.is_some() {
-            if let Err(err) = self.migrate_legacy_notes() {
-                log::warn!("could not migrate legacy notes settings: {err}");
-            }
-        }
-    }
-    /// Migrate configured notes out of app state without replacing explicit `notes.*` settings.
-    pub(crate) fn migrate_legacy_notes(&mut self) -> Result<(), String> {
-        let Some(source) = self.notes_migration_source.as_ref() else {
-            return Ok(());
-        };
-        let config_dir = self.margin_keys.settings_dir().ok_or_else(|| "This system has no settings folder.".to_owned())?;
-        let mut legacy = margin::obsidian::Notes::default();
-        legacy.restore(source);
-
-        let vault =
-            legacy.vault.as_ref().map(|vault| serde_json::Value::String(vault.to_string_lossy().into_owned())).unwrap_or(serde_json::Value::Null);
-        let colors =
-            serde_json::Value::Array(legacy.colors.iter().map(|color| serde_json::json!({ "name": &color.name, "rgb": color.rgb })).collect());
-        let values = [("notes.vault", vault), ("notes.note_template", serde_json::Value::String(legacy.note_template)), ("notes.colors", colors)];
-        margin_config::set_user_values_if_missing(&config_dir, &values)?;
-
-        let settings = margin_config::Settings::load(&config_dir).settings;
-        self.notes_migration_source = None;
-        if !margin::keys::reload_now(self) {
-            self.notes.apply_config(&settings.notes);
-        }
-        Ok(())
     }
 
     /// `true` while any open document still waits for page renders (used by headless capture).

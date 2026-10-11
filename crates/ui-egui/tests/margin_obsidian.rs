@@ -156,7 +156,7 @@ fn writing_to_the_note_twice_adds_one_entry() {
     ask(&mut h, Request::Write);
     let note = await_note(&mut h, &vault.note(), CALLOUT);
     assert!(note.starts_with("Foreign note text\n\n## Highlights\n\n<!-- margin:"), "{note}");
-    assert_eq!(toast(&h), "Updated 1 highlight blocks in reading/text.md");
+    assert_eq!(toast(&h), "Updated reading/text.md: 1 added");
     if let Some(folder) = evidence_folder() {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("initial-note.txt"), &note).unwrap();
@@ -254,9 +254,15 @@ fn saving_a_snapshot_embeds_a_300_dpi_png_in_the_note() {
     }
     assert!(toast(&h).starts_with("Saved snapshot to "), "{}", toast(&h));
     let note = std::fs::read_to_string(vault.note()).unwrap();
-    assert!(note.contains("![[snapshots/"), "{note}");
-    let image = std::fs::read_dir(vault.dir().join("snapshots")).unwrap().next().unwrap().unwrap();
+    assert!(note.contains("![[attachments/"), "{note}");
+    assert!(note.contains("[[papers/text.pdf#page=1|text, p.1]]"), "the embed links back to the page: {note}");
+    let image = std::fs::read_dir(vault.dir().join("attachments")).unwrap().next().unwrap().unwrap();
     assert_eq!(&std::fs::read(image.path()).unwrap()[..8], b"\x89PNG\r\n\x1a\n");
+    if let Some(folder) = evidence_folder() {
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("snapshot-note.txt"), &note).unwrap();
+        std::fs::copy(image.path(), folder.join("snapshot.png")).unwrap();
+    }
 }
 
 #[test]
@@ -283,6 +289,26 @@ fn writing_updates_recolored_notes_and_removes_deleted_highlights() {
     assert!(!deleted.contains("<!-- margin:") && !deleted.contains("edited highlight note"), "{deleted}");
 }
 
+/// A block the user rewrote in Obsidian is Margin's no longer: a recolour or a delete leaves it
+/// as it is, and the message says so.
+#[test]
+fn a_block_the_user_edited_survives_recolour_and_delete() {
+    let vault = Vault::new("user-edited");
+    let mut h = harness(&vault.dir());
+    highlight(&mut h, 4, 14);
+    ask(&mut h, Request::Write);
+    let written = await_note(&mut h, &vault.note(), CALLOUT);
+    let edited = written.replace("> > quick brown", "> > quick brown (my own words)");
+    std::fs::write(vault.note(), &edited).unwrap();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation { page: 0, index: 0, color: Some([1.0, 0.0, 0.0]), opacity: None, width: None });
+    ask(&mut h, Request::Write);
+    assert_eq!(await_note(&mut h, &vault.note(), "my own words"), edited);
+    assert!(toast(&h).contains("left 1 block you edited"), "{}", toast(&h));
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAnnotation { page: 0, index: 0 });
+    ask(&mut h, Request::Write);
+    assert_eq!(await_note(&mut h, &vault.note(), "my own words"), edited, "a deleted highlight never takes the user's text along");
+}
+
 #[test]
 fn pdfcraft_has_no_notes() {
     let mut app = PdfCraftApp::new();
@@ -290,16 +316,17 @@ fn pdfcraft_has_no_notes() {
     assert!(!app.persist().contains("\"notes\""));
 }
 #[test]
-fn export_target_picker_screenshot() {
+fn export_target_picker_lists_every_format() {
     let vault = Vault::new("export-picker");
     let mut h = harness(&vault.dir());
     highlight(&mut h, 4, 14);
-    h.state_mut().choose_right_panel(Some(pdfcraft_ui_egui::RightPanel::Comments));
+    h.state_mut().margin_chrome.sidebar_open = true;
+    h.state_mut().margin_chrome.tab = pdfcraft_ui_egui::margin::SidebarTab::Highlights;
     h.run_steps(3);
-    h.get_by_label("Obsidian / PDF++").click();
-    h.run_steps(2);
+    h.get_by_label(obsidian::TARGET_PICKER_NAME).click();
+    h.run_steps(3);
     for label in ["Markdown", "Logseq", "Readwise CSV", "JSON"] {
-        let _ = h.get_by_label(label);
+        assert!(h.query_by_label(label).is_some(), "{label} is offered");
     }
     if let Some(folder) = evidence_folder() {
         std::fs::create_dir_all(&folder).unwrap();

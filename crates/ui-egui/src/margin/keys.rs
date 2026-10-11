@@ -282,10 +282,7 @@ fn ensure_loaded(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let (loaded, load_problems) = Loaded::read(dir, registry, watch);
     problems.extend(load_problems);
     app.margin_keys.loaded = Some(loaded);
-    app.notes.apply_config(&app.margin_keys.settings().notes);
-    if let Err(err) = app.migrate_legacy_notes() {
-        log::warn!("could not migrate legacy notes settings: {err}");
-    }
+    super::obsidian::settings_loaded(app);
     report(app, &problems, false);
 }
 
@@ -366,25 +363,18 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
     keys.reload_at = None;
     keys.pending.clear();
     let problems = loaded.reload();
-    app.notes.apply_config(&loaded.settings.notes);
+    super::obsidian::settings_loaded(app);
     report(app, &problems, true);
-    if let Err(err) = app.migrate_legacy_notes() {
-        log::warn!("could not migrate legacy notes settings: {err}");
-    }
 }
 
 /// Margin itself just wrote `settings.jsonc` (the Settings window): read it again now, so what
 /// that window shows and the next document opened follow at once. Problems are reported as on
-/// any reload. Returns `true` when settings were already loaded and have now been reapplied.
-/// The watch still sees the save and reloads once more after the debounce.
-pub(crate) fn reload_now(app: &mut PdfCraftApp) -> bool {
-    let Some(loaded) = app.margin_keys.loaded.as_mut() else {
-        return false;
-    };
+/// any reload. The watch still sees the save and reloads once more after the debounce.
+pub(crate) fn reload_now(app: &mut PdfCraftApp) {
+    let Some(loaded) = app.margin_keys.loaded.as_mut() else { return };
     let problems = loaded.reload();
-    app.notes.apply_config(&loaded.settings.notes);
+    super::obsidian::settings_loaded(app);
     report(app, &problems, false);
-    true
 }
 
 /// Resolves this frame's key presses against the keymap and runs what they bind, then gives the

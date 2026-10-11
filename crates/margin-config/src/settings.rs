@@ -522,9 +522,9 @@ impl Default for Stats {
     }
 }
 
-/// A named highlight colour in the notes palette.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+/// A named highlight colour in the notes palette. A colour without a name is ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
 pub struct NoteColor {
     /// The colour name used by Margin commands.
     #[schemars(length(min = 1, max = 64))]
@@ -565,9 +565,9 @@ pub enum NoteUpdateMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Notes {
-    /// The Obsidian vault folder; `null` or an empty path disables vault integration.
+    /// The Obsidian vault folder, as a full path; `null` or `""` turns vault notes off. A relative
+    /// path is not used: the notes panel says why.
     #[serde(deserialize_with = "deserialize_vault")]
-    #[schemars(schema_with = "vault_schema")]
     pub vault: Option<PathBuf>,
     /// Vault-relative reading-note path. Common placeholders: `title`, `title-slug`, `authors`,
     /// `year`, `doi`, `arxiv`, `citekey`, `tags`, `date`, `progress`, `page`, `color`,
@@ -601,15 +601,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let vault = Option::<PathBuf>::deserialize(deserializer)?;
-    Ok(vault.filter(|path| !path.as_os_str().is_empty() && path.is_absolute()))
-}
-
-fn vault_schema(_: &mut SchemaGenerator) -> Schema {
-    #[cfg(windows)]
-    let pattern = r"^(?:$|[A-Za-z]:[\\/]|\\\\)";
-    #[cfg(not(windows))]
-    let pattern = r"^(?:$|/)";
-    json_schema!({ "type": "string", "pattern": pattern })
+    Ok(vault.filter(|path| !path.as_os_str().is_empty()))
 }
 
 const DEFAULT_NOTE_COLORS: [(&str, [u8; 3]); 4] =

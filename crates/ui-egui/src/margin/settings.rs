@@ -11,14 +11,16 @@
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align, CornerRadius, Layout, Rect, RichText, Sense, Stroke, UiBuilder, Vec2, vec2};
-#[cfg(not(target_arch = "wasm32"))]
-use margin_config::settings::{ExportTarget, NoteUpdateMode, Notes as NotesConfig};
 use margin_config::{Fit as DocFit, Layout as DocLayout};
 use serde_json::Value;
 
 use super::look::{self, ButtonSize, Segment, Surfaces};
 use crate::theme::{self, Tokens};
 use crate::{Dialog, PdfCraftApp, i18n};
+
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "notes_settings.rs"]
+mod notes_settings;
 
 /// The sheet's width, and its distance from the window's edges when the window is smaller.
 const SHEET_WIDTH: f32 = 680.0;
@@ -61,9 +63,6 @@ const CHEVRON_SIZE: f32 = 14.0;
 /// The name field's width and the padding inside its well.
 const NAME_FIELD_WIDTH: f32 = 220.0;
 const FIELD_PAD: egui::Margin = egui::Margin::symmetric(12, 7);
-#[cfg(not(target_arch = "wasm32"))]
-/// The template control's Save button width.
-const TEMPLATE_SAVE_WIDTH: f32 = 56.0;
 
 /// Draws the Settings window while `app.dialog` is [`Dialog::Preferences`] in Margin; Done, the
 /// close button, Esc or a click on the scrim closes it.
@@ -179,7 +178,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         RowText { id: "author", name: i18n::t("Your name"), description: Some(i18n::t("Signed on new comments and highlights.")), first: true };
     row(ui, t, text, |ui, name| name_field(app, ui, t, name));
     #[cfg(not(target_arch = "wasm32"))]
-    notes_section(app, ui, t);
+    notes_settings::sections(app, ui, t);
 
     section(ui, t, "JavaScript");
     let text = RowText {
@@ -315,260 +314,6 @@ fn name_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, name: &str) 
     ui.ctx().accesskit_node_builder(field.inner.id, |node| node.set_label(name));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn notes_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    section(ui, t, "Notes");
-    row(
-        ui,
-        t,
-        RowText { id: "notes-vault", name: "Obsidian vault", description: Some("Folder for reading notes and exported highlights."), first: true },
-        |ui, _| vault_control(app, ui),
-    );
-    row(
-        ui,
-        t,
-        RowText { id: "notes-export-target", name: "Export format", description: Some("Default format for notes and highlights."), first: false },
-        |ui, name| export_target_dropdown(app, ui, t, name),
-    );
-    row(
-        ui,
-        t,
-        RowText {
-            id: "notes-update-mode",
-            name: "Existing notes",
-            description: Some("Replace Margin-managed content or append new content."),
-            first: false,
-        },
-        |ui, name| update_mode_dropdown(app, ui, t, name),
-    );
-    notes_text_editor(
-        app,
-        ui,
-        t,
-        NotesTextSetting::NoteTemplate,
-        "Reading note path",
-        "Vault-relative path; {{title-slug}} becomes the title slug.",
-        1,
-    );
-    notes_text_editor(app, ui, t, NotesTextSetting::FrontMatterTemplate, "Front matter template", "YAML prefix; {{source}} is the PDF path.", 4);
-    notes_text_editor(app, ui, t, NotesTextSetting::HeaderTemplate, "Note header template", "Optional text before the note content.", 2);
-    notes_text_editor(app, ui, t, NotesTextSetting::HighlightTemplate, "Highlight template", "{{callout}} is the safely formatted highlight.", 2);
-    notes_text_editor(app, ui, t, NotesTextSetting::SnapshotFolder, "Snapshot folder", "Folder under the vault for snapshots.", 1);
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn vault_control(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let vault = app.notes.config.vault.clone();
-    let display = vault.as_ref().map(|path| path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned());
-    let tooltip = vault.as_ref().map_or_else(|| "No vault selected".to_owned(), |path| path.display().to_string());
-    ui.label(display.as_deref().unwrap_or("Not set")).on_hover_text(tooltip);
-    if ui.button("Choose…").clicked() {
-        app.ask_one(crate::pickers::Ask::Folder(rfd::AsyncFileDialog::new()), None, move |app, path| {
-            let mut config = app.notes.config.clone();
-            config.vault = Some(path);
-            save_notes(app, config);
-        });
-    }
-    if vault.is_some() && ui.button("Clear").clicked() {
-        let mut config = app.notes.config.clone();
-        config.vault = None;
-        save_notes(app, config);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn export_target_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, name: &str) {
-    field_style(ui, t);
-    let current = app.notes.config.export_target;
-    let mut selected = current;
-    let chevron = t.icon;
-    let dropdown = egui::ComboBox::from_id_salt("notes-export-target")
-        .width(DROPDOWN_WIDTH)
-        .icon(move |ui, rect, _, _| crate::icons::paint(ui, rect, "chevron-down", CHEVRON_SIZE, chevron))
-        .selected_text(RichText::new(export_target_name(current)).font(theme::regular(FIELD_TEXT)).color(t.text))
-        .show_ui(ui, |ui| {
-            for (target, label) in [
-                (ExportTarget::Obsidian, "Obsidian"),
-                (ExportTarget::Markdown, "Markdown"),
-                (ExportTarget::Logseq, "Logseq"),
-                (ExportTarget::ReadwiseCsv, "Readwise CSV"),
-                (ExportTarget::Json, "JSON"),
-            ] {
-                if ui.selectable_value(&mut selected, target, label).clicked() {
-                    ui.close();
-                }
-            }
-        });
-    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
-    if selected != current {
-        let mut config = app.notes.config.clone();
-        config.export_target = selected;
-        save_notes(app, config);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn export_target_name(target: ExportTarget) -> &'static str {
-    match target {
-        ExportTarget::Obsidian => "Obsidian",
-        ExportTarget::Markdown => "Markdown",
-        ExportTarget::Logseq => "Logseq",
-        ExportTarget::ReadwiseCsv => "Readwise CSV",
-        ExportTarget::Json => "JSON",
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn update_mode_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, name: &str) {
-    field_style(ui, t);
-    let current = app.notes.config.update_mode;
-    let mut selected = current;
-    let chevron = t.icon;
-    let dropdown = egui::ComboBox::from_id_salt("notes-update-mode")
-        .width(DROPDOWN_WIDTH)
-        .icon(move |ui, rect, _, _| crate::icons::paint(ui, rect, "chevron-down", CHEVRON_SIZE, chevron))
-        .selected_text(
-            RichText::new(match current {
-                NoteUpdateMode::Update => "Update",
-                NoteUpdateMode::Append => "Append",
-            })
-            .font(theme::regular(FIELD_TEXT))
-            .color(t.text),
-        )
-        .show_ui(ui, |ui| {
-            if ui.selectable_value(&mut selected, NoteUpdateMode::Update, "Update").clicked() {
-                ui.close();
-            }
-            if ui.selectable_value(&mut selected, NoteUpdateMode::Append, "Append").clicked() {
-                ui.close();
-            }
-        });
-    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
-    if selected != current {
-        let mut config = app.notes.config.clone();
-        config.update_mode = selected;
-        save_notes(app, config);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone, Copy)]
-enum NotesTextSetting {
-    NoteTemplate,
-    FrontMatterTemplate,
-    HeaderTemplate,
-    HighlightTemplate,
-    SnapshotFolder,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl NotesTextSetting {
-    fn id(self) -> &'static str {
-        match self {
-            Self::NoteTemplate => "note-template",
-            Self::FrontMatterTemplate => "front-matter-template",
-            Self::HeaderTemplate => "header-template",
-            Self::HighlightTemplate => "highlight-template",
-            Self::SnapshotFolder => "snapshot-folder",
-        }
-    }
-
-    fn value(self, config: &NotesConfig) -> &str {
-        match self {
-            Self::NoteTemplate => &config.note_template,
-            Self::FrontMatterTemplate => &config.front_matter_template,
-            Self::HeaderTemplate => &config.header_template,
-            Self::HighlightTemplate => &config.highlight_template,
-            Self::SnapshotFolder => &config.snapshot_folder,
-        }
-    }
-
-    fn set(self, config: &mut NotesConfig, value: String) {
-        match self {
-            Self::NoteTemplate => config.note_template = value,
-            Self::FrontMatterTemplate => config.front_matter_template = value,
-            Self::HeaderTemplate => config.header_template = value,
-            Self::HighlightTemplate => config.highlight_template = value,
-            Self::SnapshotFolder => config.snapshot_folder = value,
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone)]
-struct TemplateDraft {
-    source: String,
-    text: String,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn notes_text_editor(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, setting: NotesTextSetting, name: &str, description: &str, rows: usize) {
-    let current = setting.value(&app.notes.config).to_owned();
-    let draft_id = ui.make_persistent_id(("margin-notes-template-draft", setting.id()));
-    let mut draft = ui
-        .ctx()
-        .data(|memory| memory.get_temp::<TemplateDraft>(draft_id))
-        .filter(|draft| draft.source == current)
-        .map_or_else(|| current.clone(), |draft| draft.text);
-
-    ui.add_space(ROW_PAD_Y);
-    ui.label(RichText::new(name).font(theme::medium(NAME_SIZE)).color(t.text));
-    ui.add_space(NAME_GAP);
-    ui.label(RichText::new(description).font(theme::regular(DESCRIPTION_SIZE)).color(t.text_muted));
-    ui.add_space(NAME_GAP);
-    ui.horizontal(|ui| {
-        let input_id = ui.make_persistent_id(("margin-notes-template-field", setting.id()));
-        let editor_width = (ui.available_width() - TEMPLATE_SAVE_WIDTH - ROW_GAP).max(100.0);
-        let text_width = (editor_width - f32::from(FIELD_PAD.left) - f32::from(FIELD_PAD.right)).max(80.0);
-        let mut editor = if rows == 1 { egui::TextEdit::singleline(&mut draft) } else { egui::TextEdit::multiline(&mut draft).desired_rows(rows) };
-        editor = editor.id(input_id).frame(egui::Frame::NONE).font(theme::regular(FIELD_TEXT)).desired_width(text_width);
-        let field = look::input_frame(t, look::input_focused(ui, input_id)).inner_margin(FIELD_PAD).show(ui, |ui| ui.add(editor));
-        ui.ctx().accesskit_node_builder(field.inner.id, |node| node.set_label(name));
-        ui.ctx().data_mut(|memory| memory.insert_temp(draft_id, TemplateDraft { source: current.clone(), text: draft.clone() }));
-        if ui.add_sized(vec2(TEMPLATE_SAVE_WIDTH, CONTROL_HEIGHT), egui::Button::new("Save")).clicked() && draft != current {
-            let mut config = app.notes.config.clone();
-            setting.set(&mut config, draft);
-            save_notes(app, config);
-        }
-    });
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_notes(app: &mut PdfCraftApp, config: NotesConfig) {
-    if let Err(err) = persist_notes(app, config) {
-        app.notify(format!("Couldn't save notes settings: {err}"));
-    }
-}
-
-/// Persist Margin notes settings without losing the surrounding JSONC comments.
-pub(crate) fn persist_notes(app: &mut PdfCraftApp, mut config: margin_config::settings::Notes) -> Result<(), String> {
-    if config.vault.as_ref().is_some_and(|vault| vault.as_os_str().is_empty()) {
-        config.vault = None;
-    } else if config.vault.as_ref().is_some_and(|vault| !vault.is_absolute()) {
-        return Err("notes.vault must be an absolute folder path".to_owned());
-    }
-    let dir = app.margin_keys.settings_dir().ok_or_else(|| "This system has no settings folder.".to_owned())?;
-    let serialized = serde_json::to_value(&config).map_err(|err| format!("could not serialize notes settings ({err})"))?;
-    let fields = serialized.as_object().ok_or_else(|| "notes settings did not serialize to an object".to_owned())?;
-    let value = |key: &str| fields.get(key).cloned().ok_or_else(|| format!("notes setting `{key}` is missing"));
-    let values = [
-        ("notes.vault", value("vault")?),
-        ("notes.note_template", value("note_template")?),
-        ("notes.front_matter_template", value("front_matter_template")?),
-        ("notes.header_template", value("header_template")?),
-        ("notes.highlight_template", value("highlight_template")?),
-        ("notes.colors", value("colors")?),
-        ("notes.export_target", value("export_target")?),
-        ("notes.snapshot_folder", value("snapshot_folder")?),
-        ("notes.update_mode", value("update_mode")?),
-    ];
-    margin_config::set_user_values(&dir, &values)?;
-    if !super::keys::reload_now(app) {
-        app.notes.apply_config(&config);
-    }
-    Ok(())
-}
-
 /// Writes one of Margin's document defaults (`view.layout`, `view.fit`) into `settings.jsonc`,
 /// keeping its comments, and reads the file again so this window and the next document opened
 /// follow at once. A failure is told in a notice.
@@ -578,9 +323,7 @@ fn set_document_default(app: &mut PdfCraftApp, key: &str, value: &str) {
         return;
     };
     match margin_config::set_user_values(&dir, &[(key, Value::from(value))]) {
-        Ok(()) => {
-            super::keys::reload_now(app);
-        }
+        Ok(()) => super::keys::reload_now(app),
         Err(err) => app.notify(format!("Couldn't set the default: {err}")),
     }
 }
@@ -588,22 +331,4 @@ fn set_document_default(app: &mut PdfCraftApp, key: &str, value: &str) {
 /// Whether Margin draws `dialog` itself (the hook in `dialogs::show`).
 pub(crate) fn owns(app: &PdfCraftApp, dialog: Dialog) -> bool {
     app.flavor == crate::Flavor::Margin && dialog == Dialog::Preferences
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn relative_vault_is_rejected_before_settings_are_written() {
-        let dir = std::env::temp_dir().join(format!("margin-notes-relative-vault-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        let mut app = PdfCraftApp::with_flavor(crate::Flavor::Margin);
-        app.margin_keys.set_config_dir(dir.clone());
-        let mut config = NotesConfig::default();
-        config.vault = Some("relative".into());
-
-        assert_eq!(persist_notes(&mut app, config).unwrap_err(), "notes.vault must be an absolute folder path");
-        assert!(!dir.exists());
-    }
 }

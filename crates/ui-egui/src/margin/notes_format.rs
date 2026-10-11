@@ -68,10 +68,33 @@ fn block(owner: &str, key: &str, body: &str) -> String {
     format!("<!-- margin:{key} sha256:{} owner:{} -->\n{body}<!-- /margin:{key} -->\n", digest(&body), digest(owner))
 }
 
+/// What one synchronization did to the note.
 #[derive(Default, Debug)]
 pub(super) struct SyncReport {
-    pub changed: usize,
+    /// New highlight blocks.
+    pub added: usize,
+    /// Margin blocks rewritten because their highlight changed (note, colour, text).
+    pub updated: usize,
+    /// Margin blocks taken out because their highlight is gone.
+    pub removed: usize,
+    /// Keys of blocks Margin couldn't safely change: edited by the user, or legacy entries.
     pub preserved: Vec<String>,
+}
+
+impl SyncReport {
+    pub fn changed(&self) -> usize {
+        self.added.saturating_add(self.updated).saturating_add(self.removed)
+    }
+
+    /// "1 added, 2 updated", naming only what happened.
+    pub fn summary(&self) -> String {
+        [(self.added, "added"), (self.updated, "updated"), (self.removed, "removed")]
+            .iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, what)| format!("{count} {what}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// A full synchronization removes absent highlights; a partial write never deletes siblings.
@@ -152,10 +175,14 @@ pub(super) fn synchronize(
                 output.push_str(whole);
             } else {
                 output.push_str(&replacement);
-                report.changed = report.changed.saturating_add(1);
+                report.updated = report.updated.saturating_add(1);
             }
         } else if full && !append_only {
-            report.changed = report.changed.saturating_add(1);
+            report.removed = report.removed.saturating_add(1);
+            // The blank line Margin put after the block goes with it.
+            let after_gap = after_block.strip_prefix("\r\n").or_else(|| after_block.strip_prefix('\n')).unwrap_or(after_block);
+            remaining = after_gap;
+            continue;
         } else {
             output.push_str(whole);
         }
@@ -167,7 +194,7 @@ pub(super) fn synchronize(
         if seen.insert(encoded_key(original)) {
             fresh.push_str(&block(owner, original, body));
             fresh.push('\n');
-            report.changed = report.changed.saturating_add(1);
+            report.added = report.added.saturating_add(1);
         }
     }
     if !fresh.is_empty() {
@@ -207,17 +234,18 @@ mod tests {
         let entries = vec![("id/one".into(), "> [!PDF|yellow] quote\n> note\n".into()), ("two".into(), "> delete\n".into())];
         let (first, report) =
             synchronize(Some("# Paper\n\nForeign thoughts\n\n## Highlights\n\n## Questions\n- why?\n"), "", &entries, true, false, "paper");
-        assert_eq!(report.changed, 2);
+        assert_eq!((report.added, report.changed()), (2, 2));
         let new = vec![("id/one".into(), "> [!PDF|red] quote\n> edited note\n".into())];
         let (second, report) = synchronize(Some(&first), "", &new, true, false, "paper");
-        assert_eq!(report.changed, 2);
+        assert_eq!((report.updated, report.removed, report.summary().as_str()), (1, 1, "1 updated, 1 removed"));
+        assert!(!second.contains("\n\n\n"), "a removed block takes its blank line along: {second:?}");
         assert!(second.contains("> [!PDF|red] quote\n> edited note\n"));
         assert!(!second.contains("> delete"));
         assert!(second.starts_with("# Paper\n\nForeign thoughts\n"));
         assert!(second.ends_with("## Questions\n- why?\n"));
         let (third, report) = synchronize(Some(&second), "", &new, true, false, "paper");
         assert_eq!(third, second);
-        assert_eq!(report.changed, 0);
+        assert_eq!(report.changed(), 0);
     }
     #[test]
     fn user_edits_are_never_overwritten_or_deleted() {
@@ -245,7 +273,7 @@ mod tests {
     fn adding_to_a_foreign_note_preserves_it_and_reading_order() {
         let entries = [("z".into(), "> first\n".into()), ("a".into(), "> second\n".into())];
         let (output, report) = synchronize(Some("# Paper\nPersonal thoughts"), "", &entries, false, false, "paper");
-        assert_eq!(report.changed, 2);
+        assert_eq!(report.added, 2);
         assert!(output.starts_with("# Paper\nPersonal thoughts\n\n## Highlights\n\n"));
         assert!(output.find("> first").unwrap() < output.find("> second").unwrap());
     }

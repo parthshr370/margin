@@ -380,7 +380,7 @@ pub fn rescan(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     let folders = app.margin_keys.settings().library.folders.clone();
     if folders.is_empty() {
-        app.notify("Add a folder to library.folders in settings.jsonc to scan it");
+        super::welcome::add_library_folder(app);
         return;
     }
     start_scan(app, ctx, folders, Vec::new());
@@ -457,6 +457,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut page = ui.new_child(egui::UiBuilder::new().max_rect(content).layout(egui::Layout::top_down(egui::Align::Min)));
     top_bar(app, &mut page, &t, &mut actions);
     page.add_space(GAP_LARGE * 2.0);
+    super::welcome::card(app, &mut page, &t);
     if app.margin_library.failed.is_some() {
         page.label(egui::RichText::new("The library database couldn't be opened; see the log.").color(t.text_muted));
     }
@@ -715,8 +716,9 @@ fn shelf_picker(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &
         match app.margin_library.shelf {
             Shelf::Folders => {
                 let folders: Vec<PathBuf> = folder_paths(&app.margin_keys.settings().library.folders);
-                if folders.is_empty() {
-                    ui.label(egui::RichText::new("No watched folders. Add paths to \"library.folders\" in settings.jsonc.").color(t.text_muted));
+                if folders.is_empty() && look::Button::secondary(ButtonSize::Standard, "Add a library folder…").icon("folder-plus").show(ui).clicked()
+                {
+                    super::welcome::add_library_folder(app);
                 }
                 if chip(ui, "All", app.margin_library.folder.is_none()).clicked() {
                     app.margin_library.folder = None;
@@ -781,16 +783,22 @@ fn new_collection_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, acti
     });
 }
 
-fn empty_state(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let text = if !app.margin_library.query.trim().is_empty() {
         "No book matches the search."
     } else if app.margin_library.books.is_empty() {
-        "Books you open appear here. Add folders to \"library.folders\" in settings.jsonc to scan them."
+        "Books you open appear here, and the PDFs in your library folders."
     } else {
         "Nothing on this shelf yet."
     };
     ui.add_space(GAP_LARGE * 2.0);
     ui.label(egui::RichText::new(text).font(theme::regular(13.0)).color(t.text_muted));
+    if app.margin_library.books.is_empty() && app.margin_keys.settings().library.folders.is_empty() && !super::welcome::wanted(app) {
+        ui.add_space(GAP);
+        if look::Button::secondary(ButtonSize::Standard, "Add a library folder…").icon("folder-plus").show(ui).clicked() {
+            super::welcome::add_library_folder(app);
+        }
+    }
 }
 
 /// The cover grid, laid out a row at a time for the rows on screen only.
