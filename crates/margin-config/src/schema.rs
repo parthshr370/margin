@@ -409,6 +409,14 @@ mod tests {
             (json!({ "reader": { "find": { "case": true } } }), true),
             (json!({ "reader": { "find": { "regex": true } } }), false),
             (json!({ "reader": { "start": "home" } }), false),
+            (json!({ "reader": { "synctex_click": "alt-click" } }), true),
+            (json!({ "reader": { "synctex_click": "secondary-shift-click" } }), true),
+            (json!({ "reader": { "synctex_click": "middle-click" } }), false),
+            (json!({ "reader": { "synctex_editor": "code -g {file}:{line}" } }), true),
+            (json!({ "reader": { "synctex_editor": 1 } }), false),
+            (json!({ "reader": { "reload_debounce_ms": 60000 } }), true),
+            (json!({ "reader": { "reload_debounce_ms": 60001 } }), false),
+            (json!({ "reader": { "link_preview": false, "reload_on_change": false } }), true),
             (json!({ "perf": {} }), false),
         ];
         for (fixture, valid) in fixtures {

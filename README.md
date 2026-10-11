@@ -256,6 +256,9 @@ An example `settings.jsonc`:
     "remember_per_document": true,
     "back_stack": 100,      // 0 disables back/forward history
     "back_pill": true,
+    "link_preview": true,   // hovering a link previews where it goes
+    "reload_on_change": true,
+    "synctex_click": "secondary-click", // Cmd+click (Ctrl+click elsewhere) opens reader.synctex_editor
     "selection_popover": true,
     "time_left": true,
     "undo_steps": 100,      // 0 disables undo/redo history
@@ -314,8 +317,9 @@ Build with SyncTeX on (`-synctex=1`; latexmk, LaTeX Workshop and vimtex do by de
 **Inverse search** (PDF to source): <kbd>Cmd</kbd>+click on macOS, <kbd>Ctrl</kbd>+click elsewhere,
 on the page runs the editor command in `reader.synctex_editor`. It runs without a shell: `{file}`,
 `{line}` and `{column}` are filled in, and quotes keep words together. `reader.synctex_click`
-picks `"secondary-click"`, `"secondary-shift-click"` or `"alt-click"` instead. On macOS, apps
-started from the Dock don't see your shell's `PATH`, so give the editor's full path.
+picks `"secondary-click"`, `"secondary-shift-click"` or `"alt-click"` instead. That click on a link
+(a citation, say) opens the source line and doesn't follow the link. On macOS, apps started from
+the Dock don't see your shell's `PATH`, so give the editor's full path.
 
 **Forward search** (source to PDF): `margin --forward-search FILE.tex:LINE[:COLUMN] paper.pdf`
 opens the PDF (or brings it forward), scrolls to the line and outlines it briefly. When Margin is
