@@ -785,7 +785,8 @@ mod tests {
     }
 
     /// The ids `margin::run` (the reader chrome, reading state and library) handles.
-    const CHROME_COMMANDS: [&str; 10] = [
+    const CHROME_COMMANDS: [&str; 11] = [
+        "view.focus_mode.toggle",
         "view.sidebar.toggle",
         "view.sidebar.tab",
         "reader.annotate.toggle",

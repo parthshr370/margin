@@ -123,7 +123,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
         ui.set_opacity(shown);
         look::floating_frame(&t, look::RADIUS_FLOATING).inner_margin(egui::Margin::same(PADDING as i8)).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            egui::ScrollArea::vertical().max_height((area.height() - 2.0 * INSET).max(BUTTON)).show(ui, |ui| {
+            ui.vertical(|ui| {
                 let mut clicked = None;
                 for command in &app.margin_keys.settings().ui.rail.items {
                     let Some(item) = RailItem::from_id(command, app) else { continue };
