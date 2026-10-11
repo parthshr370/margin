@@ -264,11 +264,15 @@ pub struct Reader {
     pub selection_popover: bool,
     /// footer shows section and time left from your reading speed
     pub time_left: bool,
-    /// reload when the file changes on disk; page, zoom and colour kept
+    /// reload when the file changes on disk (a LaTeX build); place, zoom, page colour and history kept. Unsaved edits are never dropped: Margin asks
     pub reload_on_change: bool,
-    /// wait after the last disk change (Okular uses 750)
+    /// wait this long after the last disk change before reloading (Okular uses 750)
     #[schemars(range(max = 60000))]
     pub reload_debounce_ms: u32,
+    /// SyncTeX inverse search: the editor command opening a source line, run without a shell; {file}, {line}, {column} are filled in, quotes group words. "" = off. E.g. "code -g {file}:{line}", "zed {file}:{line}", "nvim --server /tmp/nvim.sock --remote-send '<C-\\><C-N>:e {file}<CR>:{line}<CR>'"
+    pub synctex_editor: String,
+    /// which click on a page runs reader.synctex_editor (secondary = Cmd on macOS, Ctrl elsewhere)
+    pub synctex_click: SynctexClick,
     /// writable PDFs: edits are saved incrementally about 1 s after the last change; false = Ctrl+S only. Never writes on open. Sidecars always autosave.
     pub autosave: bool,
     /// undo depth per document
@@ -290,11 +294,25 @@ impl Default for Reader {
             time_left: true,
             reload_on_change: true,
             reload_debounce_ms: 750,
+            synctex_editor: String::new(),
+            synctex_click: SynctexClick::SecondaryClick,
             autosave: true,
             undo_steps: 100,
             find: FindOptions::default(),
         }
     }
+}
+
+/// The click that runs SyncTeX inverse search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SynctexClick {
+    /// Cmd+click on macOS, Ctrl+click elsewhere.
+    SecondaryClick,
+    /// Cmd+Shift+click on macOS (Skim's), Ctrl+Shift+click elsewhere.
+    SecondaryShiftClick,
+    /// Alt+click (Option+click on macOS).
+    AltClick,
 }
 
 /// The UI block (`[app]`): the sidebar, the rail and motion so far; the rest of CUSTOMIZATION §1

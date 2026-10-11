@@ -15,6 +15,11 @@
       "secondary-shift-n": "view.focus_page_input", "secondary-b": "bookmark.add",
       "secondary-j": "tools.js_console", "secondary-shift-k": "app.key_context",
       "secondary-shift-o": "library.open", "secondary-shift-t": "app.stats",
+      // Open documents, as browsers switch tabs; secondary-1..4 stay the sidebar's tabs.
+      "ctrl-tab": "view.tab.next", "ctrl-shift-tab": "view.tab.prev",
+      "alt-1": ["view.tab.go", { "index": 1 }], "alt-2": ["view.tab.go", { "index": 2 }], "alt-3": ["view.tab.go", { "index": 3 }],
+      "alt-4": ["view.tab.go", { "index": 4 }], "alt-5": ["view.tab.go", { "index": 5 }], "alt-6": ["view.tab.go", { "index": 6 }],
+      "alt-7": ["view.tab.go", { "index": 7 }], "alt-8": ["view.tab.go", { "index": 8 }], "alt-9": ["view.tab.go", { "index": 9 }],
       "escape": "app.close_layer", "?": "help.shortcuts" } },
   { "context": "Library", "bindings": { "/": "library.search", "secondary-f": "library.search" } },
   { "context": "Reader", "bindings": {

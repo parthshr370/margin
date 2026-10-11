@@ -376,6 +376,10 @@ pub struct PdfCraftApp {
     /// Margin flavor: reading statistics; untouched in the PdfCraft flavor.
     #[cfg(not(target_arch = "wasm32"))]
     pub margin_stats: margin::stats::StatsState,
+    /// Margin flavor: open files watched for changes on disk (`reader.reload_on_change`).
+    pub margin_reload: margin::reload::Reload,
+    /// Margin flavor: SyncTeX maps, waiting searches and the forward-search inbox.
+    pub margin_synctex: margin::synctex::SynctexState,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
@@ -646,6 +650,8 @@ impl PdfCraftApp {
             margin_library: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             margin_stats: Default::default(),
+            margin_reload: Default::default(),
+            margin_synctex: Default::default(),
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
@@ -1779,6 +1785,10 @@ impl eframe::App for PdfCraftApp {
                 view.receive(ctx, doc);
             }
         }
+        // Margin: files changed on disk (before autosave, which a pending change holds back) and
+        // SyncTeX searches.
+        margin::reload::tick(self, ctx);
+        margin::synctex::tick(self, ctx);
         // Margin: keep the reader's place, save reading state and autosave (after renders, which
         // may teach the trim new page boxes).
         margin::reading::tick(self, ctx);

@@ -465,6 +465,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         hero_card(app, &mut page, &t, index, meta, &mut actions);
         page.add_space(GAP_LARGE * 2.0);
     }
+    super::tabs::open_now(app, &mut page, &t);
     shelf_header(app, &mut page, &t, order.len());
     page.add_space(GAP_LARGE);
     if matches!(app.margin_library.shelf, Shelf::Folders | Shelf::Collections) {

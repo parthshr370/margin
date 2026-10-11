@@ -783,7 +783,7 @@ mod tests {
     }
 
     /// The ids `margin::run` (the reader chrome, reading state and library) handles.
-    const CHROME_COMMANDS: [&str; 10] = [
+    const CHROME_COMMANDS: [&str; 13] = [
         "view.sidebar.toggle",
         "view.sidebar.tab",
         "reader.annotate.toggle",
@@ -794,6 +794,9 @@ mod tests {
         "app.stats",
         "annotation.delete",
         "annotation.color",
+        "view.tab.next",
+        "view.tab.prev",
+        "view.tab.go",
     ];
 
     /// Every id the built-in keymap binds is one the app runs.

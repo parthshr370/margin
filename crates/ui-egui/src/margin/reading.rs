@@ -552,7 +552,10 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             state.seen = generation;
             state.changed_at = now;
         }
-        if autosave_on && autosave_possible(doc, state) && doc.dirty && generation != state.opened && state.failed != Some(generation) {
+        // A change on disk waits to be compared with these edits, or for the reader's answer
+        // (`margin::reload`): saving now would write over the other program's version.
+        let held = app.margin_reload.holds(view.id);
+        if autosave_on && autosave_possible(doc, state) && doc.dirty && generation != state.opened && state.failed != Some(generation) && !held {
             let ready = view.pending_edit.is_none() && view.forms.focus.is_none();
             if ready && now - state.changed_at >= DEBOUNCE_SECS {
                 save.push((index, generation));

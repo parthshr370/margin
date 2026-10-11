@@ -75,6 +75,15 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - Sidebar tabs: Contents (the outline, following the section you are reading), Highlights, Pages
   (a thumbnail grid with the current page marked and highlight dots), Bookmarks, Find, and Tools
   (PdfCraft's tools that work in this build). In a narrow window the sidebar floats over the page.
+- Open several documents at once: with two or more, a tab strip under the header shows them (close
+  with ×, or middle-click; drag to reorder; a dot marks unsaved changes). <kbd>Ctrl</kbd>+<kbd>Tab</kbd>
+  and <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> switch, and the Library lists them under Open now.
+  Each keeps its own place, zoom, history and sidebar tab.
+- A file rewritten by another program (a LaTeX build, a sync client) reloads by itself at the same
+  place, zoom and page colour (`reader.reload_on_change`, `reader.reload_debounce_ms`). A half
+  written or broken file keeps the version shown, and unsaved edits are never dropped: Margin asks
+  whether to reload or keep yours.
+- SyncTeX: jump from a source line to the PDF and back (see [LaTeX](#latex-and-synctex)).
 
 **Highlights and notes**
 
@@ -238,6 +247,56 @@ margin --notes.vault "/home/you/Obsidian/My Vault"
 `reading/{{title-slug}}.md`), and `--notes.colors "Yellow=#ffd000,Red=#ea5252"` sets the highlight
 colours. PDF++ links work best when the PDF itself is inside the vault.
 
+### LaTeX and SyncTeX
+
+Build with SyncTeX on (`-synctex=1`; latexmk, LaTeX Workshop and vimtex do by default) so a
+`paper.synctex.gz` sits beside `paper.pdf`. Margin reloads the PDF after each build.
+
+**Inverse search** (PDF to source): <kbd>Cmd</kbd>+click on macOS, <kbd>Ctrl</kbd>+click elsewhere,
+on the page runs the editor command in `reader.synctex_editor`. It runs without a shell: `{file}`,
+`{line}` and `{column}` are filled in, and quotes keep words together. `reader.synctex_click`
+picks `"secondary-click"`, `"secondary-shift-click"` or `"alt-click"` instead. On macOS, apps
+started from the Dock don't see your shell's `PATH`, so give the editor's full path.
+
+**Forward search** (source to PDF): `margin --forward-search FILE.tex:LINE[:COLUMN] paper.pdf`
+opens the PDF (or brings it forward), scrolls to the line and outlines it briefly. When Margin is
+already running, this launch hands the request to it through Margin's data folder
+(`forward-search/`) and exits; only your own user can write there. Point editors at the `margin`
+binary itself (on macOS, `/Applications/Margin.app/Contents/MacOS/margin`): `open -a Margin` can't
+pass a line.
+
+VS Code with LaTeX Workshop (`settings.json`):
+
+```jsonc
+"latex-workshop.view.pdf.viewer": "external",
+"latex-workshop.view.pdf.external.viewer.command": "margin",
+"latex-workshop.view.pdf.external.viewer.args": ["%PDF%"],
+"latex-workshop.view.pdf.external.synctex.command": "margin",
+"latex-workshop.view.pdf.external.synctex.args": ["--forward-search", "%TEX%:%LINE%", "%PDF%"]
+```
+
+and in Margin's `settings.jsonc`: `"reader": { "synctex_editor": "code -g {file}:{line}" }`.
+
+vimtex (`init.vim`; `\lv` runs forward search):
+
+```vim
+let g:vimtex_view_method = 'general'
+let g:vimtex_view_general_viewer = 'margin'
+let g:vimtex_view_general_options = '--forward-search @tex:@line @pdf'
+```
+
+and `"reader": { "synctex_editor": "nvim --headless -c \"VimtexInverseSearch {line} '{file}'\"" }`.
+
+Zed: a task for forward search (`~/.config/zed/tasks.json`), run from the task picker or bound to
+a key:
+
+```jsonc
+[{ "label": "Margin: show in PDF", "command": "margin",
+   "args": ["--forward-search", "$ZED_FILE:$ZED_ROW", "$ZED_DIRNAME/$ZED_STEM.pdf"] }]
+```
+
+and `"reader": { "synctex_editor": "zed {file}:{line}" }`.
+
 ## Keyboard shortcuts
 
 <kbd>Ctrl</kbd> is <kbd>Cmd</kbd> on macOS. Press <kbd>?</kbd> in Margin for the full list, taken
@@ -266,6 +325,9 @@ from your keymap.
 | Full screen | <kbd>Ctrl</kbd>+<kbd>L</kbd> (leave with <kbd>Esc</kbd>) |
 | Toggle sidebar | <kbd>[</kbd> |
 | Contents / Highlights / Pages / Bookmarks tab | <kbd>Ctrl</kbd>+<kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> / <kbd>4</kbd> |
+| Next / previous open document | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> (also <kbd>Ctrl</kbd> on macOS) |
+| Open document 1…8, last | <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>8</kbd>, <kbd>Alt</kbd>+<kbd>9</kbd> |
+| Open the source line (SyncTeX) | <kbd>Ctrl</kbd>+click on the page |
 | Bookmark this page | <kbd>B</kbd> |
 | Annotate tools | <kbd>A</kbd> |
 | With text selected: highlight, underline, strikethrough, squiggly | <kbd>H</kbd>, <kbd>U</kbd>, <kbd>S</kbd>, <kbd>Q</kbd> |
