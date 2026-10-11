@@ -44,7 +44,7 @@ pub(crate) struct Raster {
     pub tile: Option<Tile>,
     pub scale: f32,
     pub size: [usize; 2],
-    pub rgba: Vec<u8>,
+    pub rgba: pdfcraft_render::Pixels,
 }
 
 /// One document view's figures, by page.
@@ -358,7 +358,13 @@ mod tests {
         for row in source.chunks_exact(fw * 4).skip(tile.y as usize).take(tile.h as usize) {
             tile_px.extend_from_slice(&row[tile.x as usize * 4..(tile.x + tile.w) as usize * 4]);
         }
-        let raster = Raster { page: 0, tile: Some(tile), scale: scale as f32, size: [tile.w as usize, tile.h as usize], rgba: Vec::new() };
+        let raster = Raster {
+            page: 0,
+            tile: Some(tile),
+            scale: scale as f32,
+            size: [tile.w as usize, tile.h as usize],
+            rgba: pdfcraft_render::Pixels::default(),
+        };
         let info = PageInfo { width: W as f32, height: H as f32, label: "1".into(), crop: [0.0, 0.0, W as f32, H as f32], rotation: 0 };
         let frame = Frame::of(&raster, Some(&info));
         night().apply(&mut tile_px, tile.w as usize, tile.h as usize, &frame.all_pixels(&figures));

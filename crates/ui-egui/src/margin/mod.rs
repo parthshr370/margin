@@ -169,8 +169,8 @@ impl SidebarTab {
         }
     }
 
-    /// The PdfCraft panel whose state this tab drives (thumbnails render only while Pages is
-    /// shown, the find bar hands its search to the Find tab).
+    /// The PdfCraft panel whose state this tab drives (the find bar hands its search to the Find
+    /// tab).
     pub fn panel(self) -> Option<RightPanel> {
         match self {
             Self::Highlights => Some(RightPanel::Comments),
@@ -286,9 +286,8 @@ pub(crate) fn open_tab(app: &mut PdfCraftApp, tab: SidebarTab) {
 /// Commands (`comment.list`, `edit.advanced_search`, `sign.panel`, the control channel's
 /// `panel` option) still set `app.right`: the sidebar switches to the matching tab. Closing a
 /// panel with its own close button closes the sidebar. In turn the sidebar sets `app.right` to
-/// the panel its tab shows, so the canvas renders thumbnails for Pages, and `app.left_open`
-/// while the Tools tab shows a tool's options. An open search shows the Find tab
-/// (`find::sync`).
+/// the panel its tab shows, and `app.left_open` while the Tools tab shows a tool's options. An
+/// open search shows the Find tab (`find::sync`).
 pub(crate) fn sync(app: &mut PdfCraftApp) {
     if app.margin_chrome.first_start {
         let configured = &app.margin_keys.settings().ui.sidebar;
@@ -436,7 +435,7 @@ mod tests {
     use pdfcraft_render::OutlineItem;
 
     fn item(title: &str, page: Option<usize>, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page, children, open: false }
+        OutlineItem { title: title.into(), page, view: pdfcraft_render::DestView::Top, children, open: false }
     }
 
     #[test]

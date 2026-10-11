@@ -1,7 +1,7 @@
 //! Headless UI tests (egui_kittest + AccessKit). They drive the real app shell without a window.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 /// A tiny PDF with two pages, two bookmarks and one sticky note.
@@ -65,6 +65,32 @@ fn long_recent_names_and_paths_are_cut_before_the_page_count() {
         assert!(*cut, "{whole:?} is cut short");
         assert!(rect.right() < detail.left(), "{whole:?} ends before the page count");
     }
+}
+
+#[test]
+fn home_removes_one_recent_file_or_clears_them_all() {
+    // Tall enough that the Recent list is on screen without scrolling.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        for name in ["first.pdf", "second.pdf", "third.pdf"] {
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
+        }
+        app
+    });
+    h.run_steps(4);
+    assert!(h.query_by_label("Remove second.pdf from Recent").is_none(), "the remove button shows only over its row");
+    h.get_by_label("second.pdf").hover();
+    h.run_steps(2);
+    h.get_by_label("Remove second.pdf from Recent").click();
+    h.run_steps(2);
+    let names: Vec<String> = h.state().recent.iter().map(|r| r.name.clone()).collect();
+    assert_eq!(names, ["first.pdf", "third.pdf"], "only that file left the list");
+    h.get_by_label("Clear Recent Files").click();
+    h.run_steps(2);
+    assert!(h.state().recent.is_empty(), "Clear empties the list");
+    h.get_by_label_contains("Files you open in PdfCraft appear here");
+    assert!(h.query_by_label("Clear Recent Files").is_none(), "and goes away with nothing left to clear");
 }
 
 #[test]
@@ -146,11 +172,65 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
     }
 }
 
+/// Whether a node labelled `label` is there and enabled (`None`: not there).
+fn enabled(h: &Harness<'static, PdfCraftApp>, label: &str) -> Option<bool> {
+    h.query_by_label(label)?;
+    Some(h.query_by(|n| n.label().as_deref() == Some(label) && n.is_disabled()).is_none())
+}
+
+#[test]
+fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
+    // Five long names are wider than the strip: the tabs shrink instead of running under the
+    // buttons on the right, Open sits after them, and no arrows show.
+    let name = |i: usize| format!("Statement {i} for the office records, scanned.pdf");
+    let mut h = harness(move |app| {
+        for i in 0..5 {
+            app.open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+        }
+    });
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
+    let mut previous_right = f32::MIN;
+    for i in 0..5 {
+        let tab = h.get_by_label(&name(i)).rect();
+        assert!(tab.left() >= previous_right - 0.5, "tabs must not overlap: {i} at {tab:?}");
+        assert!(tab.right() <= open.left() + 0.5, "every tab fits before Open: {i} at {tab:?}, Open at {open:?}");
+        assert!(tab.width() >= 179.0, "tabs keep most of their name: {i} is {tab:?}");
+        previous_right = tab.right();
+    }
+    assert_eq!(enabled(&h, "Scroll tabs left"), None, "no arrows while every tab fits");
+    // Seven don't fit even at their narrowest: arrows show. The newest tab is active and in
+    // sight at the end, so only the left arrow can go further.
+    for i in 5..7 {
+        h.state_mut().open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+    }
+    h.run_steps(6);
+    assert_eq!((enabled(&h, "Scroll tabs left"), enabled(&h, "Scroll tabs right")), (Some(true), Some(false)));
+    let first = h.get_by_label(&name(0)).rect();
+    h.get_by_label("Scroll tabs left").click();
+    h.run_steps(4);
+    assert!(h.get_by_label(&name(0)).rect().left() > first.left(), "the left arrow scrolls the tabs back");
+    assert_eq!(enabled(&h, "Scroll tabs right"), Some(true), "and then there is more to the right");
+    let open = h.get_by_label("Open").rect();
+    let right = h.get_by_label("Scroll tabs right").rect();
+    assert!(right.right() <= open.left() + 0.5 && open.right() <= h.get_by_label("Discord").rect().left());
+    // Twenty: Open stays in sight left of Discord.
+    for i in 0..13 {
+        h.state_mut().open_bytes(&format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
+    }
+    h.run_steps(4);
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
+}
+
 #[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 700.0)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             for i in 0..12 {
                 app.open_bytes(&format!("narrow-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
             }
@@ -300,6 +380,52 @@ fn persistence_round_trips_and_tolerates_garbage() {
     assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
 }
 
+/// A tool's saved "no fill" (`"fill": null`) clears a fill it had as its default; a missing or
+/// malformed fill keeps it (#340).
+#[test]
+fn a_saved_no_fill_clears_a_comment_tool_default_fill() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let filled = |a: &mut PdfCraftApp| {
+        let mut s = a.comment_prefs.style(CommentTool::Rectangle);
+        s.fill = Some([0.2, 0.4, 0.6]);
+        a.comment_prefs.set_style(CommentTool::Rectangle, s);
+    };
+    let mut a = PdfCraftApp::new();
+    filled(&mut a);
+    a.restore(r#"{"comment_styles":[{"tool":"comment.square","fill":null}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::Rectangle).fill, None, "null clears the fill");
+    let mut b = PdfCraftApp::new();
+    filled(&mut b);
+    b.restore(r#"{"comment_styles":[{"tool":"comment.square","color":[0,0,1]},{"tool":"comment.square","fill":"red"}]}"#);
+    assert_eq!(b.comment_prefs.style(CommentTool::Rectangle).fill, Some([0.2, 0.4, 0.6]), "missing or malformed keeps it");
+    // A round trip keeps a cleared fill cleared.
+    let mut c = PdfCraftApp::new();
+    c.restore(&a.persist());
+    assert_eq!(c.comment_prefs.style(CommentTool::Rectangle).fill, None);
+}
+
+/// Persisted per-tool comment styles go through their clamping setters: hostile or malformed
+/// values are clamped or ignored, never trusted (#340).
+#[test]
+fn comment_style_settings_clamp_and_refuse_hostile_values() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut a = PdfCraftApp::new();
+    a.restore(
+        r#"{"comment_styles":[
+            {"tool":"comment.highlight","color":[2,-1,0.5],"opacity":99,"width":-4},
+            {"tool":"comment.note","color":"yellow","opacity":"none"},
+            {"tool":"comment.note","color":[0.1,null,0.3]},
+            {"tool":"bogus.command","color":[0,0,0]}
+        ]}"#,
+    );
+    // Out-of-range numbers are clamped into range.
+    let st = a.comment_prefs.style(CommentTool::Highlight);
+    assert_eq!((st.color, st.opacity, st.width), ([1.0, 0.0, 0.5], 1.0, 0.5));
+    // A malformed colour is refused whole: the tool keeps its default.
+    let note = a.comment_prefs.style(CommentTool::Note);
+    assert_eq!(note.color, [1.0, 0.82, 0.0], "the default colour stays");
+}
+
 #[test]
 fn zoom_keeps_the_point_under_the_cursor_still() {
     let mut h = harness(|app| {
@@ -385,6 +511,7 @@ fn pdfs_dropped_on_the_combine_tab_join_its_list() {
         app
     });
     h.run_steps(3);
+    h.state_mut().set_option("combine-view", "list").unwrap();
     h.state_mut().execute("page.combine");
     h.run_steps(2);
     // An absolute path is read from disk, with its modified time.
@@ -580,7 +707,7 @@ fn three_tab_harness() -> Harness<'static, PdfCraftApp> {
 fn close_named_tab(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     // The close button has no separate accessible label. Its centre is defined by
     // chrome::tab relative to the actual accessible tab rectangle, not a viewport guess.
-    let pos = h.get_by_label(name).rect().right_center() - egui::vec2(16.0, 0.0);
+    let pos = h.get_by_role_and_label(egui::accesskit::Role::Tab, name).rect().right_center() - egui::vec2(16.0, 0.0);
     h.event(egui::Event::PointerMoved(pos));
     h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
     h.run_steps(1);
@@ -658,4 +785,73 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
         assert_eq!(doc.bytes.as_slice(), FIXTURE);
         assert!(!doc.dirty);
     }
+}
+
+#[test]
+fn document_tabs_expose_selection_and_activate_from_keyboard() {
+    use egui::accesskit::Role;
+    for key in [egui::Key::Enter, egui::Key::Space] {
+        let mut h = three_tab_harness();
+        let first = h.get_by_role_and_label(Role::Tab, "first.pdf");
+        assert_eq!(first.accesskit_node().is_selected(), Some(false));
+        assert_eq!(h.get_by_role_and_label(Role::Tab, "last.pdf").accesskit_node().is_selected(), Some(true));
+        first.focus();
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(Role::Tab, "first.pdf").is_focused());
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(h.state().active, Some(0));
+        assert_eq!(h.get_by_role_and_label(Role::Tab, "first.pdf").accesskit_node().is_selected(), Some(true));
+        assert_eq!(h.get_by_role_and_label(Role::Tab, "last.pdf").accesskit_node().is_selected(), Some(false));
+        assert_eq!(h.state().views.len(), 3, "activation does not hit the close button");
+        for doc in h.state().session.docs() {
+            assert_eq!(doc.bytes.as_slice(), FIXTURE);
+            assert!(!doc.dirty);
+        }
+        if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
+            settle(&mut h);
+            h.render().unwrap().save(format!("{dir}/focused-tab-{key:?}.png")).unwrap();
+        }
+    }
+}
+
+#[test]
+fn document_tab_identity_survives_dirty_labels_and_removing_an_earlier_document() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    h.get_by_role_and_label(Role::Tab, "middle.pdf").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Tab, "middle.pdf").focus();
+    h.run_steps(2);
+    let middle_id = h.get_by_role_and_label(Role::Tab, "middle.pdf").accesskit_node().id();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved title".into() }));
+    h.run_steps(3);
+    let dirty = h.get_by_role_and_label(Role::Tab, "middle.pdf (edited)");
+    assert_eq!(dirty.accesskit_node().id(), middle_id);
+    assert!(dirty.is_focused());
+    close_named_tab(&mut h, "first.pdf");
+    assert_eq!(h.get_by_role_and_label(Role::Tab, "middle.pdf (edited)").accesskit_node().id(), middle_id);
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
+#[test]
+fn combine_tab_uses_tab_interaction_without_changing_close_or_document_state() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let document_ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::Tab, "Combine files").accesskit_node().is_selected(), Some(true));
+    h.get_by_role_and_label(Role::Tab, "first.pdf").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Tab, "Combine files").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::Tab, "Combine files").accesskit_node().is_selected(), Some(true));
+    close_named_tab(&mut h, "Combine files");
+    assert!(h.query_by_role_and_label(Role::Tab, "Combine files").is_none());
+    assert_eq!(h.state().views.iter().map(|v| v.id).collect::<Vec<_>>(), document_ids);
 }

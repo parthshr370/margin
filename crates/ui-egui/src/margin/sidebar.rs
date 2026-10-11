@@ -1,8 +1,8 @@
 //! The left sidebar: Library and palette buttons, the document card (cover, title, author,
 //! progress), the current tab's pane, and the tab strip at the bottom.
 //!
-//! Panes reuse PdfCraft's panels: Pages and Bookmarks are the right panel's bodies
-//! (`panels::panel_body`); Tools is Margin's list over the tool catalogue (`margin::tools`).
+//! Panes reuse PdfCraft's panels: Bookmarks and PdfCraft's other panels are the right panel
+//! (`panels::right_panel`, frameless in Margin); Tools is Margin's list over the tool catalogue (`margin::tools`).
 //! Highlights is Margin's card list (`margin::highlights`), Find the search's results
 //! (`margin::find`), Contents the outline as a reading table of contents (`margin::contents`).
 
@@ -12,7 +12,7 @@ use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
 use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, reading};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
-use crate::{DocView, Flavor, PdfCraftApp, icons};
+use crate::{DocView, PdfCraftApp, icons};
 
 const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
@@ -140,6 +140,10 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: edge, bottom: 0 }))
         .show(ui, |ui| {
             top_buttons(app, ui);
+            // The card's cover is page 1's thumbnail.
+            if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
+                view.need_thumbnail(0, true);
+            }
             document_card(app, ui, t, summary);
         });
     // The tab strip is chrome (its top edge is the panel's separator where the theme has frame
@@ -170,12 +174,6 @@ fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             app.palette_open = true;
         }
     });
-}
-
-/// How many leading pages the canvas renders a thumbnail for when no thumbnail surface shows:
-/// page 1 in Margin, the document card's cover; none in PdfCraft.
-pub(crate) fn cover_pages(flavor: Flavor, pages: usize) -> usize {
-    if flavor == Flavor::Margin { pages.min(1) } else { 0 }
 }
 
 /// Cover, title, author and how far in the reader is, on a card: the title in full text,
@@ -325,7 +323,7 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         SidebarTab::Bookmarks => {
             // Margin's page bookmarks first, then the PDF's bookmarks (its outline, editable).
             page_bookmarks(app, ui, t, index);
-            crate::panels::panel_body(app, ui);
+            crate::panels::right_panel(app, ui);
         }
         // The thumbnail grid (`margin::pages`); PdfCraft's Pages panel stays PdfCraft's.
         SidebarTab::Pages => super::pages::show(app, ui, t, index),
@@ -336,7 +334,7 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 view.comments.rows = RowLook::Ember;
             }
             ui.add_space(GAP_LARGE);
-            crate::panels::panel_body(app, ui);
+            crate::panels::right_panel(app, ui);
         }
     }
 }
@@ -358,7 +356,8 @@ fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize
 fn navigate(view: Option<&mut DocView>, nav: Option<Nav>) {
     let Some(view) = view else { return };
     match nav {
-        Some(Nav::Page(p)) => view.go_to_page(p),
+        // Highlight cards name pages, not destinations; a destination's page is where to go.
+        Some(Nav::Page(p) | Nav::Dest(p, _)) => view.go_to_page(p),
         Some(Nav::Flash(p, r)) => {
             view.go_to_page(p);
             view.flash = Some((p, r, 0.0));
