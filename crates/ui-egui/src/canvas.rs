@@ -233,6 +233,8 @@ pub struct DocView {
     /// Margin's per-document reading state: trim, page colour, page bookmarks, sidecar and
     /// autosave (inert in PdfCraft: no trim, nothing saved).
     pub margin: crate::margin::reading::DocReading,
+    /// Margin's opt-in recognition prompt and per-document dismissal.
+    pub scan_prompt: crate::margin::scan_prompt::ScanPrompt,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
@@ -383,6 +385,7 @@ impl DocView {
             pages: HashMap::new(),
             page_color: Default::default(),
             margin: Default::default(),
+            scan_prompt: Default::default(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
@@ -1773,12 +1776,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             } else {
                 tool == QuickTool::Select && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
             };
+            let scan_prompt = flavor == crate::Flavor::Margin
+                && matches!(tool, QuickTool::Select | QuickTool::Comment(comments::CommentTool::Highlight))
+                && (resp.drag_started() || resp.double_clicked())
+                && crate::margin::scan_prompt::request(view, doc, i);
             // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat),
             // except in Margin, where a highlight follows the text wherever the drag starts.
             let highlight_boxes = tool == QuickTool::Comment(comments::CommentTool::Highlight)
                 && allowed
                 && (flavor != crate::Flavor::Margin || crate::margin::rail::highlight_boxes(view.page_text(i).as_deref()));
-            let area_tool = tool == QuickTool::Redact && can_modify || highlight_boxes;
+            let area_tool = !scan_prompt
+                && (flavor != crate::Flavor::Margin || !view.scan_prompt.is_open())
+                && (tool == QuickTool::Redact && can_modify || highlight_boxes);
             let boxing = area_tool && {
                 let text = view.page_text(i);
                 let over_text = |p: Pos2| {

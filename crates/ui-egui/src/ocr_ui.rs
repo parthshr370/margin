@@ -54,6 +54,7 @@ pub struct BatchProgress {
 }
 
 pub struct OcrRun {
+    pub generation: u64,
     pub doc: DocId,
     pub progress: Arc<Mutex<OcrProgress>>,
 }
@@ -112,11 +113,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         });
     });
     if !available {
-        ui.label(
-            egui::RichText::new(tl!("Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS)."))
-                .small()
-                .color(t.text_muted),
-        );
+        let message = if app.flavor == crate::Flavor::Margin {
+            crate::margin::scan_prompt::MISSING_MODELS.to_owned()
+        } else {
+            tl!("Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).").to_string()
+        };
+        ui.label(egui::RichText::new(message).small().color(t.text_muted));
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
@@ -146,6 +148,11 @@ impl PdfCraftApp {
             self.notify(why);
             return;
         }
+        if let Some(why) = crate::margin::scan_prompt::blocked(self, id) {
+            self.notify(why);
+            return;
+        }
+        let generation = self.session.get(id).map_or(0, |doc| doc.edit_generation());
         let d = &self.ocr_draft;
         let pages: Vec<usize> = match d.pages {
             OcrPages::All => Vec::new(),
@@ -172,12 +179,13 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
+        } else if let Err(error) = std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work) {
+            self.notify_error(format!("Couldn't start text recognition: {error}"));
+            return;
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.ocr_run = Some(OcrRun { doc: id, progress });
+        self.ocr_run = Some(OcrRun { doc: id, generation, progress });
         self.poll_ocr();
     }
 
@@ -301,7 +309,7 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress) = (run.doc, run.progress.clone());
+        let (doc, generation, progress) = (run.doc, run.generation, run.progress.clone());
         let Ok(mut s) = progress.lock() else { return };
         let Some(result) = s.result.take() else {
             let msg = crate::i18n::fmt(
@@ -326,6 +334,10 @@ impl PdfCraftApp {
                 return;
             }
         };
+        if self.session.get(doc).is_none_or(|document| document.edit_generation() != generation) {
+            self.notify_error("The document changed while recognizing text. Run recognition again; no text was applied.");
+            return;
+        }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
         match self.session.apply_ocr(doc, &found) {
@@ -353,5 +365,38 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_error(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_is_visible_to_the_worker() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_from_text("cancel", "a page").unwrap();
+        app.open_bytes("cancel.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        let progress = Arc::new(Mutex::new(OcrProgress::default()));
+        app.ocr_run = Some(OcrRun { doc: id, generation: 0, progress: progress.clone() });
+        app.cancel_ocr();
+        assert!(progress.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).cancel);
+    }
+
+    #[test]
+    fn recognition_does_not_apply_to_changed_content() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_from_text("stale", "a page").unwrap();
+        app.open_bytes("stale.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        let generation = app.session.get(id).unwrap().edit_generation();
+        app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        app.ocr_run =
+            Some(OcrRun { doc: id, generation, progress: Arc::new(Mutex::new(OcrProgress { result: Some(Ok(Vec::new())), ..Default::default() })) });
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none());
+        assert!(app.toast.as_ref().unwrap().0.contains("changed while recognizing"));
+        assert_ne!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
     }
 }
