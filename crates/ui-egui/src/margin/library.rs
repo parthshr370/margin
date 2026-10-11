@@ -17,6 +17,7 @@ use margin_config::library::{self as store, Book, Collection, Cover, LibraryDb, 
 use margin_config::{LibrarySort, LibraryView};
 
 use super::look::{self, ButtonSize, GAP, GAP_LARGE};
+use super::window_chrome;
 use crate::theme::{self, Tokens};
 use crate::{Flavor, PdfCraftApp, icons};
 
@@ -451,11 +452,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let hero_line = hero.map(|index| hero_meta(app, index));
     let mut actions = Vec::new();
     let full = ui.available_rect_before_wrap();
+    window_chrome::drag_area(app, ui, Rect::from_min_size(full.min, vec2(full.width(), super::header::HEIGHT)), ui.id().with("margin-library-drag"));
+    // With the traffic lights over the window, the bar shares their row (the reader's header row).
+    let top_pad = if window_chrome::traffic_lights_shown(&ctx) { (super::header::HEIGHT - BUTTON) / 2.0 } else { TOP_PAD };
     let width = (full.width() - 2.0 * SIDE_PAD).clamp(0.0, MAX_WIDTH);
     let left = full.left() + (full.width() - width) / 2.0;
-    let content = Rect::from_min_max(pos2(left, full.top() + TOP_PAD), pos2(left + width, full.bottom()));
+    let content = Rect::from_min_max(pos2(left, full.top() + top_pad), pos2(left + width, full.bottom()));
+    let traffic_lights = window_chrome::traffic_lights_inset(&ctx, content);
     let mut page = ui.new_child(egui::UiBuilder::new().max_rect(content).layout(egui::Layout::top_down(egui::Align::Min)));
-    top_bar(app, &mut page, &t, &mut actions);
+    top_bar(app, &mut page, &t, traffic_lights, &mut actions);
     page.add_space(GAP_LARGE * 2.0);
     super::welcome::card(app, &mut page, &t);
     if app.margin_library.failed.is_some() {
@@ -565,9 +570,13 @@ fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
     parts.join("   ")
 }
 
-fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
+fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights: f32, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP_LARGE;
+        // The gap after the space is the row's own item spacing.
+        if traffic_lights > 0.0 {
+            ui.add_space((traffic_lights - GAP_LARGE).max(0.0));
+        }
         let back = app.margin_library.back_to.filter(|index| *index < app.views.len());
         if back.is_some() {
             let keys = look::shortcut(app, "library.open");

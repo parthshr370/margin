@@ -97,12 +97,18 @@ fn main() -> eframe::Result {
             Err(e) => log::warn!("forward search: handing off to the running Margin failed ({e}); opening here"),
         }
     }
+    // macOS: the content runs under a transparent title bar and Margin places the traffic lights
+    // in its header row (`margin::window_chrome`).
+    let integrated = cfg!(target_os = "macos");
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Margin")
         .with_inner_size(WINDOW_SIZE)
         .with_min_inner_size(MIN_WINDOW_SIZE)
         .with_drag_and_drop(true)
         .with_app_id(APP_ID);
+    if integrated {
+        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
     match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
         Ok(icon) => viewport = viewport.with_icon(icon),
         Err(e) => log::warn!("app icon: {e}"),
@@ -131,9 +137,11 @@ fn main() -> eframe::Result {
             if let Some(json) = cc.storage.and_then(|s| s.get_string(STORAGE_KEY)) {
                 app.restore(&json);
             }
+            app.integrated_titlebar = integrated;
             #[cfg(target_os = "macos")]
             {
                 app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+                pdfcraft_ui_egui::margin::menu_bar::install(&mut app, &cc.egui_ctx);
             }
             if let Some(file) = &control_file {
                 let client = app.attach_control(&cc.egui_ctx);

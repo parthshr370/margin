@@ -58,6 +58,9 @@ pub struct MarginKeys {
     pub(crate) key_context_open: bool,
     /// The last keystroke resolved, for the key context window.
     pub(crate) last: Option<LastKey>,
+    /// Changes whenever the keymap is loaded or reloaded, so what shows its keys (the macOS menu
+    /// bar) knows to read them again.
+    revision: u64,
 }
 
 /// One keystroke and what the keymap made of it.
@@ -94,6 +97,12 @@ impl MarginKeys {
     /// The compiled keymap, once loaded.
     pub fn keymap(&self) -> Option<&CompiledKeymap> {
         self.loaded.as_ref().and_then(|loaded| loaded.compiled.as_ref()).map(|compiled| &compiled.keymap)
+    }
+
+    /// The keymap's revision: equal values mean the same keymap (the macOS menu bar re-reads its
+    /// shortcuts when it changes).
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Every bindable id with its title.
@@ -279,6 +288,7 @@ fn ensure_loaded(app: &mut PdfCraftApp, ctx: &egui::Context) {
     problems.extend(load_problems);
     app.margin_keys.loaded = Some(loaded);
     super::obsidian::settings_loaded(app);
+    app.margin_keys.revision = app.margin_keys.revision.wrapping_add(1);
     report(app, &problems, false);
 }
 
@@ -359,6 +369,7 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
     keys.reload_at = None;
     keys.pending.clear();
     let problems = loaded.reload();
+    keys.revision = keys.revision.wrapping_add(1);
     super::obsidian::settings_loaded(app);
     report(app, &problems, true);
 }
@@ -369,6 +380,7 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
 pub(crate) fn reload_now(app: &mut PdfCraftApp) {
     let Some(loaded) = app.margin_keys.loaded.as_mut() else { return };
     let problems = loaded.reload();
+    app.margin_keys.revision = app.margin_keys.revision.wrapping_add(1);
     super::obsidian::settings_loaded(app);
     report(app, &problems, false);
 }

@@ -58,6 +58,11 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 
 - A quiet layout: a header with the title and current section, a sidebar, a floating annotate
   rail and a footer with the page field, zoom and a progress scrubber.
+- On macOS the window has no separate title bar: the traffic lights sit in Margin's own header
+  row, and the empty parts of that row move the window and zoom it on a double click.
+- On macOS a full menu bar (Margin, File, Edit, View, Go, Window, Help) runs the same commands as
+  the palette, with Open Recent and live Undo and Redo labels. Each row shows its shortcut from
+  your keymap, and the keys still go through the keymap, so they keep working by context.
 - Page colours: Paper, Sepia, Night, Ink and Mono, with brightness and contrast and an option to
   follow the system's dark mode. Night flips light and dark but keeps hues, and photos and
   diagrams keep their colours in the dark modes.
@@ -399,7 +404,7 @@ and `"reader": { "synctex_editor": "zed {file}:{line}" }`.
 ## Keyboard shortcuts
 
 <kbd>Ctrl</kbd> is <kbd>Cmd</kbd> on macOS. Press <kbd>?</kbd> in Margin for the full list, taken
-from your keymap.
+from your keymap. On macOS the menu bar shows each command's <kbd>Cmd</kbd> shortcut beside it.
 
 | Action | Keys |
 |---|---|
@@ -421,7 +426,7 @@ from your keymap.
 | Toggle fit width and reading width | <kbd>W</kbd> |
 | Trim margins | <kbd>Shift</kbd>+<kbd>T</kbd> |
 | Rotate | <kbd>Ctrl</kbd>+<kbd>R</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
-| Full screen | <kbd>Ctrl</kbd>+<kbd>L</kbd> (leave with <kbd>Esc</kbd>) |
+| Full screen reading | <kbd>Ctrl</kbd>+<kbd>L</kbd> (leave with <kbd>Esc</kbd>; on macOS, View ▸ Full Screen Reading, next to the system's Enter Full Screen) |
 | Toggle sidebar | <kbd>[</kbd> |
 | Contents / Highlights / Pages / Bookmarks tab | <kbd>Ctrl</kbd>+<kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> / <kbd>4</kbd> |
 | Next / previous open document | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> (also <kbd>Ctrl</kbd> on macOS) |

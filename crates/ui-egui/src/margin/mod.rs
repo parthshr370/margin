@@ -25,6 +25,8 @@ pub mod library;
 pub mod links;
 pub mod look;
 pub mod marks;
+#[cfg(target_os = "macos")]
+pub mod menu_bar;
 pub mod motion;
 pub mod obsidian;
 pub mod pagecolor;
@@ -53,6 +55,7 @@ pub mod tools;
 pub mod trim;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod welcome;
+pub mod window_chrome;
 
 use crate::{PdfCraftApp, RightPanel};
 
@@ -363,6 +366,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         sync(app);
     }
     motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
+    window_chrome::place_traffic_lights(app, ctx);
     let t = crate::theme::Tokens::get(ctx);
     // A click while a popover or menu is open closes it (`look::popover`) and does nothing else:
     // the page must not also clear its selection, follow a link or place a mark.

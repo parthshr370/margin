@@ -508,6 +508,9 @@ pub struct PdfCraftApp {
     pub host_save: Option<HostSaveFn>,
     /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
+    /// Margin's macOS menu bar, once installed (`margin::menu_bar::install`).
+    #[cfg(target_os = "macos")]
+    pub(crate) menu_bar: Option<margin::menu_bar::MenuBar>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// Save to this path instead of asking (tests and automation).
@@ -808,6 +811,8 @@ impl PdfCraftApp {
             os_events: None,
             host_save: None,
             host_dirty: None,
+            #[cfg(target_os = "macos")]
+            menu_bar: None,
             close_request: None,
             save_override: None,
             props_draft: None,
@@ -1989,6 +1994,10 @@ impl eframe::App for PdfCraftApp {
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
     /// page grid can show (and use) the gap under it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // A menu bar Cut, Copy, Paste or Select All clicked last frame reaches the focused field
+        // as its key would have.
+        #[cfg(target_os = "macos")]
+        raw.events.extend(margin::menu_bar::take_pending_input(self));
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
         }
@@ -2091,6 +2100,8 @@ impl eframe::App for PdfCraftApp {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
         }
+        #[cfg(target_os = "macos")]
+        margin::menu_bar::tick(self, ctx);
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);
