@@ -1233,6 +1233,7 @@ mod tests {
             finished: false,
             cover: margin_config::library::Cover::Missing,
             collections: Vec::new(),
+            tags: Vec::new(),
         };
         let entry_c = Book { book_id: "c".into(), ..entry.clone() };
         let library = vec![Some(entry), None, Some(entry_c.clone())];

@@ -56,13 +56,15 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_TEXT_CHARS: usize = 512;
 /// Longest collection name.
 pub const MAX_COLLECTION_CHARS: usize = 120;
+/// Longest tag name (the same cap as a keyword an import brings).
+pub const MAX_TAG_CHARS: usize = crate::reference::MAX_KEYWORD_CHARS;
 
 /// Whether a book's cover is in the cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cover {
     /// Not made yet.
     Missing,
-    /// In `<data>/cache/thumbs/<fingerprint>.jpg`.
+    /// In `<data>/cache/thumbs/<book_id>.jpg`.
     Cached,
     /// The first page couldn't be rendered; not tried again until the file changes.
     Failed,
@@ -110,6 +112,8 @@ pub struct Book {
     pub cover: Cover,
     /// The collections it is in.
     pub collections: Vec<i64>,
+    /// Its tags, by id.
+    pub tags: Vec<i64>,
 }
 
 impl Book {
@@ -122,6 +126,14 @@ impl Book {
 /// A collection and how many books it holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Collection {
+    pub id: i64,
+    pub name: String,
+    pub count: usize,
+}
+
+/// A tag and how many listed books carry it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tag {
     pub id: i64,
     pub name: String,
     pub count: usize,
@@ -187,6 +199,17 @@ fn open_connection(data: &Path) -> Result<Connection, String> {
 /// `text` without control characters, trimmed and capped (PDF metadata is untrusted).
 fn clean_text(text: &str) -> String {
     text.trim().chars().filter(|c| !c.is_control()).take(MAX_TEXT_CHARS).collect()
+}
+
+/// The id of the tag called `name` (cleaned and capped), made if no tag has that name in any
+/// case.
+fn tag_id(conn: &Connection, name: &str, now: i64) -> Result<i64, String> {
+    let name = crate::reference::clean(name, MAX_TAG_CHARS);
+    if name.is_empty() {
+        return Err("a tag needs a name".to_owned());
+    }
+    conn.execute("INSERT OR IGNORE INTO tags (name, created) VALUES (?1, ?2)", params![name, now]).map_err(db_err)?;
+    conn.query_row("SELECT id FROM tags WHERE name = ?1", [name], |row| row.get(0)).map_err(db_err)
 }
 
 /// The file name without `.pdf`: the title of a PDF without one.
@@ -346,13 +369,8 @@ impl LibraryDb {
     /// Every book in the library: not removed by the user, and one of its files there at the
     /// last scan. Unordered; the view sorts.
     pub fn books(&self) -> Result<Vec<Book>, String> {
-        let mut memberships: HashMap<i64, Vec<i64>> = HashMap::new();
-        let mut stmt = self.conn.prepare_cached("SELECT book, collection FROM collection_books").map_err(db_err)?;
-        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))).map_err(db_err)?;
-        for row in rows {
-            let (book, collection) = row.map_err(db_err)?;
-            memberships.entry(book).or_default().push(collection);
-        }
+        let mut memberships = self.pairs("SELECT book, collection FROM collection_books")?;
+        let mut tagged = self.pairs("SELECT book, tag FROM book_tags")?;
         let mut stmt = self
             .conn
             .prepare_cached(
@@ -378,6 +396,7 @@ impl LibraryDb {
                     finished: row.get::<_, i64>(11)? != 0,
                     cover: Cover::from_db(row.get(12)?),
                     collections: Vec::new(),
+                    tags: Vec::new(),
                 })
             })
             .map_err(db_err)?;
@@ -385,12 +404,25 @@ impl LibraryDb {
         for row in rows {
             let mut book = row.map_err(db_err)?;
             book.collections = memberships.remove(&book.id).unwrap_or_default();
+            book.tags = tagged.remove(&book.id).unwrap_or_default();
             if !book.progress.is_finite() {
                 book.progress = 0.0;
             }
             books.push(book);
         }
         Ok(books)
+    }
+
+    /// (book, other) pairs from `sql`, grouped by book.
+    fn pairs(&self, sql: &str) -> Result<HashMap<i64, Vec<i64>>, String> {
+        let mut grouped: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut stmt = self.conn.prepare_cached(sql).map_err(db_err)?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))).map_err(db_err)?;
+        for row in rows {
+            let (book, other) = row.map_err(db_err)?;
+            grouped.entry(book).or_default().push(other);
+        }
+        Ok(grouped)
     }
 
     /// The key of the book the file at `path` (with this fingerprint and size) belongs to, by
@@ -512,6 +544,53 @@ impl LibraryDb {
     pub fn remove_from_collection(&self, collection: i64, book: i64) -> Result<(), String> {
         self.conn.execute("DELETE FROM collection_books WHERE collection = ?1 AND book = ?2", [collection, book]).map_err(db_err)?;
         Ok(())
+    }
+
+    /// The tags, by name, with how many listed books carry each.
+    pub fn tags(&self) -> Result<Vec<Tag>, String> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT t.id, t.name, COUNT(b.id) FROM tags t
+                 LEFT JOIN book_tags bt ON bt.tag = t.id
+                 LEFT JOIN books b ON b.id = bt.book AND b.removed = 0 AND b.missing = 0
+                 GROUP BY t.id ORDER BY t.name COLLATE NOCASE",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |row| Ok(Tag { id: row.get(0)?, name: row.get(1)?, count: usize::try_from(row.get::<_, i64>(2)?).unwrap_or(0) }))
+            .map_err(db_err)?;
+        rows.map(|row| row.map_err(db_err)).collect()
+    }
+
+    /// Tags `book` with `name`, making the tag if no tag has that name in any case. Returns the
+    /// tag's id.
+    pub fn add_tag(&self, book: i64, name: &str, now: i64) -> Result<i64, String> {
+        let tag = tag_id(&self.conn, name, now)?;
+        self.conn.execute("INSERT OR IGNORE INTO book_tags (book, tag) VALUES (?1, ?2)", [book, tag]).map_err(db_err)?;
+        Ok(tag)
+    }
+
+    pub fn remove_tag(&self, book: i64, tag: i64) -> Result<(), String> {
+        self.conn.execute("DELETE FROM book_tags WHERE book = ?1 AND tag = ?2", [book, tag]).map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Deletes the tag from every book.
+    pub fn delete_tag(&self, tag: i64) -> Result<(), String> {
+        self.conn.execute("DELETE FROM tags WHERE id = ?1", [tag]).map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Gives `book` exactly the tags `names` (the details sheet's list).
+    pub fn set_tags(&self, book: i64, names: &[String], now: i64) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(db_err)?;
+        tx.execute("DELETE FROM book_tags WHERE book = ?1", [book]).map_err(db_err)?;
+        for name in names {
+            let tag = tag_id(&tx, name, now)?;
+            tx.execute("INSERT OR IGNORE INTO book_tags (book, tag) VALUES (?1, ?2)", [book, tag]).map_err(db_err)?;
+        }
+        tx.commit().map_err(db_err)
     }
 
     /// When `folder` was last scanned (Unix seconds).
@@ -1494,6 +1573,33 @@ pub(crate) mod tests {
         assert_eq!(key.as_deref(), Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "stats and covers keep their key");
         drop(db);
         assert!(LibraryDb::open(&data).is_ok(), "opening again changes nothing");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn tags_are_shared_by_name_and_follow_their_books() {
+        let root = temp_dir("tags");
+        let db = LibraryDb::open(&root.join("data")).unwrap();
+        let book = |path: &'static str, fingerprint: &'static str| {
+            let opened = Opened { path, fingerprint, title: path, author: "", pages: 1, size: 1, sidecar_id: None };
+            db.opened(&opened, 1).unwrap().id
+        };
+        let (a, b) = (book("/x/a.pdf", "11111111111111111111111111111111"), book("/x/b.pdf", "22222222222222222222222222222222"));
+        let ml = db.add_tag(a, " ML ", 1).unwrap();
+        assert_eq!(db.add_tag(b, "ml", 2).unwrap(), ml, "one tag whatever the case");
+        assert!(db.add_tag(a, " \u{7} ", 2).is_err(), "a blank name is refused");
+        db.add_tag(a, &"x".repeat(500), 2).unwrap();
+        let tags = db.tags().unwrap();
+        assert_eq!(tags.iter().map(|t| (t.name.chars().count(), t.count)).collect::<Vec<_>>(), [(2, 2), (MAX_TAG_CHARS, 1)]);
+        assert_eq!(tags[0].name, "ML", "the first spelling stays");
+        db.set_tags(b, &["Reading".into(), "ml".into()], 3).unwrap();
+        let listed: HashMap<i64, Vec<i64>> = db.books().unwrap().into_iter().map(|book| (book.id, book.tags)).collect();
+        assert_eq!(listed[&b].len(), 2);
+        db.remove_tag(a, ml).unwrap();
+        assert_eq!(db.tags().unwrap().iter().find(|t| t.id == ml).map(|t| t.count), Some(1));
+        db.delete_tag(ml).unwrap();
+        let listed: HashMap<i64, Vec<i64>> = db.books().unwrap().into_iter().map(|book| (book.id, book.tags)).collect();
+        assert_eq!(listed[&b].len(), 1, "a deleted tag leaves every book");
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -10,7 +10,7 @@ use crate::migrate;
 use crate::store;
 
 /// Every step, in order; the library is at version `STEPS.len()`.
-pub(crate) const STEPS: &[migrate::Step] = &[v1_books_by_path, v2_book_identity];
+pub(crate) const STEPS: &[migrate::Step] = &[v1_books_by_path, v2_book_identity, v3_tags];
 
 fn db_err(err: rusqlite::Error) -> String {
     err.to_string()
@@ -235,4 +235,23 @@ fn write_book(tx: &Transaction<'_>, group: &[&V1Row], used: &mut HashSet<String>
         }
     }
     Ok(())
+}
+
+/// Version 3: tags, any number per book. A name is one tag whatever its case.
+const V3: &str = "
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created INTEGER NOT NULL
+);
+CREATE TABLE book_tags (
+    book INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    tag INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (book, tag)
+);
+CREATE INDEX book_tags_tag ON book_tags(tag);
+";
+
+fn v3_tags(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(V3).map_err(db_err)
 }

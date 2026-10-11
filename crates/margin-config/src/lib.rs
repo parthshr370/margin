@@ -34,6 +34,7 @@ mod load;
 mod migrate;
 mod problem;
 mod profile;
+pub mod reference;
 mod registry;
 pub mod resolve;
 pub mod schema;
