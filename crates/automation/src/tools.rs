@@ -503,6 +503,23 @@ pub fn tools() -> Vec<ToolDef> {
             .destructive()
             .cmd("edit.remove_links")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "synctex_forward",
+            "SyncTeX forward search",
+            "Where line (1-based) of the TeX source file source is on the pages, from the SyncTeX file beside the document's PDF (<name>.synctex.gz or .synctex, written with -synctex=1). Returns page (1-based), the line used (the nearest line with output when that one has none) and boxes as [x0, y0, x1, y1] points from the top-left of the displayed page. source may be the absolute path or a path ending the same way as TeX recorded it.",
+        )
+        .ro()
+        .with(schema(
+            json!({ "doc": doc(), "source": { "type": "string" }, "line": { "type": "integer", "minimum": 1 }, "column": { "type": "integer", "minimum": 1 } }),
+            &["doc", "source", "line"],
+        )),
+        t(
+            "synctex_inverse",
+            "SyncTeX inverse search",
+            "The TeX source line that produced the point (x, y) on page (1-based; points from the top-left of the displayed page), from the SyncTeX file beside the document's PDF. Returns file, line and column (null when TeX recorded none).",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "x": { "type": "number" }, "y": { "type": "number" } }), &["doc", "page", "x", "y"])),
         t("measure_distance", "Measure distance", "Add an undoable two-point distance annotation using the scale of the first point's viewport.")
             .cmd("measure.distance").with(measure_schema()),
         t("measure_perimeter", "Measure perimeter", "Add an undoable connected-line length annotation. To include a closing edge, repeat the first point at the end.")

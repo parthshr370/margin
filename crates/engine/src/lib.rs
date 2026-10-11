@@ -22,6 +22,7 @@ pub mod links;
 pub mod ocr;
 pub mod optimizer;
 pub mod signature_image;
+pub mod synctex;
 mod upright_image;
 pub mod xfa;
 
@@ -294,6 +295,12 @@ impl Document {
     /// A counter that changes with every edit (for caches of derived data).
     pub fn edit_generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The file as last opened, saved or reloaded: what is on disk when nothing else wrote it
+    /// since. Unsaved edits are not in it.
+    pub fn saved_bytes(&self) -> Arc<Vec<u8>> {
+        self.editor.as_ref().map_or_else(|| self.bytes.clone(), |editor| editor.cos.bytes().clone())
     }
 
     /// Edit a PDF ▸ Edit text: the lines of existing text on `page` (0-based).
@@ -2540,6 +2547,35 @@ impl Session {
         doc.dirty = false;
         doc.generation += 1;
         Self::refresh(doc)
+    }
+
+    /// The document's file changed on disk: show `bytes`, its new content, in place of the
+    /// document. It is opened as [`Self::open`] opens a file, with the password it was opened
+    /// with, and keeps its id, name, path and layer choices; unsaved edits and undo history go.
+    /// On error (the new file doesn't open) the document is left exactly as it was.
+    pub fn reload(&mut self, id: DocId, bytes: Arc<Vec<u8>>) -> Result<(), OpenError> {
+        let doc = self.get(id).ok_or_else(|| OpenError::Invalid("the document is no longer open".into()))?;
+        let password = doc.editor.as_ref().and_then(|editor| editor.keys.reopen.clone()).or_else(|| doc.password.clone());
+        let (name, path) = (doc.name.clone(), doc.path.clone());
+        let opened = self.open(name, path, bytes, password.as_deref())?;
+        let mut fresh = match self.docs.iter().position(|d| d.id == opened) {
+            Some(at) => self.docs.remove(at),
+            None => return Err(OpenError::Invalid("the reloaded document went missing".into())),
+        };
+        let Some(old) = self.docs.iter_mut().find(|d| d.id == id) else {
+            return Err(OpenError::Invalid("the document is no longer open".into()));
+        };
+        fresh.id = id;
+        // Caches keyed by the generation (page text, edit lines) must not survive the swap.
+        fresh.generation = old.generation.saturating_add(1);
+        fresh.snapshot_generation = old.snapshot_generation;
+        for layer in &mut fresh.info.layers {
+            if let Some(before) = old.info.layers.iter().find(|before| before.id == layer.id) {
+                layer.visible = before.visible;
+            }
+        }
+        *old = fresh;
+        Ok(())
     }
 
     /// The page count of another PDF (Replace Pages, Insert Pages dialogs).

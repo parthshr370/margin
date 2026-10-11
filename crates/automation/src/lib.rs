@@ -22,6 +22,7 @@ mod measure;
 mod printing;
 mod redact;
 mod signing;
+mod synctex;
 mod tools;
 
 use std::collections::HashMap;
@@ -522,6 +523,8 @@ impl Automation {
             "link_delete" => self.link_delete(&a)?,
             "links_from_urls" => self.links_from_urls(&a)?,
             "links_remove" => self.links_remove(&a)?,
+            "synctex_forward" => self.synctex_forward(&a)?,
+            "synctex_inverse" => self.synctex_inverse(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
