@@ -74,7 +74,10 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   row, and the empty parts of that row move the window and zoom it on a double click.
 - On macOS a full menu bar (Margin, File, Edit, View, Go, Window, Help) runs the same commands as
   the palette, with Open Recent and live Undo and Redo labels. Each row shows its shortcut from
-  your keymap, and the keys still go through the keymap, so they keep working by context.
+  your keymap, and the keys still go through the keymap, so they keep working by context. File
+  also adds a library folder, imports BibTeX or Zotero, saves a copy with highlights, exports the
+  paper as Markdown and chooses the Obsidian vault; Edit and Go hold the page notes, View focus
+  mode, and Window the next and previous document.
 - Page colours: Paper, Sepia, Night, Ink and Mono, with brightness and contrast and an option to
   follow the system's dark mode. Night flips light and dark but keeps hues, and photos and
   diagrams keep their colours in the dark modes.

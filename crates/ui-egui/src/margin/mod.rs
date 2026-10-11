@@ -253,8 +253,9 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
 /// `view.sidebar.toggle`, `view.sidebar.tab` with `{"tab": "contents" | "highlights" | "pages" |
 /// "bookmarks" | "find" | "tools"}`, `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
 /// (a page bookmark on the current page), `view.trim.toggle`, the page notes' `note.*` and "Save a
-/// copy with highlights" (`margin::marks`), and the library's `library.open`, `library.search`,
-/// `library.import` and `app.stats`. Returns `false` for an unknown id or tab.
+/// copy with highlights" (`margin::marks`), `reader.export_markdown` (the paper as Markdown),
+/// `app.choose_vault`, and the library's `library.open`, `library.search`, `library.import`,
+/// `library.add_folder` and `app.stats`. Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
         "view.read_mode" | "view.focus_mode.toggle" => focus::toggle(app),
@@ -284,7 +285,14 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
         | marks::NOTE_LIST_ID
         | marks::SAVE_COPY_ID => return marks::run(app, id),
         #[cfg(not(target_arch = "wasm32"))]
-        "library.open" | "library.search" | "library.import" | "app.stats" => return library::run(app, id),
+        "library.open" | "library.search" | "library.import" | "library.add_folder" | "app.stats" => return library::run(app, id),
+        #[cfg(not(target_arch = "wasm32"))]
+        "app.choose_vault" => welcome::pick_vault(app),
+        // The Highlights panel's Export ▸ "Export paper as Markdown…": asks where, then writes.
+        "reader.export_markdown" => {
+            let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
+            view.comments.notes.request = Some(obsidian::Request::ExportPaper(false));
+        }
         "view.tab.next" | "view.tab.prev" | "view.tab.go" => return tabs::run(app, id, args),
         _ => return false,
     }

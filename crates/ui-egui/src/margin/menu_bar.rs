@@ -110,6 +110,8 @@ const EXPORT: &[Row] = &[
     Row::Separator,
     command("Page as Image…", "export.image"),
     command("All Images…", "export.all_images"),
+    Row::Separator,
+    command("Paper as Markdown…", "reader.export_markdown"),
 ];
 
 /// The menu bar, left to right. The first menu is the application menu, which macOS titles with
@@ -140,10 +142,15 @@ const MENUS: &[(&str, Role, &[Row])] = &[
             command("Open…", "file.open"),
             Row::Recent,
             command("Library", "library.open"),
+            command("Add Library Folder…", "library.add_folder"),
+            command("Import BibTeX or Zotero…", "library.import"),
             Row::Separator,
             command("Save", "file.save"),
             command("Save As…", "file.save_as"),
+            command("Save a Copy with Highlights…", "reader.save_with_highlights"),
             Row::Submenu("Export", EXPORT),
+            Row::Separator,
+            command("Choose Obsidian Vault…", "app.choose_vault"),
             Row::Separator,
             command("Document Properties…", "file.properties"),
             command("Print…", "print.dialog"),
@@ -168,6 +175,9 @@ const MENUS: &[(&str, Role, &[Row])] = &[
             command("Find Next", "reader.find.next"),
             command("Find Previous", "reader.find.prev"),
             command("Search Library", "library.search"),
+            Row::Separator,
+            command("Add Page Note", "note.add"),
+            command("Show Page Notes", "note.list"),
         ],
     ),
     (
@@ -196,6 +206,7 @@ const MENUS: &[(&str, Role, &[Row])] = &[
             Row::Separator,
             // Margin's page-only full screen; macOS adds its own Enter Full Screen (Globe-F) below.
             command("Full Screen Reading", "view.full_screen"),
+            command("Focus Mode", "view.focus_mode.toggle"),
         ],
     ),
     (
@@ -212,12 +223,23 @@ const MENUS: &[(&str, Role, &[Row])] = &[
             command("Forward", "reader.forward"),
             Row::Separator,
             command("Bookmark This Page", "reader.bookmark.toggle"),
+            Row::Separator,
+            command("Next Page Note", "note.next"),
+            command("Previous Page Note", "note.prev"),
         ],
     ),
     (
         "Window",
         Role::Window,
-        &[Row::System(SystemRow::Minimize), Row::System(SystemRow::Zoom), Row::Separator, Row::System(SystemRow::BringAllToFront)],
+        &[
+            Row::System(SystemRow::Minimize),
+            Row::System(SystemRow::Zoom),
+            Row::Separator,
+            command("Show Next Document", "view.tab.next"),
+            command("Show Previous Document", "view.tab.prev"),
+            Row::Separator,
+            Row::System(SystemRow::BringAllToFront),
+        ],
     ),
     ("Help", Role::Help, &[command("Keyboard Shortcuts", "help.shortcuts"), command("Show Key Context", "app.key_context")]),
 ];
@@ -480,7 +502,7 @@ fn sync_row(app: &PdfCraftApp, row: &mut LiveRow, reread_keys: bool) {
 
 /// Margin's own ids that act on the open document.
 fn needs_document(id: &str) -> bool {
-    ["view.", "reader.", "annotation."].iter().any(|prefix| id.starts_with(prefix))
+    ["view.", "reader.", "annotation.", "note."].iter().any(|prefix| id.starts_with(prefix))
 }
 
 /// The keymap's shortcut for `id` as a menu key equivalent: its first binding still in effect that

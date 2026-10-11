@@ -16,6 +16,10 @@
   { "id": "view.tab.go", "title": "Go to document", "group": "Go",
     "args": { "type": "object", "required": ["index"], "properties": { "index": { "type": "integer", "minimum": 1, "maximum": 9, "description": "Position among the open documents; 9 is the last" } } } },
   { "id": "library.import", "title": "Import BibTeX or Zotero", "icon": "file-input", "group": "File", "aliases": ["bibtex", "zotero", "references"] },
+  { "id": "library.add_folder", "title": "Add a library folder", "icon": "folder-plus", "group": "File", "aliases": ["scan folder", "papers folder"] },
+  { "id": "app.choose_vault", "title": "Choose Obsidian vault", "icon": "folder", "group": "File", "aliases": ["obsidian", "notes", "vault"] },
+  { "id": "reader.export_markdown", "title": "Export paper as Markdown", "icon": "file-output", "group": "File", "when": "Reader && format == pdf",
+    "aliases": ["markdown", "md", "obsidian", "paper"] },
 
   { "id": "view.zoom.in", "title": "Zoom in", "icon": "zoom-in", "group": "View", "when": "Reader", "aliases": ["bigger", "magnify"] },
   { "id": "view.zoom.out", "title": "Zoom out", "icon": "zoom-out", "group": "View", "when": "Reader", "aliases": ["smaller"] },

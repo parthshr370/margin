@@ -496,7 +496,8 @@ pub fn rescan(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// Margin's library ids: `library.open` (show the library, or go back to the book),
 /// `library.search` (focus the search field), `library.import` (import a BibTeX file or a Zotero
-/// library) and `app.stats` (the Stats sheet). `false` for another id.
+/// library), `library.add_folder` (pick a folder to scan) and `app.stats` (the Stats sheet).
+/// `false` for another id.
 pub(crate) fn run(app: &mut PdfCraftApp, id: &str) -> bool {
     match id {
         "library.open" => match app.active {
@@ -519,6 +520,7 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str) -> bool {
             app.margin_library.focus_search = true;
         }
         "library.import" => import::pick(app),
+        "library.add_folder" => super::welcome::add_library_folder(app),
         "app.stats" => app.margin_stats.toggle_sheet(),
         _ => return false,
     }
