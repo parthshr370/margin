@@ -344,7 +344,7 @@ fn color_mark(app: &mut PdfCraftApp, i: usize, color: [f64; 3]) {
                 app.notify(NOT_ALLOWED);
                 return;
             }
-            app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None });
+            app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
         }
         None => {
             mark(app, i, Markup::Highlight, Some(color));

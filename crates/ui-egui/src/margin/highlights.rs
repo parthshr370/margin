@@ -251,7 +251,7 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str, args: &Value) -> bool {
             app.notify(format!("{COLOR_ID}: no colour named \"{wanted}\" in notes.colors"));
             return true;
         };
-        Edit::StyleAnnotation { page, index: annot, color: Some(color.rgb_f64()), opacity: None, width: None }
+        Edit::StyleAnnotation { page, index: annot, color: Some(color.rgb_f64()), opacity: None, width: None, endings: None }
     };
     apply(app, edit);
     true
@@ -409,7 +409,7 @@ fn act(ctx: &egui::Context, action: Action, input: &CardInput<'_>, view: &mut Do
         Action::OpenInObsidian => view.comments.notes.ask(ctx, Request::Open(Some((page, index)))),
         Action::Color(i) => {
             if let Some(color) = input.notes.colors.get(i) {
-                out.edit = Some(Edit::StyleAnnotation { page, index, color: Some(color.rgb_f64()), opacity: None, width: None });
+                out.edit = Some(Edit::StyleAnnotation { page, index, color: Some(color.rgb_f64()), opacity: None, width: None, endings: None });
             }
         }
         Action::EditNote => view.comments.editing = Some((page, index, a.contents.clone().unwrap_or_default())),

@@ -60,9 +60,10 @@ impl SignatureDrag {
             }
         }
         let (Some((_, page, _)), Some(layers)) = (self.key, self.layers.as_mut()) else { return };
-        // The image stays sharp at every zoom; bound the extra background raster to 2048².
+        // The image stays sharp at every zoom. The background matches the page view up to one
+        // whole-page texture; past that the view tiles and this preview stays at that cap.
         let Some(p) = doc.info.pages.get(page) else { return };
-        let scale = scale.min(2048.0 / p.width.max(p.height).max(1.0));
+        let scale = scale.min(crate::canvas::BASE_SIDE / p.width.max(p.height).max(1.0));
         let tag = (scale * 1000.0) as u64;
         if layers.tag != Some(tag) {
             layers.renderer.set_queue(vec![RenderRequest { page, scale, tag, ..Default::default() }]);
@@ -123,7 +124,7 @@ impl SignatureDrag {
 
     pub fn paint(&self, painter: &egui::Painter, cx: &PageCx<'_>, cv: &CommentView, pending: Option<&Edit>) {
         let (Some((_, page, index)), Some(layers)) = (self.key, &self.layers) else { return };
-        if page != cx.page || cx.tool != QuickTool::Select || cx.hidden {
+        if page != cx.page || !matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_)) || cx.hidden {
             return;
         }
         let dragging = matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. } | Gesture::Resize { page: p, index: i, .. }) if (p, i) == (page, index));

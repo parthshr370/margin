@@ -1251,7 +1251,12 @@ mod tests {
 
     #[test]
     fn marked_text_reads_the_glyphs_under_the_quads() {
-        let glyph = |text: &str, x: f32| pdfcraft_render::TextGlyph { text: text.into(), rect: [x, 10.0, x + 8.0, 20.0] };
+        let glyph = |text: &str, x: f32| pdfcraft_render::TextGlyph {
+            text: text.into(),
+            rect: [x, 10.0, x + 8.0, 20.0],
+            quad: [[x, 10.0], [x + 8.0, 10.0], [x + 8.0, 20.0], [x, 20.0]],
+            direction: [1.0, 0.0],
+        };
         let text = PageText {
             glyphs: vec![glyph("a", 0.0), glyph("b", 8.0), glyph("c", 24.0), glyph("d", 32.0), glyph("e", 48.0)],
             line_of: vec![0; 5],
@@ -1274,6 +1279,7 @@ mod tests {
             quads: vec![[6.0, 90.0, 42.0, 90.0, 6.0, 80.0, 42.0, 80.0]],
             locked: false,
             intent: None,
+            fill_sign: false,
         };
         assert_eq!(marked_text(&text, &page, &a), "b cd");
     }
