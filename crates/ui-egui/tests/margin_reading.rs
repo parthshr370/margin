@@ -599,7 +599,7 @@ fn set_as_default_writes_settings_jsonc_and_keeps_its_comments() {
     assert_eq!(app.views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
 }
 
-/// A folder Margin can't write keeps the sidecar under `<data>/sidecars/<fingerprint>…`.
+/// A folder Margin can't write keeps the sidecar under `<data>/sidecars/<book key>…`.
 #[cfg(unix)]
 #[test]
 fn read_only_folders_keep_the_sidecar_in_the_data_folder() {
@@ -624,7 +624,7 @@ fn read_only_folders_keep_the_sidecar_in_the_data_folder() {
     assert!(told.contains("data folder"), "the fallback is explained: {told:?}");
     drop(h);
     let written = std::fs::read_to_string(&path).unwrap_or_default();
-    assert_eq!(app(&place).views[0].current, 1, "found again by fingerprint: {written}");
+    assert_eq!(app(&place).views[0].current, 1, "found again under the book's key: {written}");
 }
 
 #[test]

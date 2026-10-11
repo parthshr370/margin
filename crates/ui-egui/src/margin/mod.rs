@@ -253,8 +253,8 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
 /// `view.sidebar.toggle`, `view.sidebar.tab` with `{"tab": "contents" | "highlights" | "pages" |
 /// "bookmarks" | "find" | "tools"}`, `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
 /// (a page bookmark on the current page), `view.trim.toggle`, the page notes' `note.*` and "Save a
-/// copy with highlights" (`margin::marks`), and the library's `library.open`, `library.search` and
-/// `app.stats`. Returns `false` for an unknown id or tab.
+/// copy with highlights" (`margin::marks`), and the library's `library.open`, `library.search`,
+/// `library.import` and `app.stats`. Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
         "view.read_mode" | "view.focus_mode.toggle" => focus::toggle(app),
@@ -284,7 +284,7 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
         | marks::NOTE_LIST_ID
         | marks::SAVE_COPY_ID => return marks::run(app, id),
         #[cfg(not(target_arch = "wasm32"))]
-        "library.open" | "library.search" | "app.stats" => return library::run(app, id),
+        "library.open" | "library.search" | "library.import" | "app.stats" => return library::run(app, id),
         "view.tab.next" | "view.tab.prev" | "view.tab.go" => return tabs::run(app, id, args),
         _ => return false,
     }

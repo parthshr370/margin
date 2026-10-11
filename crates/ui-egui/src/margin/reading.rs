@@ -114,6 +114,9 @@ struct Autosave {
 struct SidecarFile {
     document: PathBuf,
     data: Option<PathBuf>,
+    /// The library's key for the book (`library::opened`): the name of its sidecar in `<data>`
+    /// and the sidecar's `doc.book_id` when it has none yet. `None` without a library.
+    book_id: Option<String>,
     /// The file as read (or new): highlights, notes and fields from newer versions survive.
     file: Sidecar,
     /// Where it was found or last written.
@@ -275,11 +278,18 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     let remember = defaults.reader.remember_per_document;
     let undo_limit = defaults.reader.undo_steps as usize;
     let find_defaults = defaults.reader.find;
+    #[cfg(not(target_arch = "wasm32"))]
+    let book_id = super::library::book_key(app, index);
+    #[cfg(target_arch = "wasm32")]
+    let book_id: Option<String> = None;
     let Some(view) = app.views.get_mut(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let document = doc.path.as_ref().map(PathBuf::from);
     let found = match &document {
-        Some(path) => store::find(path, &store::fingerprint(&doc.bytes), data.as_deref()),
+        Some(path) => {
+            let fingerprint = store::fingerprint(&doc.bytes);
+            store::find_any(path, &[book_id.as_deref().unwrap_or(&fingerprint), &fingerprint], data.as_deref())
+        }
         None => Found::Missing,
     };
     let (file, path, locked) = match found {
@@ -328,7 +338,7 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     reading.history.exact = true;
     let auto_add = file.obsidian.as_ref().is_some_and(|obsidian| obsidian.auto_add);
     let notice = locked.as_ref().map(|reason| format!("This document's reading state won't be saved: {reason}"));
-    reading.sidecar = document.map(|document| SidecarFile { document, data, file, path, locked, saved: None, pending: None });
+    reading.sidecar = document.map(|document| SidecarFile { document, data, book_id, file, path, locked, saved: None, pending: None });
     // The sidecar is where autoadd is remembered: an open document follows it.
     if let Some(path) = doc.path.clone() {
         if auto_add {
@@ -347,6 +357,19 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     super::library::opened(app, index);
+}
+
+/// The `doc.book_id` in the document's sidecar, when it has one.
+pub(crate) fn sidecar_book_id(view: &DocView) -> Option<String> {
+    view.margin.sidecar.as_ref().and_then(|file| file.file.doc.as_ref()).map(|doc| doc.book_id.clone()).filter(|id| !id.is_empty())
+}
+
+/// The library listed the document as the book with key `book_id`: its sidecar goes under that
+/// key in `<data>` from now on.
+pub(crate) fn set_book_id(view: &mut DocView, book_id: String) {
+    if let Some(file) = view.margin.sidecar.as_mut() {
+        file.book_id = Some(book_id);
+    }
 }
 
 /// Whether the document's sidecar had a reading position to restore.
@@ -931,7 +954,7 @@ fn write_sidecar(file: &mut SidecarFile, snap: &mut Snapshot, doc: &Document, re
     let size = u64::try_from(doc.bytes.len()).unwrap_or(u64::MAX);
     let unchanged = old.as_ref().is_some_and(|d| d.sidecar_fingerprint == fingerprint && d.size == size);
     out.doc = Some(SidecarDoc {
-        book_id: old.as_ref().map(|d| d.book_id.clone()).filter(|id| !id.is_empty()).unwrap_or_else(store::new_ulid),
+        book_id: old.as_ref().map(|d| d.book_id.clone()).filter(|id| !id.is_empty()).or_else(|| file.book_id.clone()).unwrap_or_else(store::new_ulid),
         sidecar_fingerprint: fingerprint.clone(),
         size,
         // The whole-file hash of another revision would be wrong now.
@@ -995,7 +1018,8 @@ fn write_sidecar(file: &mut SidecarFile, snap: &mut Snapshot, doc: &Document, re
         snap.bookmarks.clone_from(&out.bookmarks);
         snap.marks = records.marks.generation();
     }
-    let written = store::write(&mut out, &file.document, &fingerprint, file.data.as_deref(), file.path.as_deref())?;
+    let key = file.book_id.as_deref().unwrap_or(&fingerprint);
+    let written = store::write(&mut out, &file.document, key, file.data.as_deref(), file.path.as_deref())?;
     let beside = store::beside_path(&file.document);
     let moved = (file.path.as_ref() != Some(&written) && beside.as_ref() != Some(&written))
         .then(|| "This PDF's folder can't be written, so its reading state is kept in Margin's data folder; the PDF itself is unchanged".to_owned());
@@ -1100,6 +1124,7 @@ mod snapshot_tests {
         view.margin.sidecar = Some(SidecarFile {
             document: PathBuf::from("synthetic.pdf"),
             data: None,
+            book_id: None,
             file: Sidecar::new(),
             path: None,
             locked: None,

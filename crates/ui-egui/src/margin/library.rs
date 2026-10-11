@@ -3,17 +3,34 @@
 //! the watched folders (`library.folders`), scanned on start, when the setting changes and on
 //! Rescan, on a worker thread. A "Continue reading" card opens the last book being read at its
 //! page (the sidecar restores it, as any open does); below it the shelves (Recent, Reading,
-//! Finished, Folders, Collections) as a cover grid or a list, with search and sort. Both views are
-//! virtualised: only the rows on screen are laid out, and only their covers are loaded.
+//! Finished, Folders, Collections, Tags) as a cover grid or a list, with search and sort. Both
+//! views are virtualised: only the rows on screen are laid out, and only their covers are loaded.
 //!
 //! Covers are the first page through PdfCraft's renderer, cached as JPEG in
-//! `<data>/cache/thumbs/`; a few are decoded per frame so scrolling never stalls.
+//! `<data>/cache/thumbs/`, decoded on a worker thread and uploaded a few per frame
+//! ([`covers`]). The shelf's order is kept between frames and made again only when the books,
+//! the search, the sort or the shelf change, so a frame costs the rows on screen, not the
+//! library's size.
+//!
+//! A book's tags show on its card and row and are found by the search, which also matches the
+//! details an import or a lookup filled; "In text" searches the books' pages instead ([`text`]).
+//! A book's menu tags it and opens its details sheet ([`details`]); the app menu imports a
+//! BibTeX file or a Zotero library ([`import`]).
 
-use std::collections::HashMap;
+mod covers;
+mod details;
+mod import;
+mod text;
+
+pub(crate) use import::item as import_item;
+
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, Vec2, pos2, vec2};
-use margin_config::library::{self as store, Book, Collection, Cover, LibraryDb, Opened, ScanJob, ScanRequest};
+use margin_config::library::{self as store, Book, Collection, LibraryDb, Opened, ScanJob, ScanRequest, Tag};
+use margin_config::library_meta::ImportJob;
 use margin_config::{LibrarySort, LibraryView};
 
 use super::look::{self, ButtonSize, GAP, GAP_LARGE};
@@ -49,11 +66,19 @@ const SEARCH_WIDTH: f32 = 300.0;
 const COLLECTION_FIELD_WIDTH: f32 = 176.0;
 const BUTTON: f32 = 32.0;
 const BAR_WIDTH: f32 = 70.0;
-/// Covers decoded per frame, and most kept as textures (far ones are dropped first).
-const COVERS_PER_FRAME: usize = 6;
-const MAX_TEXTURES: usize = 200;
 /// The search field's id (`library.search` focuses it).
 const SEARCH_ID: &str = "margin-library-search";
+/// A tag pill on a card or a row: its text size, padding, height, radius (round ends) and the
+/// gap between two.
+const PILL_TEXT: f32 = 10.5;
+const PILL_PAD: f32 = 6.0;
+const PILL_HEIGHT: f32 = 17.0;
+const PILL_RADIUS: u8 = 8;
+const PILL_GAP: f32 = 4.0;
+/// The widest the tag pills of a list row grow.
+const LIST_PILLS_WIDTH: f32 = 220.0;
+/// The new tag field's width in a book's menu.
+const TAG_FIELD_WIDTH: f32 = 160.0;
 
 /// The shelves, in the order of their tab strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,10 +89,11 @@ pub enum Shelf {
     Finished,
     Folders,
     Collections,
+    Tags,
 }
 
 impl Shelf {
-    pub const ALL: [Self; 5] = [Self::Recent, Self::Reading, Self::Finished, Self::Folders, Self::Collections];
+    pub const ALL: [Self; 6] = [Self::Recent, Self::Reading, Self::Finished, Self::Folders, Self::Collections, Self::Tags];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -76,15 +102,9 @@ impl Shelf {
             Self::Finished => "Finished",
             Self::Folders => "Folders",
             Self::Collections => "Collections",
+            Self::Tags => "Tags",
         }
     }
-}
-
-/// A decoded cover.
-struct CoverTex {
-    texture: TextureHandle,
-    /// The frame it was last drawn in.
-    used: u64,
 }
 
 /// The library's state. Opens nothing in the PdfCraft flavor.
@@ -95,6 +115,12 @@ pub struct LibraryState {
     failed: Option<String>,
     books: Vec<Book>,
     collections: Vec<Collection>,
+    /// The tags, by name, with how many listed books carry each.
+    tags: Vec<Tag>,
+    /// Tag names by id, for cards, rows and the search.
+    tag_names: HashMap<i64, String>,
+    /// Each book's index in `books`, by row id.
+    index_of: HashMap<i64, usize>,
     /// The database changed: read the books again before the next frame shows them.
     stale: bool,
     scan: Option<ScanJob>,
@@ -111,16 +137,36 @@ pub struct LibraryState {
     /// The folder or collection a Folders or Collections shelf shows.
     pub folder: Option<String>,
     pub collection: Option<i64>,
+    /// The tag the Tags shelf shows.
+    pub tag: Option<i64>,
+    /// Search the books' text rather than their titles, authors, tags and details.
+    pub in_text: bool,
+    text: text::TextState,
+    /// The open details sheet.
+    details: Option<details::Sheet>,
+    /// A running online lookup (the details sheet's, or `library.metadata_lookup`'s).
+    lookup: Option<details::Lookup>,
+    /// Books may have new ids to look up (`library.metadata_lookup`).
+    lookup_due: bool,
+    /// A running BibTeX or Zotero import.
+    import: Option<ImportJob>,
     /// `library.search` asked for the keyboard.
     focus_search: bool,
     /// The name typed for a new collection.
     new_collection: String,
-    covers: HashMap<String, CoverTex>,
-    frame: u64,
-    /// Covers decoded this frame (at most [`COVERS_PER_FRAME`]).
-    decoded: usize,
-    /// The egui pass `frame` and `decoded` count (the library and the Stats sheet share them).
-    cover_pass: u64,
+    /// The name typed for a new tag in a book's menu.
+    new_tag: String,
+    covers: covers::Covers,
+    /// Bumped each time the books are read again; what is kept between frames remembers it.
+    generation: u64,
+    /// Each book's search text, lower case, in the order of `books`.
+    haystacks: Vec<String>,
+    /// The shelf as last ordered, and the Continue reading book.
+    ordered: Option<Ordered>,
+    /// The Continue reading line for (generation, book).
+    hero_line: Option<(u64, usize, String)>,
+    /// How many times the shelf was ordered (tests check it isn't every frame).
+    orders_built: usize,
     /// The tab to go back to from the library (`library.open` toggles).
     back_to: Option<usize>,
     /// The library showed last frame.
@@ -139,6 +185,15 @@ impl LibraryState {
         &self.collections
     }
 
+    pub fn tags(&self) -> &[Tag] {
+        &self.tags
+    }
+
+    /// Whether the details sheet is open (the keymap's Dialog context).
+    pub fn sheet_open(&self) -> bool {
+        self.details.is_some()
+    }
+
     /// Whether a scan is running.
     pub fn scanning(&self) -> bool {
         self.scan.is_some()
@@ -146,7 +201,12 @@ impl LibraryState {
 
     /// Covers decoded and ready to draw.
     pub fn covers_loaded(&self) -> usize {
-        self.covers.len()
+        self.covers.loaded()
+    }
+
+    /// How many times the shelf has been filtered and sorted.
+    pub fn orders_built(&self) -> usize {
+        self.orders_built
     }
 
     /// The database, once opened.
@@ -171,6 +231,9 @@ fn ensure_db(app: &mut PdfCraftApp) -> bool {
         Ok(db) => {
             app.margin_library.db = Some(db);
             app.margin_library.stale = true;
+            // Read the text of what changed while Margin was closed; look up new ids if asked.
+            app.margin_library.text.read_again();
+            app.margin_library.lookup_due = true;
             true
         }
         Err(err) => {
@@ -182,7 +245,7 @@ fn ensure_db(app: &mut PdfCraftApp) -> bool {
     }
 }
 
-/// Reads the books and collections again if the database changed.
+/// Reads the books, collections and tags again if the database changed.
 fn reload(app: &mut PdfCraftApp) {
     let state = &mut app.margin_library;
     if !state.stale {
@@ -190,8 +253,20 @@ fn reload(app: &mut PdfCraftApp) {
     }
     state.stale = false;
     let Some(db) = &state.db else { return };
+    match db.tags() {
+        Ok(tags) => {
+            state.tag_names = tags.iter().map(|tag| (tag.id, tag.name.clone())).collect();
+            state.tags = tags;
+        }
+        Err(err) => log::warn!("library: {err}"),
+    }
     match db.books() {
-        Ok(books) => state.books = books,
+        Ok(books) => {
+            state.haystacks = books.iter().map(|book| haystack(book, &state.tag_names)).collect();
+            state.index_of = books.iter().enumerate().map(|(index, book)| (book.id, index)).collect();
+            state.books = books;
+            state.generation = state.generation.wrapping_add(1);
+        }
         Err(err) => log::warn!("library: {err}"),
     }
     match db.collections() {
@@ -208,6 +283,23 @@ pub(crate) fn refresh(app: &mut PdfCraftApp) {
     }
 }
 
+/// The library's key for the book open in view `index`, looked up by its path or content before
+/// its sidecar is read (`reading::opened`), so a sidecar kept in `<data>` is found under it.
+pub(crate) fn book_key(app: &mut PdfCraftApp, index: usize) -> Option<String> {
+    if app.flavor != Flavor::Margin || !ensure_db(app) {
+        return None;
+    }
+    let doc = app.views.get(index).and_then(|view| app.session.get(view.id))?;
+    let path = doc.path.as_deref()?;
+    let fingerprint = margin_config::store::fingerprint(&doc.bytes);
+    let size = u64::try_from(doc.bytes.len()).unwrap_or(u64::MAX);
+    let db = app.margin_library.db.as_ref()?;
+    db.book_key(path, &fingerprint, size).unwrap_or_else(|err| {
+        log::warn!("library: {err}");
+        None
+    })
+}
+
 /// A document opened into view `index` (from `reading::opened`): it joins the library, its
 /// cover is scanned if missing, and its stats key is set.
 pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
@@ -217,6 +309,7 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     let Some(view) = app.views.get(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let doc_id = view.id;
+    let sidecar_id = super::reading::sidecar_book_id(view);
     let actual = margin_config::store::fingerprint(&doc.bytes);
     let pages = u32::try_from(doc.info.pages.len()).unwrap_or(u32::MAX);
     let path = doc.path.clone();
@@ -233,14 +326,17 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
         && ensure_db(app)
         && let Some(db) = &app.margin_library.db
     {
-        let opened = Opened { path, fingerprint: &actual, title: &title, author: &author, pages, size };
+        let opened = Opened { path, fingerprint: &actual, title: &title, author: &author, pages, size, sidecar_id: sidecar_id.as_deref() };
         match db.opened(&opened, store::now_unix()) {
             Ok(listed) => {
-                book = listed.fingerprint;
+                book = listed.book_id;
                 if listed.needs_cover && !app.margin_library.pending_files.iter().any(|p| p == Path::new(path)) {
                     app.margin_library.pending_files.push(PathBuf::from(path));
                 }
                 app.margin_library.stale = true;
+                if let Some(view) = app.views.get_mut(index) {
+                    super::reading::set_book_id(view, book.clone());
+                }
             }
             Err(err) => log::warn!("library: {err}"),
         }
@@ -272,7 +368,8 @@ fn save_progress(app: &mut PdfCraftApp, index: usize) {
 }
 
 /// Every frame (from `reading::tick`): scan on start and when the folders change, take a scan's
-/// results, scan pending covers.
+/// results, scan pending covers; take an import's and a lookup's results; read the text of what
+/// changed once no scan runs.
 pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.flavor != Flavor::Margin || !ensure_db(app) {
         return;
@@ -296,6 +393,12 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             start_scan(app, ctx, Vec::new(), files);
         }
     }
+    import::poll(app);
+    details::poll(app);
+    if app.margin_library.scan.is_none() {
+        details::start_automatic(app);
+    }
+    text::tick(app, ctx);
 }
 
 /// The folders from settings, as paths a scan can walk: absolute ones only (`~/` is the home
@@ -333,6 +436,7 @@ fn start_scan(app: &mut PdfCraftApp, ctx: &egui::Context, folders: Vec<String>, 
             return;
         }
     }
+    app.margin_library.text.scan_started();
     let job = if app.margin_library.run_inline || app.run_inline {
         Some(ScanJob::run_inline(&request))
     } else {
@@ -359,7 +463,10 @@ fn poll_scan(app: &mut PdfCraftApp) {
     app.margin_library.scan = None;
     app.margin_library.stale = true;
     // Covers may have been rewritten: decode them again.
-    app.margin_library.covers.clear();
+    app.margin_library.covers.scan_ended();
+    // New and changed books: their text is read, their ids looked up if asked.
+    app.margin_library.text.read_again();
+    app.margin_library.lookup_due = true;
     match report {
         Ok(report) if report.cancelled => app.notify("Library scan stopped"),
         Ok(report) => log::info!("library: {} PDFs, {} read, {} covers, {} missing", report.found, report.indexed, report.covers, report.missing),
@@ -388,8 +495,8 @@ pub fn rescan(app: &mut PdfCraftApp, ctx: &egui::Context) {
 }
 
 /// Margin's library ids: `library.open` (show the library, or go back to the book),
-/// `library.search` (focus the search field) and `app.stats` (the Stats sheet). `false` for
-/// another id.
+/// `library.search` (focus the search field), `library.import` (import a BibTeX file or a Zotero
+/// library) and `app.stats` (the Stats sheet). `false` for another id.
 pub(crate) fn run(app: &mut PdfCraftApp, id: &str) -> bool {
     match id {
         "library.open" => match app.active {
@@ -411,6 +518,7 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str) -> bool {
             }
             app.margin_library.focus_search = true;
         }
+        "library.import" => import::pick(app),
         "app.stats" => app.margin_stats.toggle_sheet(),
         _ => return false,
     }
@@ -428,6 +536,13 @@ enum Action {
     RemoveFrom(i64, i64),
     DeleteCollection(i64),
     CreateCollection,
+    /// Tag the book with this name (a new tag or one that exists).
+    TagWith(i64, String),
+    Untag(i64, i64),
+    DeleteTag(i64),
+    Details(i64),
+    /// Open the book at this page (0-based), from a text search hit.
+    OpenAt(String, u32),
     Rescan,
     Stats,
     Back,
@@ -447,8 +562,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     reload(app);
     begin_cover_pass(&mut app.margin_library, &ctx);
     let t = Tokens::get(&ctx);
-    let order = ordered(&app.margin_library);
-    let hero = hero_book(&app.margin_library);
+    let (order, hero) = ordered(&mut app.margin_library);
     let hero_line = hero.map(|index| hero_meta(app, index));
     let mut actions = Vec::new();
     let full = ui.available_rect_before_wrap();
@@ -474,11 +588,13 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     super::tabs::open_now(app, &mut page, &t);
     shelf_header(app, &mut page, &t, order.len());
     page.add_space(GAP_LARGE);
-    if matches!(app.margin_library.shelf, Shelf::Folders | Shelf::Collections) {
+    if matches!(app.margin_library.shelf, Shelf::Folders | Shelf::Collections | Shelf::Tags) {
         shelf_picker(app, &mut page, &t, &mut actions);
         page.add_space(GAP_LARGE);
     }
-    if order.is_empty() {
+    if text::active(&app.margin_library) {
+        text::show(app, &mut page, &t, &order, &mut actions);
+    } else if order.is_empty() {
         empty_state(app, &mut page, &t);
     } else {
         match app.margin_library.view {
@@ -487,8 +603,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.allocate_rect(full, Sense::hover());
-    trim_textures(&mut app.margin_library);
+    app.margin_library.covers.trim();
     apply(app, &ctx, actions);
+    details::show(app, &ctx);
 }
 
 /// The library stopped showing (a book opened).
@@ -496,9 +613,85 @@ pub(crate) fn hidden(app: &mut PdfCraftApp) {
     app.margin_library.shown = false;
 }
 
-/// The indices of the books the shelf, folder or collection and search show, sorted.
-fn ordered(state: &LibraryState) -> Vec<usize> {
-    let query = state.query.trim().to_lowercase();
+/// What the shelf was ordered for: the books' generation and every choice that filters or sorts.
+struct Ordered {
+    generation: u64,
+    query: String,
+    sort: LibrarySort,
+    shelf: Shelf,
+    folder: Option<String>,
+    collection: Option<i64>,
+    tag: Option<i64>,
+    in_text: bool,
+    /// The books the shelf shows, in order (indices into `books`).
+    order: Arc<[usize]>,
+    /// The Continue reading book.
+    hero: Option<usize>,
+}
+
+impl Ordered {
+    fn holds_for(&self, state: &LibraryState) -> bool {
+        self.generation == state.generation
+            && self.query == state.query
+            && self.sort == state.sort
+            && self.shelf == state.shelf
+            && self.folder == state.folder
+            && self.collection == state.collection
+            && self.tag == state.tag
+            && self.in_text == state.in_text
+    }
+}
+
+/// The text a book is found by: title, author, file name and tag names, lower case.
+fn haystack(book: &Book, tag_names: &HashMap<i64, String>) -> String {
+    let name = Path::new(&book.path).file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+    let mut text = format!("{}\n{}\n{name}", book.title, book.author);
+    for tag in book.tags.iter().filter_map(|tag| tag_names.get(tag)) {
+        text.push('\n');
+        text.push_str(tag);
+    }
+    text.to_lowercase()
+}
+
+/// The shelf's books in order and the Continue reading book: kept, and made again only when the
+/// books, the search, the sort, the shelf or its folder or collection changed.
+fn ordered(state: &mut LibraryState) -> (Arc<[usize]>, Option<usize>) {
+    if let Some(kept) = state.ordered.as_ref().filter(|kept| kept.holds_for(state)) {
+        return (kept.order.clone(), kept.hero);
+    }
+    let order: Arc<[usize]> = shelf_order(state).into();
+    let hero = hero_book(state);
+    state.orders_built = state.orders_built.saturating_add(1);
+    state.ordered = Some(Ordered {
+        generation: state.generation,
+        query: state.query.clone(),
+        sort: state.sort,
+        shelf: state.shelf,
+        folder: state.folder.clone(),
+        collection: state.collection,
+        tag: state.tag,
+        in_text: state.in_text,
+        order: order.clone(),
+        hero,
+    });
+    (order, hero)
+}
+
+/// The indices of the books the shelf, folder, collection or tag and search show, sorted. The
+/// search matches the title, author, file name and tags as typed, and (through the full-text
+/// index) the words of the details an import or a lookup filled: year, DOI, venue, abstract. In
+/// "In text" mode the shelf isn't searched: the text results show instead.
+fn shelf_order(state: &LibraryState) -> Vec<usize> {
+    let query = if state.in_text { String::new() } else { state.query.trim().to_lowercase() };
+    let in_details: HashSet<i64> = match (&state.db, query.is_empty()) {
+        (Some(db), false) => db.find_books(&query).unwrap_or_else(|err| {
+            log::warn!("library: {err}");
+            Vec::new()
+        }),
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .collect();
     let mut order: Vec<usize> = state
         .books
         .iter()
@@ -509,12 +702,10 @@ fn ordered(state: &LibraryState) -> Vec<usize> {
             Shelf::Finished => book.finished,
             Shelf::Folders => state.folder.as_deref().is_none_or(|folder| Path::new(&book.path).starts_with(folder)),
             Shelf::Collections => state.collection.is_none_or(|collection| book.collections.contains(&collection)),
+            Shelf::Tags => state.tag.map_or(!book.tags.is_empty(), |tag| book.tags.contains(&tag)),
         })
-        .filter(|(_, book)| {
-            query.is_empty() || book.title.to_lowercase().contains(&query) || book.author.to_lowercase().contains(&query) || {
-                let name = Path::new(&book.path).file_name().map(|name| name.to_string_lossy().to_lowercase());
-                name.is_some_and(|name| name.contains(&query))
-            }
+        .filter(|(index, book)| {
+            query.is_empty() || in_details.contains(&book.id) || state.haystacks.get(*index).is_some_and(|text| text.contains(&query))
         })
         .map(|(index, _)| index)
         .collect();
@@ -551,10 +742,14 @@ fn hero_book(state: &LibraryState) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-/// "p. 6 of 14 · 43% · ~34 min left".
+/// "p. 6 of 14 · 43% · ~34 min left", kept until the books are read again.
 fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
+    let generation = app.margin_library.generation;
+    if let Some((_, _, line)) = app.margin_library.hero_line.as_ref().filter(|(at, book, _)| *at == generation && *book == index) {
+        return line.clone();
+    }
     let Some(book) = app.margin_library.books.get(index) else { return String::new() };
-    let (page, pages, progress, fingerprint) = (book.page, book.pages, book.progress, book.fingerprint.clone());
+    let (page, pages, progress, book_id) = (book.page, book.pages, book.progress, book.book_id.clone());
     let mut parts = Vec::new();
     if pages > 0 {
         parts.push(format!("p. {} of {pages}", page.saturating_add(1).min(pages)));
@@ -562,12 +757,14 @@ fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
     parts.push(format!("{}%", (progress * 100.0).round() as u32));
     let left = pages.saturating_sub(page.saturating_add(1));
     if super::stats::ensure_open(app)
-        && let Some(summary) = super::stats::summary(app, &fingerprint)
+        && let Some(summary) = super::stats::summary(app, &book_id)
         && let Some(seconds) = summary.seconds_left(left)
     {
         parts.push(format!("~{} left", margin_config::stats::format_duration(seconds)));
     }
-    parts.join("   ")
+    let line = parts.join("   ");
+    app.margin_library.hero_line = Some((generation, index, line.clone()));
+    line
 }
 
 fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights: f32, actions: &mut Vec<Action>) {
@@ -616,6 +813,11 @@ fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights:
                     egui::RichText::new(format!("Scanning {} / {}", progress.done, progress.to_read)).font(theme::regular(12.0)).color(t.text_muted),
                 );
             }
+            let in_text = app.margin_library.in_text;
+            let tip = "Search the pages and highlights of the books instead of their titles, authors, tags and details";
+            if look::Button::secondary(ButtonSize::Compact, "In text").selected(in_text).tip(tip).show(ui).clicked() {
+                app.margin_library.in_text = !in_text;
+            }
             search_field(app, ui, t);
         });
     });
@@ -631,10 +833,11 @@ fn search_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
             icons::paint(ui, icon, "search", 15.0, t.text_muted);
             let keys = look::shortcut(app, "library.search").map(|keys| format!("  ({keys})")).unwrap_or_default();
+            let what = if app.margin_library.in_text { "Search the books' text" } else { "Search titles" };
             let field = egui::TextEdit::singleline(&mut app.margin_library.query)
                 .id(id)
                 .frame(egui::Frame::NONE)
-                .hint_text(format!("Search titles{keys}"))
+                .hint_text(format!("{what}{keys}"))
                 .desired_width(SEARCH_WIDTH - 50.0);
             let resp = ui.add(field);
             if std::mem::take(&mut app.margin_library.focus_search) {
@@ -718,8 +921,8 @@ fn chip(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
     look::Button::secondary(ButtonSize::Standard, label).selected(on).show(ui)
 }
 
-/// The Folders shelf's folder chips, or the Collections shelf's collection chips and, under
-/// them, the row that creates one.
+/// The Folders shelf's folder chips, the Tags shelf's tag chips, or the Collections shelf's
+/// collection chips and, under them, the row that creates one.
 fn shelf_picker(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
@@ -756,6 +959,27 @@ fn shelf_picker(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &
                     resp.context_menu(|ui| {
                         if ui.button("Delete collection").clicked() {
                             actions.push(Action::DeleteCollection(collection.id));
+                        }
+                    });
+                }
+            }
+            Shelf::Tags => {
+                if app.margin_library.tags.is_empty() {
+                    ui.label(egui::RichText::new("No tags yet. Right-click a book to tag it.").color(t.text_muted));
+                }
+                if chip(ui, "All", app.margin_library.tag.is_none()).clicked() {
+                    app.margin_library.tag = None;
+                }
+                let tags = app.margin_library.tags.clone();
+                for tag in tags {
+                    let on = app.margin_library.tag == Some(tag.id);
+                    let resp = chip(ui, &format!("{}  {}", tag.name, tag.count), on);
+                    if resp.clicked() {
+                        app.margin_library.tag = Some(tag.id);
+                    }
+                    resp.context_menu(|ui| {
+                        if ui.button("Delete tag").clicked() {
+                            actions.push(Action::DeleteTag(tag.id));
                         }
                     });
                 }
@@ -847,6 +1071,9 @@ fn book_cell(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize,
     let inner = cell.shrink(CELL_PAD);
     let cover = Rect::from_min_size(inner.min, vec2(inner.width(), cover_h));
     paint_cover(app, ui, t, cover, &book);
+    let names = tag_names(&app.margin_library, &book);
+    let pills = tag_pills(ui, t, &names, cover.width() - 2.0 * PILL_GAP);
+    paint_pills(ui, t, &pills, pos2(cover.left() + PILL_GAP, cover.bottom() - PILL_GAP - PILL_HEIGHT));
     let mut job = egui::text::LayoutJob::simple(book.title.clone(), theme::medium(12.5), t.text, inner.width());
     job.wrap.max_rows = 2;
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -900,7 +1127,11 @@ fn list_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usiz
             paint_cover(app, ui, t, cover, &book);
             let text_left = cover.right() + GAP_LARGE;
             let status = Rect::from_min_max(pos2(rect.right() - 200.0, rect.top()), pos2(rect.right() - GAP, rect.bottom()));
-            let text_width = (status.left() - GAP_LARGE - text_left).max(GAP);
+            let names = tag_names(&app.margin_library, &book);
+            let pills = tag_pills(ui, t, &names, LIST_PILLS_WIDTH);
+            let pills_left = status.left() - GAP_LARGE - pills.width;
+            paint_pills(ui, t, &pills, pos2(pills_left, rect.center().y - PILL_HEIGHT / 2.0));
+            let text_width = (pills_left - GAP_LARGE - text_left).max(GAP);
             crate::widgets::row_text(
                 ui,
                 pos2(text_left, rect.top() + 17.0),
@@ -927,11 +1158,61 @@ fn list_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usiz
     });
 }
 
-/// The book's menu: open, show in folder, finished, collections, remove.
-fn context_menu(app: &PdfCraftApp, resp: &egui::Response, book: &Book, actions: &mut Vec<Action>) {
+/// The names of the book's tags, A to Z.
+fn tag_names<'a>(state: &'a LibraryState, book: &Book) -> Vec<&'a str> {
+    let mut names: Vec<&str> = book.tags.iter().filter_map(|tag| state.tag_names.get(tag).map(String::as_str)).collect();
+    names.sort_by_key(|name| name.to_lowercase());
+    names
+}
+
+/// Tag pills laid out to fit a width: as many as fit, then "+n" for the rest.
+struct Pills {
+    galleys: Vec<Arc<egui::Galley>>,
+    width: f32,
+}
+
+fn tag_pills(ui: &egui::Ui, t: &Tokens, names: &[&str], max_width: f32) -> Pills {
+    let mut pills = Pills { galleys: Vec::new(), width: 0.0 };
+    let layout = |text: String| ui.painter().layout_no_wrap(text, theme::regular(PILL_TEXT), t.text_muted);
+    for (index, name) in names.iter().enumerate() {
+        let gap = if pills.galleys.is_empty() { 0.0 } else { PILL_GAP };
+        let galley = layout((*name).to_owned());
+        let next = pills.width + gap + galley.size().x + 2.0 * PILL_PAD;
+        if next > max_width {
+            let more = layout(format!("+{}", names.len() - index));
+            let with_more = pills.width + gap + more.size().x + 2.0 * PILL_PAD;
+            if with_more <= max_width {
+                pills.width = with_more;
+                pills.galleys.push(more);
+            }
+            break;
+        }
+        pills.width = next;
+        pills.galleys.push(galley);
+    }
+    pills
+}
+
+/// Paints `pills` left to right from `left_top`: a rounded floating chip each, muted text.
+fn paint_pills(ui: &egui::Ui, t: &Tokens, pills: &Pills, left_top: egui::Pos2) {
+    let fill = look::Surfaces::of(t).floating;
+    let mut x = left_top.x;
+    for galley in &pills.galleys {
+        let rect = Rect::from_min_size(pos2(x, left_top.y), vec2(galley.size().x + 2.0 * PILL_PAD, PILL_HEIGHT));
+        ui.painter().rect(rect, CornerRadius::same(PILL_RADIUS), fill, look::edge_stroke(t.border), egui::StrokeKind::Inside);
+        ui.painter().galley(pos2(rect.left() + PILL_PAD, rect.center().y - galley.size().y / 2.0), galley.clone(), t.text_muted);
+        x = rect.right() + PILL_GAP;
+    }
+}
+
+/// The book's menu: open, details, show in folder, finished, collections, tags, remove.
+fn context_menu(app: &mut PdfCraftApp, resp: &egui::Response, book: &Book, actions: &mut Vec<Action>) {
     resp.context_menu(|ui| {
         if ui.button("Open").clicked() {
             actions.push(Action::Open(book.path.clone()));
+        }
+        if ui.button("Details\u{2026}").clicked() {
+            actions.push(Action::Details(book.id));
         }
         if ui.button("Show in folder").clicked() {
             actions.push(Action::ShowInFolder(book.path.clone()));
@@ -954,6 +1235,7 @@ fn context_menu(app: &PdfCraftApp, resp: &egui::Response, book: &Book, actions: 
                 actions.push(Action::NewCollectionWith(book.id));
             }
         });
+        tags_menu(app, ui, book, actions);
         if let Some(collection) =
             app.margin_library.collection.filter(|c| app.margin_library.shelf == Shelf::Collections && book.collections.contains(c))
             && ui.button("Remove from this collection").clicked()
@@ -963,6 +1245,29 @@ fn context_menu(app: &PdfCraftApp, resp: &egui::Response, book: &Book, actions: 
         ui.separator();
         if ui.button("Remove from library").clicked() {
             actions.push(Action::Remove(book.id));
+        }
+    });
+}
+
+/// Tags ▸: every tag (a click puts it on the book or takes it off), then a field that tags the
+/// book with a new name on Enter.
+fn tags_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, book: &Book, actions: &mut Vec<Action>) {
+    ui.menu_button("Tags", |ui| {
+        for tag in &app.margin_library.tags {
+            let on = book.tags.contains(&tag.id);
+            if ui.selectable_label(on, &tag.name).clicked() {
+                actions.push(if on { Action::Untag(book.id, tag.id) } else { Action::TagWith(book.id, tag.name.clone()) });
+            }
+        }
+        if !app.margin_library.tags.is_empty() {
+            ui.separator();
+        }
+        let field = egui::TextEdit::singleline(&mut app.margin_library.new_tag).hint_text("New tag").desired_width(TAG_FIELD_WIDTH);
+        let resp = ui.add(field);
+        let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if entered && !app.margin_library.new_tag.trim().is_empty() {
+            actions.push(Action::TagWith(book.id, std::mem::take(&mut app.margin_library.new_tag)));
+            ui.close();
         }
     });
 }
@@ -1001,39 +1306,23 @@ pub(crate) fn paint_book_cover(app: &mut PdfCraftApp, ui: &egui::Ui, t: &Tokens,
     paint_cover(app, ui, t, rect, book);
 }
 
-/// Starts a new frame's cover budget once per egui pass, whoever draws covers first.
+/// Starts a new frame's cover budget once per egui pass, whoever draws covers first; books
+/// whose cover couldn't be read are scanned once to make it again.
 fn begin_cover_pass(state: &mut LibraryState, ctx: &egui::Context) {
-    let pass = ctx.cumulative_pass_nr();
-    if state.cover_pass != pass {
-        state.cover_pass = pass;
-        state.frame = state.frame.wrapping_add(1);
-        state.decoded = 0;
+    for file in state.covers.begin_frame(ctx) {
+        let file = PathBuf::from(file);
+        if !state.pending_files.contains(&file) {
+            state.pending_files.push(file);
+        }
     }
 }
 
-/// The book's cover texture, decoding it now if the frame's budget allows.
+/// The book's cover texture once decoded (on the worker; on this thread in tests).
 fn cover_texture(app: &mut PdfCraftApp, ctx: &egui::Context, book: &Book) -> Option<TextureHandle> {
+    let inline = app.margin_library.run_inline || app.run_inline;
     let state = &mut app.margin_library;
-    let frame = state.frame;
-    if let Some(cover) = state.covers.get_mut(&book.fingerprint) {
-        cover.used = frame;
-        return Some(cover.texture.clone());
-    }
-    if book.cover != Cover::Cached {
-        return None;
-    }
-    if state.decoded >= COVERS_PER_FRAME {
-        ctx.request_repaint();
-        return None;
-    }
     let data = state.db.as_ref()?.data_dir().to_path_buf();
-    let (width, height, rgba) = store::load_cover(&store::cover_path(&data, &book.fingerprint))?;
-    let size = [usize::try_from(width).ok()?, usize::try_from(height).ok()?];
-    let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-    state.decoded += 1;
-    let texture = ctx.load_texture(format!("cover-{}", book.fingerprint), image, egui::TextureOptions::LINEAR);
-    state.covers.insert(book.fingerprint.clone(), CoverTex { texture: texture.clone(), used: frame });
-    Some(texture)
+    state.covers.texture(ctx, &data, book, inline)
 }
 
 /// Opens the book at `path` (or shows its tab). The sidecar restores the page as any open does;
@@ -1051,16 +1340,13 @@ pub(crate) fn open_book(app: &mut PdfCraftApp, path: &str) {
     }
 }
 
-/// Drops the covers drawn longest ago once there are more than [`MAX_TEXTURES`].
-fn trim_textures(state: &mut LibraryState) {
-    if state.covers.len() <= MAX_TEXTURES {
-        return;
-    }
-    let mut ages: Vec<(u64, String)> = state.covers.iter().map(|(key, cover)| (cover.used, key.clone())).collect();
-    ages.sort_unstable();
-    let excess = state.covers.len() - MAX_TEXTURES;
-    for (_, key) in ages.into_iter().take(excess) {
-        state.covers.remove(&key);
+/// Opens the book at `path` at `page` (0-based), from a text search hit: the page asked for wins
+/// over the place the reader left.
+fn open_book_at(app: &mut PdfCraftApp, path: &str, page: u32) {
+    app.open_recent(path);
+    let Some(view) = app.active.and_then(|index| app.views.get_mut(index)) else { return };
+    if app.session.get(view.id).and_then(|doc| doc.path.as_deref()) == Some(path) {
+        view.go_to_page(usize::try_from(page).unwrap_or(usize::MAX));
     }
 }
 
@@ -1086,8 +1372,10 @@ fn finish_in_sidecar(app: &mut PdfCraftApp, path: &str, finished: bool) -> Resul
     }
     let document = Path::new(path);
     let fingerprint = margin_config::store::fingerprint_file(document).map_err(|err| err.to_string())?;
+    let book_id = app.margin_library.books.iter().find(|book| book.path == path).map(|book| book.book_id.clone());
+    let key = book_id.as_deref().unwrap_or(&fingerprint);
     let data = app.margin_keys.data_dir();
-    let (mut sidecar, preferred) = match margin_config::store::find(document, &fingerprint, data.as_deref()) {
+    let (mut sidecar, preferred) = match margin_config::store::find_any(document, &[key, &fingerprint], data.as_deref()) {
         margin_config::store::Found::Sidecar { sidecar, path } => (*sidecar, Some(path)),
         margin_config::store::Found::Missing => (margin_config::Sidecar::new(), None),
         margin_config::store::Found::Locked { reason, .. } => return Err(reason),
@@ -1101,7 +1389,7 @@ fn finish_in_sidecar(app: &mut PdfCraftApp, path: &str, finished: bool) -> Resul
     });
     progress.finished = finished;
     progress.updated = margin_config::store::now_rfc3339();
-    margin_config::store::write(&mut sidecar, document, &fingerprint, data.as_deref(), preferred.as_deref()).map(|_| ())
+    margin_config::store::write(&mut sidecar, document, key, data.as_deref(), preferred.as_deref()).map(|_| ())
 }
 
 fn apply(app: &mut PdfCraftApp, ctx: &egui::Context, actions: Vec<Action>) {
@@ -1163,6 +1451,22 @@ fn apply(app: &mut PdfCraftApp, ctx: &egui::Context, actions: Vec<Action>) {
             Action::CreateCollection => {
                 let name = std::mem::take(&mut app.margin_library.new_collection);
                 app.margin_library.db.as_ref().map_or(Ok(()), |db| db.create_collection(&name, store::now_unix()).map(|_| ()))
+            }
+            Action::TagWith(book, name) => app.margin_library.db.as_ref().map_or(Ok(()), |db| db.add_tag(book, &name, store::now_unix()).map(|_| ())),
+            Action::Untag(book, tag) => app.margin_library.db.as_ref().map_or(Ok(()), |db| db.remove_tag(book, tag)),
+            Action::DeleteTag(tag) => {
+                if app.margin_library.tag == Some(tag) {
+                    app.margin_library.tag = None;
+                }
+                app.margin_library.db.as_ref().map_or(Ok(()), |db| db.delete_tag(tag))
+            }
+            Action::Details(book) => {
+                details::open(app, book);
+                Ok(())
+            }
+            Action::OpenAt(path, page) => {
+                open_book_at(app, &path, page);
+                Ok(())
             }
         };
         app.margin_library.stale = true;

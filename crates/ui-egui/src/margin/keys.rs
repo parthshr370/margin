@@ -503,7 +503,7 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let stats_sheet = app.margin_stats.sheet_open();
+    let stats_sheet = app.margin_stats.sheet_open() || app.margin_library.sheet_open();
     #[cfg(target_arch = "wasm32")]
     let stats_sheet = false;
     if app.margin_keys.sheet.is_some() || stats_sheet || app.dialog.is_some() || app.password_prompt.is_some() {
@@ -801,7 +801,7 @@ mod tests {
     }
 
     /// The ids `margin::run` (the reader chrome, reading state and library) handles.
-    const CHROME_COMMANDS: [&str; 21] = [
+    const CHROME_COMMANDS: [&str; 22] = [
         "view.focus_mode.toggle",
         "view.sidebar.toggle",
         "view.sidebar.tab",
@@ -810,6 +810,7 @@ mod tests {
         "view.trim.toggle",
         "library.open",
         "library.search",
+        "library.import",
         "app.stats",
         "annotation.delete",
         "annotation.color",

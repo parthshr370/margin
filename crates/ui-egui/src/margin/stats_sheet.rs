@@ -233,10 +233,9 @@ fn load_model(app: &mut PdfCraftApp) -> Result<Model, String> {
     Ok(Model { overview, library })
 }
 
-/// The library entry of the book with `fingerprint`: the most recently opened one when the
-/// same file is listed under several paths, the first added on a tie.
-fn library_entry<'a>(books: &'a [Book], fingerprint: &str) -> Option<&'a Book> {
-    books.iter().filter(|book| book.fingerprint == fingerprint).max_by(|a, b| a.last_opened.cmp(&b.last_opened).then_with(|| b.id.cmp(&a.id)))
+/// The library entry of the book with key `book_id` (stats are kept under the book's key).
+fn library_entry<'a>(books: &'a [Book], book_id: &str) -> Option<&'a Book> {
+    books.iter().find(|book| book.book_id == book_id)
 }
 
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
@@ -1222,9 +1221,10 @@ mod tests {
         let entry = Book {
             id: 1,
             path: String::new(),
-            fingerprint: "a".into(),
+            book_id: "a".into(),
             title: "Gamma".into(),
             author: String::new(),
+            year: None,
             pages: 10,
             size: 0,
             added: 0,
@@ -1234,8 +1234,9 @@ mod tests {
             finished: false,
             cover: margin_config::library::Cover::Missing,
             collections: Vec::new(),
+            tags: Vec::new(),
         };
-        let entry_c = Book { fingerprint: "c".into(), ..entry.clone() };
+        let entry_c = Book { book_id: "c".into(), ..entry.clone() };
         let library = vec![Some(entry), None, Some(entry_c.clone())];
         let sort = Sort::default();
         assert_eq!(table_order(&books, &library, sort), vec![1, 2, 0], "most time first; a tie goes to the most recently read");
@@ -1245,7 +1246,6 @@ mod tests {
         assert_eq!(table_order(&books, &library, by_title.clicked(Column::Title)), vec![2, 1, 0]);
         assert_eq!(table_order(&books, &library, sort.clicked(Column::Pace)), vec![0, 2, 1], "no pages: last either way");
         assert_eq!(table_order(&books, &library, sort.clicked(Column::Progress)), vec![2, 0, 1], "not in the library: last");
-        let shelf = [Book { id: 2, last_opened: Some(5), ..entry_c.clone() }, Book { id: 3, last_opened: Some(9), ..entry_c.clone() }, entry_c];
-        assert_eq!(library_entry(&shelf, "c").map(|book| book.id), Some(3), "the most recently opened path");
+        assert_eq!(library_entry(&[entry_c], "c").map(|book| book.title.as_str()), Some("Gamma"));
     }
 }

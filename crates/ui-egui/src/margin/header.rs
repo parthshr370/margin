@@ -42,8 +42,8 @@ const DOCUMENT_MENU: &[Option<&str>] = &[
 const EXPORT_MENU: &[&str] = &["export.text", "export.docx", "export.html", "export.rtf", "export.image", "export.all_images"];
 
 /// The Library's app menu: what the document menu offers without a document (open, recent,
-/// settings, shortcuts), since the Library shows no reader header.
-const APP_MENU: &[Option<&str>] = &[Some("file.open"), Some("recent"), None, Some("app.preferences"), Some("help.shortcuts")];
+/// settings, shortcuts), and the library's import, since the Library shows no reader header.
+const APP_MENU: &[Option<&str>] = &[Some("file.open"), Some("recent"), Some("library.import"), None, Some("app.preferences"), Some("help.shortcuts")];
 
 /// The header, and under it the open documents' tab strip. While the active document is being
 /// searched, the find field takes the title's place; returns true when the header has no room
@@ -276,6 +276,8 @@ fn menu_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, rows: &[Option<&str>]) {
                 });
             }
             Some("recent") => recent_menu(app, ui),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some("library.import") => crate::margin::library::import_item(app, ui),
             Some(id) => command_item(app, ui, id),
         }
     }

@@ -43,16 +43,28 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 **Library and reading stats**
 
 - A library is the home screen: a Continue reading card that opens the last book at its page,
-  then shelves for Recent, Reading, Finished, Folders and Collections, as a cover grid or a list,
-  with search (<kbd>/</kbd>) and sort by recent, title, author, progress or date added.
+  then shelves for Recent, Reading, Finished, Folders, Collections and Tags, as a cover grid or a
+  list, with search (<kbd>/</kbd>) and sort by recent, title, author, progress or date added.
+  Search matches titles, authors, file names, tags and a book's details; turn on **In text** to
+  search the pages and PDF highlights of every book instead, and click a result to open the book
+  at that page. The text is read in the background after each scan.
 - Covers come from each PDF's first page. Folders listed in `library.folders` are scanned on
-  start and on Rescan, in the background.
-- Right-click a book to open it, show it in its folder, mark it finished, add it to a collection or
-  remove it.
+  start and on Rescan, in the background. A scan also finds a paper's DOI or arXiv id in the file
+  itself (its metadata, XMP or first page).
+- Right-click a book to open it, see its details, show it in its folder, mark it finished, add it
+  to a collection, tag it or remove it. The details sheet edits the title, authors, year, DOI,
+  arXiv id and tags; what you edit there is never overwritten by a scan, an import or a lookup.
+- Import a BibTeX file (from Zotero, Better BibTeX, JabRef or Mendeley) or Zotero's own
+  `zotero.sqlite` from the Library's menu: entries fill in the details of the books they match (by
+  file, DOI, arXiv id, or title and year), their keywords become tags, and PDFs the library doesn't
+  have yet are added. Zotero's database is copied and only the copy is read.
 - Reading time is recorded per page and per session in a local SQLite file (turn it off with
   `stats.enabled`). The Reading stats sheet (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>) shows
   today, this week and the last 12 months, a calendar heatmap, streaks and a sortable table of
-  books, and exports CSV. Nothing leaves your machine.
+  books, and exports CSV.
+- Nothing leaves your machine unless you ask for a lookup: **Look up details** in a book's details
+  sends its DOI or arXiv id to Crossref (api.crossref.org) and arXiv (export.arxiv.org). Turn on
+  `library.metadata_lookup` to look up every new book with an id after each scan.
 
 **Reading**
 
@@ -309,7 +321,7 @@ An example `settings.jsonc`:
     "reduce_motion": false,
     "rail": { "side": "right", "items": ["reader.tool.select", "comment.highlight", "|", "edit.undo", "edit.redo"] }
   },
-  "library": { "folders": ["/home/you/Papers"], "view": "grid", "sort": "recent" },
+  "library": { "folders": ["/home/you/Papers"], "view": "grid", "sort": "recent", "metadata_lookup": false },
   "stats": { "enabled": true }
 }
 ```

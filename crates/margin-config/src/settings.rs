@@ -423,6 +423,10 @@ pub struct Library {
     pub view: LibraryView,
     /// "recent" | "title" | "author" | "progress" | "added"
     pub sort: LibrarySort,
+    /// look up the details (title, authors, year, venue, abstract) of books with a DOI or arXiv id
+    /// online, on their own, after each scan: their ids go to api.crossref.org and export.arxiv.org.
+    /// Off: nothing leaves this computer unless you click "Look up details" in a book's details
+    pub metadata_lookup: bool,
 }
 
 /// The stats block (`[app]`).

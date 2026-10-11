@@ -15,6 +15,7 @@
   { "id": "view.tab.prev", "title": "Previous document", "icon": "arrow-left", "group": "Go", "in_text": true, "aliases": ["tab", "switch document", "open documents"] },
   { "id": "view.tab.go", "title": "Go to document", "group": "Go",
     "args": { "type": "object", "required": ["index"], "properties": { "index": { "type": "integer", "minimum": 1, "maximum": 9, "description": "Position among the open documents; 9 is the last" } } } },
+  { "id": "library.import", "title": "Import BibTeX or Zotero", "icon": "file-input", "group": "File", "aliases": ["bibtex", "zotero", "references"] },
 
   { "id": "view.zoom.in", "title": "Zoom in", "icon": "zoom-in", "group": "View", "when": "Reader", "aliases": ["bigger", "magnify"] },
   { "id": "view.zoom.out", "title": "Zoom out", "icon": "zoom-out", "group": "View", "when": "Reader", "aliases": ["smaller"] },
