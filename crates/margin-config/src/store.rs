@@ -1,9 +1,11 @@
 //! Reading and writing sidecar files (CU-SC-1, CU-SC-3): `<file>.margin.json` beside the
-//! document, or `<data>/sidecars/<fingerprint>.margin.json` when the document's folder cannot be
+//! document, or `<data>/sidecars/<book_id>.margin.json` when the document's folder cannot be
 //! written. This is the only code that touches sidecar files; callers hand it a [`Sidecar`].
 //!
-//! Not here yet: `sidecars/index.json` and `book_id` matching for moved files (CU-SC-6). A
-//! document's sidecar is found by its path first and by its fingerprint second.
+//! A document's sidecar is found beside it first, then in `<data>` under the book's stable key
+//! (`library.sqlite` maps every file, by path or by fingerprint and size, to its book, and
+//! records the sidecar's own `doc.book_id`; CU-SC-6), then under its fingerprint, where Margin
+//! kept central sidecars before books had stable keys.
 
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -88,9 +90,10 @@ pub fn beside_path(document: &Path) -> Option<PathBuf> {
     Some(document.with_file_name(sidecar))
 }
 
-/// `<data>/sidecars/<fingerprint>.margin.json`.
-pub fn central_path(data: &Path, fingerprint: &str) -> PathBuf {
-    data.join(CENTRAL_DIR).join(format!("{fingerprint}{SIDECAR_SUFFIX}"))
+/// `<data>/sidecars/<key>.margin.json`: `key` is the book's stable key (older sidecars there are
+/// named by a fingerprint).
+pub fn central_path(data: &Path, key: &str) -> PathBuf {
+    data.join(CENTRAL_DIR).join(format!("{key}{SIDECAR_SUFFIX}"))
 }
 
 /// What [`find`] found for a document.
@@ -114,10 +117,24 @@ pub enum Found {
     },
 }
 
-/// Looks for `document`'s sidecar: beside it first, then in `<data>` by fingerprint.
-pub fn find(document: &Path, fingerprint: &str, data: Option<&Path>) -> Found {
-    let candidates = beside_path(document).into_iter().chain(data.map(|data| central_path(data, fingerprint)));
-    for path in candidates {
+/// Looks for `document`'s sidecar: beside it first, then in `<data>` under `key`.
+pub fn find(document: &Path, key: &str, data: Option<&Path>) -> Found {
+    find_any(document, &[key], data)
+}
+
+/// Looks for `document`'s sidecar: beside it first, then in `<data>` under each of `keys` in
+/// turn (the book's key, then its fingerprint).
+pub fn find_any(document: &Path, keys: &[&str], data: Option<&Path>) -> Found {
+    let mut central: Vec<PathBuf> = Vec::new();
+    if let Some(data) = data {
+        for key in keys.iter().filter(|key| !key.is_empty()) {
+            let path = central_path(data, key);
+            if !central.contains(&path) {
+                central.push(path);
+            }
+        }
+    }
+    for path in beside_path(document).into_iter().chain(central) {
         match read(&path) {
             Ok(None) => continue,
             Ok(Some(sidecar)) if sidecar.version > SIDECAR_VERSION => {
@@ -129,6 +146,12 @@ pub fn find(document: &Path, fingerprint: &str, data: Option<&Path>) -> Found {
         }
     }
     Found::Missing
+}
+
+/// Whether `text` is a [`fingerprint`] (32 lower-case hex digits), not a placeholder for a file
+/// that couldn't be read.
+pub fn is_fingerprint(text: &str) -> bool {
+    text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Reads one sidecar file. `Ok(None)` when it does not exist.
@@ -147,18 +170,24 @@ pub fn read(path: &Path) -> Result<Option<Sidecar>, String> {
 }
 
 /// Writes `sidecar` for `document`: to `preferred` when given (where it was found), else beside
-/// the document; when that folder cannot be written, to `<data>/sidecars/<fingerprint>…`.
-/// Bumps `revision` and sets `modified`. Returns where it went.
-pub fn write(sidecar: &mut Sidecar, document: &Path, fingerprint: &str, data: Option<&Path>, preferred: Option<&Path>) -> Result<PathBuf, String> {
+/// the document; when that folder cannot be written, to `<data>/sidecars/<key>…` (`key`: the
+/// book's stable key). A sidecar found in `<data>` under another name (a fingerprint, before
+/// books had stable keys) is not rewritten there: the state moves to the book's key, and the
+/// old file stays as it was. Bumps `revision` and sets `modified`. Returns where it went.
+pub fn write(sidecar: &mut Sidecar, document: &Path, key: &str, data: Option<&Path>, preferred: Option<&Path>) -> Result<PathBuf, String> {
     sidecar.revision = sidecar.revision.saturating_add(1);
     sidecar.modified = Some(now_rfc3339());
     let bytes = serde_json::to_vec_pretty(sidecar).map_err(|err| format!("cannot encode the sidecar ({err})"))?;
+    let central = data.map(|data| central_path(data, key));
+    let central_dir = data.map(|data| data.join(CENTRAL_DIR));
+    let elsewhere_in_data = |path: &&Path| central_dir.is_some() && path.parent() == central_dir.as_deref() && central.as_deref() != Some(*path);
+    let preferred = preferred.filter(|path| !elsewhere_in_data(path));
     let first = preferred.map(Path::to_path_buf).or_else(|| beside_path(document)).ok_or("the document has no file name")?;
     let first_error = match write_atomically(&first, &bytes) {
         Ok(()) => return Ok(first),
         Err(err) => format!("{} ({err})", first.display()),
     };
-    let central = data.map(|data| central_path(data, fingerprint)).filter(|central| *central != first).ok_or(first_error.clone())?;
+    let central = central.filter(|central| *central != first).ok_or(first_error.clone())?;
     if let Some(dir) = central.parent() {
         std::fs::create_dir_all(dir).map_err(|err| format!("{first_error}; {} ({err})", dir.display()))?;
     }

@@ -207,6 +207,23 @@ pub(crate) fn refresh(app: &mut PdfCraftApp) {
     }
 }
 
+/// The library's key for the book open in view `index`, looked up by its path or content before
+/// its sidecar is read (`reading::opened`), so a sidecar kept in `<data>` is found under it.
+pub(crate) fn book_key(app: &mut PdfCraftApp, index: usize) -> Option<String> {
+    if app.flavor != Flavor::Margin || !ensure_db(app) {
+        return None;
+    }
+    let doc = app.views.get(index).and_then(|view| app.session.get(view.id))?;
+    let path = doc.path.as_deref()?;
+    let fingerprint = margin_config::store::fingerprint(&doc.bytes);
+    let size = u64::try_from(doc.bytes.len()).unwrap_or(u64::MAX);
+    let db = app.margin_library.db.as_ref()?;
+    db.book_key(path, &fingerprint, size).unwrap_or_else(|err| {
+        log::warn!("library: {err}");
+        None
+    })
+}
+
 /// A document opened into view `index` (from `reading::opened`): it joins the library, its
 /// cover is scanned if missing, and its stats key is set.
 pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
@@ -216,6 +233,7 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     let Some(view) = app.views.get(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let doc_id = view.id;
+    let sidecar_id = super::reading::sidecar_book_id(view);
     let actual = margin_config::store::fingerprint(&doc.bytes);
     let pages = u32::try_from(doc.info.pages.len()).unwrap_or(u32::MAX);
     let path = doc.path.clone();
@@ -232,14 +250,17 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
         && ensure_db(app)
         && let Some(db) = &app.margin_library.db
     {
-        let opened = Opened { path, fingerprint: &actual, title: &title, author: &author, pages, size };
+        let opened = Opened { path, fingerprint: &actual, title: &title, author: &author, pages, size, sidecar_id: sidecar_id.as_deref() };
         match db.opened(&opened, store::now_unix()) {
             Ok(listed) => {
-                book = listed.fingerprint;
+                book = listed.book_id;
                 if listed.needs_cover && !app.margin_library.pending_files.iter().any(|p| p == Path::new(path)) {
                     app.margin_library.pending_files.push(PathBuf::from(path));
                 }
                 app.margin_library.stale = true;
+                if let Some(view) = app.views.get_mut(index) {
+                    super::reading::set_book_id(view, book.clone());
+                }
             }
             Err(err) => log::warn!("library: {err}"),
         }
@@ -547,7 +568,7 @@ fn hero_book(state: &LibraryState) -> Option<usize> {
 /// "p. 6 of 14 · 43% · ~34 min left".
 fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
     let Some(book) = app.margin_library.books.get(index) else { return String::new() };
-    let (page, pages, progress, fingerprint) = (book.page, book.pages, book.progress, book.fingerprint.clone());
+    let (page, pages, progress, book_id) = (book.page, book.pages, book.progress, book.book_id.clone());
     let mut parts = Vec::new();
     if pages > 0 {
         parts.push(format!("p. {} of {pages}", page.saturating_add(1).min(pages)));
@@ -555,7 +576,7 @@ fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
     parts.push(format!("{}%", (progress * 100.0).round() as u32));
     let left = pages.saturating_sub(page.saturating_add(1));
     if super::stats::ensure_open(app)
-        && let Some(summary) = super::stats::summary(app, &fingerprint)
+        && let Some(summary) = super::stats::summary(app, &book_id)
         && let Some(seconds) = summary.seconds_left(left)
     {
         parts.push(format!("~{} left", margin_config::stats::format_duration(seconds)));
@@ -997,7 +1018,7 @@ fn begin_cover_pass(state: &mut LibraryState, ctx: &egui::Context) {
 fn cover_texture(app: &mut PdfCraftApp, ctx: &egui::Context, book: &Book) -> Option<TextureHandle> {
     let state = &mut app.margin_library;
     let frame = state.frame;
-    if let Some(cover) = state.covers.get_mut(&book.fingerprint) {
+    if let Some(cover) = state.covers.get_mut(&book.book_id) {
         cover.used = frame;
         return Some(cover.texture.clone());
     }
@@ -1009,12 +1030,12 @@ fn cover_texture(app: &mut PdfCraftApp, ctx: &egui::Context, book: &Book) -> Opt
         return None;
     }
     let data = state.db.as_ref()?.data_dir().to_path_buf();
-    let (width, height, rgba) = store::load_cover(&store::cover_path(&data, &book.fingerprint))?;
+    let (width, height, rgba) = store::load_cover(&store::cover_path(&data, &book.book_id))?;
     let size = [usize::try_from(width).ok()?, usize::try_from(height).ok()?];
     let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
     state.decoded += 1;
-    let texture = ctx.load_texture(format!("cover-{}", book.fingerprint), image, egui::TextureOptions::LINEAR);
-    state.covers.insert(book.fingerprint.clone(), CoverTex { texture: texture.clone(), used: frame });
+    let texture = ctx.load_texture(format!("cover-{}", book.book_id), image, egui::TextureOptions::LINEAR);
+    state.covers.insert(book.book_id.clone(), CoverTex { texture: texture.clone(), used: frame });
     Some(texture)
 }
 
@@ -1068,8 +1089,10 @@ fn finish_in_sidecar(app: &mut PdfCraftApp, path: &str, finished: bool) -> Resul
     }
     let document = Path::new(path);
     let fingerprint = margin_config::store::fingerprint_file(document).map_err(|err| err.to_string())?;
+    let book_id = app.margin_library.books.iter().find(|book| book.path == path).map(|book| book.book_id.clone());
+    let key = book_id.as_deref().unwrap_or(&fingerprint);
     let data = app.margin_keys.data_dir();
-    let (mut sidecar, preferred) = match margin_config::store::find(document, &fingerprint, data.as_deref()) {
+    let (mut sidecar, preferred) = match margin_config::store::find_any(document, &[key, &fingerprint], data.as_deref()) {
         margin_config::store::Found::Sidecar { sidecar, path } => (*sidecar, Some(path)),
         margin_config::store::Found::Missing => (margin_config::Sidecar::new(), None),
         margin_config::store::Found::Locked { reason, .. } => return Err(reason),
@@ -1083,7 +1106,7 @@ fn finish_in_sidecar(app: &mut PdfCraftApp, path: &str, finished: bool) -> Resul
     });
     progress.finished = finished;
     progress.updated = margin_config::store::now_rfc3339();
-    margin_config::store::write(&mut sidecar, document, &fingerprint, data.as_deref(), preferred.as_deref()).map(|_| ())
+    margin_config::store::write(&mut sidecar, document, key, data.as_deref(), preferred.as_deref()).map(|_| ())
 }
 
 fn apply(app: &mut PdfCraftApp, ctx: &egui::Context, actions: Vec<Action>) {
