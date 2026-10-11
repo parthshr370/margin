@@ -5,6 +5,8 @@
 //! `x-margin-scope` tags each top-level block `[doc]` or `[app]` (CU-SET-3); a key inherits its
 //! block's scope unless it carries its own tag.
 
+use std::path::PathBuf;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +44,9 @@ pub struct Settings {
     /// reading statistics in stats.sqlite
     #[schemars(extend("x-margin-scope" = "app"))]
     pub stats: Stats,
+    /// reading notes, highlights, snapshots and their export format
+    #[schemars(extend("x-margin-scope" = "app"))]
+    pub notes: Notes,
 }
 
 impl Default for Settings {
@@ -55,6 +60,7 @@ impl Default for Settings {
             keys: Keys::default(),
             library: Library::default(),
             stats: Stats::default(),
+            notes: Notes::default(),
         }
     }
 }
@@ -430,5 +436,106 @@ pub struct Stats {
 impl Default for Stats {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+/// A named highlight colour in the notes palette. A colour without a name is ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct NoteColor {
+    /// The colour name used by Margin commands.
+    #[schemars(length(min = 1, max = 64))]
+    pub name: String,
+    /// Red, green and blue channels, each from 0 to 255.
+    pub rgb: [u8; 3],
+}
+
+/// Where notes are exported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportTarget {
+    /// Obsidian Markdown with `obsidian://` links.
+    #[default]
+    Obsidian,
+    /// Plain Markdown.
+    Markdown,
+    /// Logseq Markdown.
+    Logseq,
+    /// Readwise CSV.
+    ReadwiseCsv,
+    /// JSON.
+    Json,
+}
+
+/// How an existing note is changed by an export.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteUpdateMode {
+    /// Replace Margin-managed content in the note.
+    #[default]
+    Update,
+    /// Add new content to the end of the note.
+    Append,
+}
+
+/// Margin's Obsidian and notes export settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Notes {
+    /// The Obsidian vault folder, as a full path; `null` or `""` turns vault notes off. A relative
+    /// path is not used: the notes panel says why.
+    #[serde(deserialize_with = "deserialize_vault")]
+    pub vault: Option<PathBuf>,
+    /// Vault-relative reading-note path. Common placeholders: `title`, `title-slug`, `authors`,
+    /// `year`, `doi`, `arxiv`, `citekey`, `tags`, `date`, `progress`, `page`, `color`,
+    /// `color-name`, `text`, `note` and `link`. Values are slugged for paths and substituted once
+    /// as literals; unknown or missing placeholders become empty.
+    pub note_template: String,
+    /// YAML front matter template. It accepts the common placeholders and `source`; values are
+    /// JSON/YAML-quoted and escaped before one-pass literal substitution. Unknown or missing
+    /// values are empty.
+    pub front_matter_template: String,
+    /// Optional note header template. It accepts the common placeholders plus `source` and
+    /// `callout`; substitutions are one-pass literals, and unknown or missing values are empty.
+    pub header_template: String,
+    /// Highlight template. It accepts the common placeholders plus `source` and `callout`;
+    /// `{{callout}}` is the safely formatted callout. Substitution is one-pass and unknown or
+    /// missing values are empty.
+    pub highlight_template: String,
+    /// Named RGB palette; the first colour is the default.
+    #[schemars(length(min = 1, max = 64))]
+    pub colors: Vec<NoteColor>,
+    /// Default format for note exports.
+    pub export_target: ExportTarget,
+    /// Folder under the vault where snapshots are stored.
+    pub snapshot_folder: String,
+    /// How exports change an existing note.
+    pub update_mode: NoteUpdateMode,
+}
+
+fn deserialize_vault<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let vault = Option::<PathBuf>::deserialize(deserializer)?;
+    Ok(vault.filter(|path| !path.as_os_str().is_empty()))
+}
+
+const DEFAULT_NOTE_COLORS: [(&str, [u8; 3]); 4] =
+    [("Yellow", [0xff, 0xd0, 0x00]), ("Red", [0xea, 0x52, 0x52]), ("Note", [0x08, 0x6d, 0xdd]), ("Important", [0xbb, 0x61, 0xe5])];
+
+impl Default for Notes {
+    fn default() -> Self {
+        Self {
+            vault: None,
+            note_template: "reading/{{title-slug}}.md".to_owned(),
+            front_matter_template: "---\nsource: \"{{source}}\"\n---\n\n".to_owned(),
+            header_template: String::new(),
+            highlight_template: "{{callout}}".to_owned(),
+            colors: DEFAULT_NOTE_COLORS.iter().map(|(name, rgb)| NoteColor { name: (*name).to_owned(), rgb: *rgb }).collect(),
+            export_target: ExportTarget::Obsidian,
+            snapshot_folder: "attachments".to_owned(),
+            update_mode: NoteUpdateMode::Update,
+        }
     }
 }

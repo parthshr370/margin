@@ -312,6 +312,161 @@ fn items(pages: &[Page]) -> Vec<Item<'_>> {
     out
 }
 
+/// The most Markdown text one export may produce. A longer paper is exported a few pages at a
+/// time; the check runs as the text grows, so a hostile file can't make it allocate without end.
+pub const MAX_MARKDOWN_TEXT_BYTES: usize = 64 << 20;
+
+/// Markdown text and the image files it references, in the order the text embeds them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Markdown {
+    pub text: String,
+    /// File name (`<prefix>image-0001.png`) and encoded bytes.
+    pub images: Vec<(String, Vec<u8>)>,
+}
+
+/// How [`markdown`] writes its output.
+#[derive(Clone, Copy, Debug)]
+pub struct MarkdownOptions<'a> {
+    /// The `# ` heading at the top.
+    pub title: &'a str,
+    /// Obsidian embeds (`![[name]]`) instead of standard image links.
+    pub obsidian: bool,
+    /// Put in front of every image file name, so several exports can share one folder.
+    pub image_prefix: &'a str,
+}
+
+/// `text` as literal Markdown inline text: the characters that would start emphasis, a link,
+/// an image, a heading, code or HTML are escaped, and line breaks become spaces (a PDF's line
+/// breaks are soft wraps). In a table cell `|` is escaped too.
+fn markdown_text(text: &str, table_cell: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars().filter(|ch| allowed(*ch)) {
+        match ch {
+            '|' if table_cell => out.push_str("\\|"),
+            '\\' | '`' | '*' | '_' | '[' | ']' | '!' | '#' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' | '\r' => out.push(' '),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The paragraph as a list item (`- body` or `3. body`), when it starts with a bullet or a number.
+fn list_item(text: &str) -> Option<(String, &str)> {
+    let trimmed = text.trim();
+    if let Some(body) = trimmed.strip_prefix("• ").or_else(|| trimmed.strip_prefix("- ")) {
+        return Some(("-".to_owned(), body));
+    }
+    let (number, body) = trimmed.split_once(". ")?;
+    (!number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())).then(|| (format!("{number}."), body))
+}
+
+fn push_table(text: &mut String, table: &Table) {
+    let columns = table.cols.len().max(1);
+    for (row_index, row) in table.rows.iter().enumerate() {
+        text.push('|');
+        let mut written = 0usize;
+        for cell in row {
+            text.push(' ');
+            text.push_str(&markdown_text(&cell.text, true));
+            text.push_str(" |");
+            // Markdown has no spanning cells: a wide cell is followed by empty ones.
+            for _ in 1..cell.span.max(1) {
+                text.push_str("  |");
+            }
+            written = written.saturating_add(cell.span.max(1));
+        }
+        for _ in written..columns {
+            text.push_str("  |");
+        }
+        text.push('\n');
+        if row_index == 0 {
+            text.push('|');
+            for _ in 0..written.max(columns) {
+                text.push_str(" --- |");
+            }
+            text.push('\n');
+        }
+    }
+    text.push('\n');
+}
+
+/// The pages as Markdown: a `#` title, `##`/`###` headings, paragraphs, bullet and numbered
+/// lists, pipe tables, and each image as a separate file next to the note. Image bytes move out
+/// of `pages` rather than being copied. Fails when the text would pass
+/// [`MAX_MARKDOWN_TEXT_BYTES`].
+pub fn markdown(mut pages: Vec<Page>, options: &MarkdownOptions<'_>) -> Result<Markdown, String> {
+    let too_large = || format!("The Markdown would be larger than {} MiB; export fewer pages at a time.", MAX_MARKDOWN_TEXT_BYTES >> 20);
+    let mut text = format!("# {}\n\n", markdown_text(options.title, false));
+    // (file name, page, index in the page's images): the bytes are moved out once the text is done.
+    let mut wanted: Vec<(String, usize, usize)> = Vec::new();
+    let mut page_index = 0usize;
+    let mut in_list = false;
+    for part in items(&pages) {
+        let is_list_item = matches!(&part, Item::Para(block, 0) if list_item(&block.text).is_some());
+        if in_list && !is_list_item {
+            // A blank line ends the list, so the next paragraph isn't read as part of its last item.
+            text.push('\n');
+        }
+        in_list = is_list_item;
+        match part {
+            Item::Para(block, 0) => match list_item(&block.text) {
+                Some((marker, body)) => {
+                    text.push_str(&marker);
+                    text.push(' ');
+                    text.push_str(&markdown_text(body, false));
+                    text.push('\n');
+                }
+                None => {
+                    text.push_str(&markdown_text(&block.text, false));
+                    text.push_str("\n\n");
+                }
+            },
+            Item::Para(block, heading) => {
+                // The title is the only `#`; headings start at `##`.
+                text.push_str(&"#".repeat(usize::from(heading).saturating_add(1)));
+                text.push(' ');
+                text.push_str(&markdown_text(&block.text, false));
+                text.push_str("\n\n");
+            }
+            Item::Table(table) => push_table(&mut text, &table),
+            Item::Img(image) => {
+                let Some(index) = pages.get(page_index).and_then(|page| page.images.iter().position(|candidate| std::ptr::eq(candidate, image)))
+                else {
+                    continue;
+                };
+                let name = format!("{}image-{:04}.{}", options.image_prefix, wanted.len().saturating_add(1), image.ext);
+                if options.obsidian {
+                    text.push_str(&format!("![[{name}]]\n\n"));
+                } else {
+                    text.push_str(&format!("![image](<{name}>)\n\n"));
+                }
+                wanted.push((name, page_index, index));
+            }
+            Item::PageBreak => {
+                page_index = page_index.saturating_add(1);
+                text.push_str("---\n\n");
+            }
+        }
+        if text.len() > MAX_MARKDOWN_TEXT_BYTES {
+            return Err(too_large());
+        }
+    }
+    let images = wanted
+        .into_iter()
+        .filter_map(|(name, page, index)| {
+            let image = pages.get_mut(page)?.images.get_mut(index)?;
+            Some((name, std::mem::take(&mut image.bytes)))
+        })
+        .collect();
+    Ok(Markdown { text, images })
+}
+
 /// Whether a character may appear in the output. XML 1.0 forbids the C0 controls other than tab,
 /// line feed and carriage return, and U+FFFE/U+FFFF. Text extracted from PDFs often holds them
 /// (fonts without a usable `/ToUnicode`), and Word refuses a whole document over one (#72).
@@ -689,6 +844,65 @@ pub fn rtf(pages: &[Page]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PLAIN: MarkdownOptions<'static> = MarkdownOptions { title: "Title", obsidian: false, image_prefix: "" };
+
+    #[test]
+    fn markdown_writes_headings_tables_lists_and_separate_images() {
+        let mut p = table_page();
+        p.blocks.push(Block { text: "A heading".into(), rect: [72.0, 700.0, 300.0, 730.0], size: 22.0, bold: true, italic: false, color: [0.0; 3] });
+        p.blocks.push(Block { text: "• item".into(), rect: [72.0, 480.0, 300.0, 491.0], size: 11.0, bold: false, italic: false, color: [0.0; 3] });
+        p.images.push(Image { ext: "png", bytes: vec![1, 2, 3], rect: [72.0, 400.0, 100.0, 430.0] });
+        let standard = markdown(vec![p.clone()], &PLAIN).unwrap();
+        assert!(standard.text.contains("## A heading"), "{}", standard.text);
+        assert!(standard.text.contains("| Meter | Unit | Reading |"), "{}", standard.text);
+        assert!(standard.text.contains("- item\n\n"), "a blank line closes the list: {}", standard.text);
+        assert!(standard.text.contains("![image](<image-0001.png>)"), "{}", standard.text);
+        assert_eq!(standard.images, [("image-0001.png".into(), vec![1, 2, 3])]);
+        let obsidian = markdown(vec![p], &MarkdownOptions { obsidian: true, image_prefix: "paper-", ..PLAIN }).unwrap();
+        assert!(obsidian.text.contains("![[paper-image-0001.png]]"), "{}", obsidian.text);
+        assert_eq!(obsidian.images, [("paper-image-0001.png".into(), vec![1, 2, 3])]);
+    }
+
+    #[test]
+    fn markdown_escapes_hostile_text_and_table_delimiters() {
+        let page = Page {
+            blocks: vec![Block {
+                text: "# [bad](x) ! <script> &\n- not a list".into(),
+                rect: [0.0, 10.0, 300.0, 21.0],
+                size: 11.0,
+                bold: false,
+                italic: false,
+                color: [0.0; 3],
+            }],
+            ..Page::default()
+        };
+        let output = markdown(vec![page], &MarkdownOptions { title: "# title", ..PLAIN }).unwrap();
+        assert!(output.text.starts_with("# \\# title\n\n"), "{}", output.text);
+        assert!(output.text.contains("\\# \\[bad\\](x) \\! &lt;script&gt; & - not a list\n"), "{}", output.text);
+        assert!(output.images.is_empty());
+        let mut table = Table { rect: [0.0; 4], cols: vec![0.0, 10.0], rows: Vec::new() };
+        let cell = |text: &str, span| Cell { text: text.into(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span };
+        table.rows.push(vec![cell("wide | cell", 2)]);
+        table.rows.push(vec![cell("a", 1), cell("b", 1)]);
+        let mut text = String::new();
+        push_table(&mut text, &table);
+        assert_eq!(text, "| wide \\| cell |  |\n| --- | --- |\n| a | b |\n\n");
+    }
+
+    #[test]
+    fn markdown_refuses_text_past_its_budget() {
+        let block = Block {
+            text: "x".repeat(MAX_MARKDOWN_TEXT_BYTES),
+            rect: [0.0, 10.0, 300.0, 21.0],
+            size: 11.0,
+            bold: false,
+            italic: false,
+            color: [0.0; 3],
+        };
+        let page = Page { blocks: vec![block], ..Page::default() };
+        assert!(markdown(vec![page], &PLAIN).unwrap_err().contains("export fewer pages"));
+    }
 
     fn page() -> Page {
         let b = |t: &str, y: f64, size: f64, bold: bool| Block {

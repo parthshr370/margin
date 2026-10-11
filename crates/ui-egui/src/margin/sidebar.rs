@@ -346,6 +346,9 @@ fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize
     pane_title(ui, t, "Highlights", Some(count));
     let drafting = app.views.get(index).is_some_and(|view| view.margin.marks.draft.is_some());
     if count == 0 && !drafting {
+        if let Some(view) = app.views.get_mut(index) {
+            super::obsidian::panel_block(ui, t, &mut view.comments.notes);
+        }
         let note_hint = look::shortcut(app, super::marks::NOTE_ADD_ID).map(|keys| format!("{keys} adds a note to the page."));
         let mut lines = vec!["No highlights yet.", "Pick Highlight in the rail, then select text."];
         lines.extend(note_hint.as_deref());

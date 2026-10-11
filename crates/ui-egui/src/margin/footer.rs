@@ -42,7 +42,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let marks = super::scrubber::Marks {
         pages: labels.len(),
         sections: doc.info.outline.iter().filter_map(|o| o.page).collect(),
-        dots: app.views.get(index).map(|view| super::pages::highlight_dots(&doc.info, &view.margin.marks, &app.notes)).unwrap_or_default(),
+        dots: app
+            .views
+            .get(index)
+            .map(|view| super::pages::highlight_dots(&doc.info, &view.comments.notes.markup_indices, &view.margin.marks, &app.notes))
+            .unwrap_or_default(),
     };
     let status = crate::margin::reading::save_status(app, index);
     let save_key = look::shortcut(app, "file.save");

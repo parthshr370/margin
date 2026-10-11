@@ -8,7 +8,8 @@
 //!
 //! Supported keywords, the subset `schemars` emits for [`crate::Settings`]: `$ref` (local),
 //! `type` (string or list), `properties`, `additionalProperties`, `items`, `minItems`,
-//! `maxItems`, `minimum`, `maximum`, `enum`, `const`, `oneOf` and `anyOf`.
+//! `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, `enum`, `const`, `oneOf` and
+//! `anyOf`.
 
 use serde_json::{Map, Number, Value};
 
@@ -129,8 +130,27 @@ impl Validator<'_> {
             Value::Number(number) => Some(self.check_range(schema, number, path)),
             Value::Array(items) => self.check_array(schema, items, path, depth),
             Value::Object(map) => Some(self.check_object(schema, map, path, depth)),
+            Value::String(text) => self.check_length(schema, text, path),
             other => Some(other),
         }
+    }
+
+    /// Checks `minLength` and `maxLength`, counted in characters as JSON Schema does. A string
+    /// of the wrong length is dropped, so the layer below shows through.
+    fn check_length(&mut self, schema: &Value, text: String, path: &KeyPath) -> Option<Value> {
+        let min = schema.get("minLength").and_then(Value::as_u64);
+        let max = schema.get("maxLength").and_then(Value::as_u64);
+        if min.is_none() && max.is_none() {
+            return Some(Value::String(text));
+        }
+        let length = u64::try_from(text.chars().count()).unwrap_or(u64::MAX);
+        if min.is_some_and(|min| length < min) || max.is_some_and(|max| length > max) {
+            let range = format!("{}..{}", min.unwrap_or(0), max.map_or_else(String::new, |max| max.to_string()));
+            let message = format!("{} has {length} characters, allowed {range}; {}", path.dotted(), self.fallback_text(path));
+            self.report(path, message);
+            return None;
+        }
+        Some(Value::String(text))
     }
 
     fn probe(&self) -> Validator<'_> {

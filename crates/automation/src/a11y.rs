@@ -276,6 +276,38 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "format": format.extension() }))
     }
 
+    pub(crate) fn doc_export_markdown(&self, a: &Args) -> Result<Value> {
+        let path = self.resolve(a.str("path")?, true)?;
+        if path.is_dir() {
+            return Err(failed(format!("{}: is a folder, not a file", path.display())));
+        }
+        let doc = self.doc(a)?;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..doc.info.pages.len()).collect(),
+        };
+        let title = doc.info.title.clone().unwrap_or_else(|| doc.name.clone());
+        // Images are named after the note, so two notes exported into one folder keep their own.
+        let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let image_prefix = if stem.is_empty() { String::new() } else { format!("{stem}-") };
+        let options = pdfcraft_engine::export::MarkdownOptions {
+            title: &title,
+            obsidian: a.opt_bool("obsidian")?.unwrap_or(false),
+            image_prefix: &image_prefix,
+        };
+        let markdown = pdfcraft_engine::export::markdown(&doc.export_source(), &pages, &options).map_err(failed)?;
+        let folder = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let mut image_paths = Vec::with_capacity(markdown.images.len());
+        // Images first: the note never points at a file that isn't there yet.
+        for (name, bytes) in &markdown.images {
+            let image_path = child(folder, name);
+            write_atomic(&image_path, bytes)?;
+            image_paths.push(image_path.to_string_lossy().into_owned());
+        }
+        write_atomic(&path, markdown.text.as_bytes())?;
+        Ok(json!({ "path": path.to_string_lossy(), "bytes": markdown.text.len(), "images": image_paths }))
+    }
+
     fn pdfa_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");
         pdfcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))

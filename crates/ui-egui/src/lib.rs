@@ -1499,7 +1499,7 @@ impl PdfCraftApp {
             "comments_panel_closed": self.comments_panel_closed,
         });
         if self.flavor == Flavor::Margin {
-            state["notes"] = self.notes.to_json();
+            self.notes.save_state(&mut state);
             state["margin_chrome"] = self.margin_chrome.to_json();
         }
         state.to_string()
@@ -1552,7 +1552,7 @@ impl PdfCraftApp {
         if let Some(closed) = v["comments_panel_closed"].as_bool() {
             self.comments_panel_closed = closed;
         }
-        self.notes.restore(&v["notes"]);
+        self.notes.restore_state(&v);
         self.margin_chrome.restore(&v["margin_chrome"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;

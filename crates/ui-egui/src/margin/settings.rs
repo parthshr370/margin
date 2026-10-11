@@ -18,6 +18,10 @@ use super::look::{self, ButtonSize, Segment, Surfaces};
 use crate::theme::{self, Tokens};
 use crate::{Dialog, PdfCraftApp, i18n};
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "notes_settings.rs"]
+mod notes_settings;
+
 /// The sheet's width, and its distance from the window's edges when the window is smaller.
 const SHEET_WIDTH: f32 = 680.0;
 const SCREEN_INSET: f32 = 24.0;
@@ -173,6 +177,8 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let text =
         RowText { id: "author", name: i18n::t("Your name"), description: Some(i18n::t("Signed on new comments and highlights.")), first: true };
     row(ui, t, text, |ui, name| name_field(app, ui, t, name));
+    #[cfg(not(target_arch = "wasm32"))]
+    notes_settings::sections(app, ui, t);
 
     section(ui, t, "JavaScript");
     let text = RowText {

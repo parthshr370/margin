@@ -93,3 +93,5 @@ Exports complete synchronously. `progressToken` and cancellation notifications a
 ignored; no background-job or cancellation behavior is added.
 
 Session resources `pdfcraft://document` and `pdfcraft://commands`, and the refusal of unknown argument keys, are described in [docs/mcp.md](../../docs/mcp.md).
+
+Markdown export is exposed as `doc_export_markdown`: it exports selected 1-based pages from the current document state and writes the image files, then the note, atomically under the same root rules. Images are named after the note (`note-image-0001.png` for `note.md`); standard Markdown links them as `![image](<note-image-0001.png>)`, and `obsidian: true` embeds them as `![[note-image-0001.png]]`. An export whose text passes 64 MiB, or whose images pass 256 MiB or 10,000 files, fails with an error naming the page; export fewer pages. The engine API is `export::markdown(&ExportSource, &[usize], &MarkdownOptions) -> Result<Markdown, String>`, and the structured writer is `pdfcraft_export::markdown(Vec<Page>, &MarkdownOptions)`.

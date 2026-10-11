@@ -125,6 +125,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.vertical(|ui| {
                 let mut clicked = None;
+                let mut snapshot_to_note = false;
                 for command in &app.margin_keys.settings().ui.rail.items {
                     let Some(item) = RailItem::from_id(command, app) else { continue };
                     if item == RailItem::Divider {
@@ -138,6 +139,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     let (label, shortcut) = item.tooltip(app);
                     let on = item.active(app.quick_tool);
                     let r = ui.add_enabled_ui(enabled, |ui| look::rail_button(ui, item.icon(app), BUTTON, on, &label, shortcut.as_deref())).inner;
+                    if item == RailItem::Command("edit.snapshot") {
+                        let vault = app.notes.vault.is_some();
+                        r.context_menu(|ui| {
+                            if ui.add_enabled(vault, egui::Button::new("Save snapshot to note")).clicked() {
+                                snapshot_to_note = true;
+                                ui.close();
+                            }
+                        });
+                    }
                     if r.clicked() {
                         clicked = Some(command.clone());
                     }
@@ -146,6 +156,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     && let Some(item) = RailItem::from_id(&command, app)
                 {
                     item.run(app, ui.ctx());
+                }
+                if snapshot_to_note {
+                    app.notes.snapshot_to_note = true;
+                    app.quick_tool = QuickTool::Snapshot;
+                    app.notify("Drag a region to save a 300 DPI snapshot to the reading note");
                 }
                 if let QuickTool::Comment(tool) = app.quick_tool {
                     divider(ui, &t);

@@ -63,6 +63,13 @@ impl PdfCraftApp {
                 if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
                     return;
                 }
+                if self.flavor == crate::Flavor::Margin && self.notes.snapshot_to_note {
+                    self.notes.snapshot_to_note = false;
+                    if let Err(error) = crate::margin::obsidian::save_snapshot_to_note(self, index, page, view_rect) {
+                        crate::margin::toast::failed(self, error, None);
+                    }
+                    return;
+                }
                 match self.snapshot(index, page, view_rect) {
                     Ok((w, h)) => {
                         self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])

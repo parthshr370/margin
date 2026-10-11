@@ -111,11 +111,24 @@ fn tool_table_is_well_formed() {
 /// annotations must not tell clients the call is read-only or harmless (#130).
 #[test]
 fn file_writing_tools_are_not_read_only() {
-    for name in ["doc_export_data", "accessibility_report", "image_save"] {
+    for name in ["doc_export_data", "doc_export_markdown", "accessibility_report", "image_save"] {
         let t = tools().into_iter().find(|t| t.name == name).unwrap();
         assert!(!t.read_only, "{name} writes a file but advertises read-only");
         assert!(t.destructive, "{name} overwrites its path but advertises non-destructive");
     }
+}
+
+#[test]
+fn markdown_export_writes_a_root_confined_note_atomically() {
+    let dir = workdir("markdown");
+    let mut automation = auto(&dir);
+    let doc = ok(&mut automation, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let result = ok(&mut automation, "doc_export_markdown", json!({ "doc": doc, "path": "out/note.md" }));
+    let note = std::fs::read_to_string(dir.join("out/note.md")).unwrap();
+    assert_eq!(result["path"], dir.join("out/note.md").to_string_lossy().as_ref());
+    assert!(note.contains("Page 1"), "{note}");
+    assert!(result["images"].as_array().is_some_and(Vec::is_empty));
+    assert!(matches!(automation.call("doc_export_markdown", &json!({ "doc": doc, "path": "../outside.md" })), Err(ToolError::Failed(_))));
 }
 
 #[test]

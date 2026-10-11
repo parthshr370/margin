@@ -111,8 +111,44 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   Change a colour, copy, open or delete from the card.
 - Obsidian: copy a highlight as a PDF++ style callout
   (`> [!PDF|yellow] [[paper.pdf#page=4|paper, p.4]]` followed by the quote), open the page in
-  Obsidian, copy all highlights as Markdown, or write them to a reading note in your vault. Writing
-  only appends and never duplicates an entry, and Margin never writes outside the vault.
+  Obsidian, or write them to a reading note in your vault. Writing updates and recolours Margin's
+  hash-marked blocks in place and removes deleted highlights. A block edited in Obsidian, or an
+  older entry without an ownership hash, is kept and reported rather than overwritten. Text
+  outside Margin's block markers stays untouched; writes are atomic and confined to the vault.
+- The Highlights tab's format picker applies to **Copy all** and **Export highlights**:
+  Obsidian/PDF++, plain Markdown, Logseq outline blocks, Readwise CSV, or JSON. The CSV has the
+  columns Readwise's CSV import documents, `Highlight,Title,Author,URL,Note,Location,Date`
+  (Location is the page number, Date the day the highlight last changed; see
+  [Readwise's import page](https://docs.readwise.io/readwise/docs/importing-highlights)).
+  Exports extract missing page text in a background job with progress, and stop with an error
+  past 16 MiB of highlight text.
+- **Export paper as Markdown** writes headings, paragraphs, lists and detected tables, with
+  images as files beside it named after the note (`paper-image-0001.png`). **Export paper to
+  vault** writes a `-paper.md` beside the reading note with Obsidian image embeds, and never
+  replaces a note or image already in the vault. A paper whose text passes 64 MiB, or whose
+  images pass 256 MiB or 10,000 files, is refused with the page where it went over.
+- Right-click the area-snapshot rail button and choose **Save snapshot to note**, then drag a
+  region: Margin renders it at 300 DPI, saves a PNG under `notes.snapshot_folder` in the vault,
+  and adds an image embed and PDF page link to the reading note.
+- With **Add highlights to this note** on, every highlight change (new, edited, recoloured,
+  deleted) reaches the note in the background; a write that changes nothing says nothing.
+- Configure the vault, reading-note path, front matter, header, highlight template, palette and
+  export target in the live-reloaded `notes` block of `settings.jsonc`, or in Settings ▸ Notes.
+  The vault and notes settings of an older Margin move from its saved state into
+  `settings.jsonc` once, without replacing values already there; CLI `notes.vault`,
+  `notes.note_template` and `notes.colors` write `settings.jsonc`. A relative `notes.vault` is
+  not used, and the Highlights tab says why. Templates use literal `{{variable}}` substitution,
+  never code. Available variables include `title`, `title-slug`, `authors`, `year`, `doi`,
+  `arxiv`, `citekey`, `tags`, `date`, `progress`, `page`, `color`, `color-name`, `text`, `note`,
+  `link` and `callout`; unavailable metadata is empty. Title, authors and progress come from the
+  library when it has the book, read again whenever a note is written. Path values are slugged,
+  front-matter values are quote-escaped, and inserted values are not reinterpreted as
+  templates. `notes.update_mode: "append"` opts out of updates and deletions.
+- First run: the library home shows a setup card to connect an Obsidian vault (a folder without
+  `.obsidian` is accepted with a warning), add a library folder (written to `library.folders`
+  and scanned at once) and open a PDF. **Not now** hides it for good (remembered in Margin's
+  saved state as `margin_setup_dismissed`); Settings ▸ Library and Settings ▸ Notes keep both
+  changeable.
 
 **Saving**
 

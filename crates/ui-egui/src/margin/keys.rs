@@ -278,6 +278,7 @@ fn ensure_loaded(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let (loaded, load_problems) = Loaded::read(dir, registry, watch);
     problems.extend(load_problems);
     app.margin_keys.loaded = Some(loaded);
+    super::obsidian::settings_loaded(app);
     report(app, &problems, false);
 }
 
@@ -358,6 +359,7 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
     keys.reload_at = None;
     keys.pending.clear();
     let problems = loaded.reload();
+    super::obsidian::settings_loaded(app);
     report(app, &problems, true);
 }
 
@@ -367,6 +369,7 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
 pub(crate) fn reload_now(app: &mut PdfCraftApp) {
     let Some(loaded) = app.margin_keys.loaded.as_mut() else { return };
     let problems = loaded.reload();
+    super::obsidian::settings_loaded(app);
     report(app, &problems, false);
 }
 
