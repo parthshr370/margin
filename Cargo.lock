@@ -3031,11 +3031,14 @@ dependencies = [
  "md-5",
  "pdfcraft-engine",
  "pdfcraft-render",
+ "roxmltree",
  "rusqlite",
+ "rustls-native-certs",
  "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]

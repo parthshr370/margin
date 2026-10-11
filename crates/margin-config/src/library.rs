@@ -9,6 +9,11 @@
 //! (moved, renamed or copied), else starts a new book; a file it has seen stays with its book
 //! when its bytes change.
 //!
+//! A book also has tags and bibliographic details ([`crate::library_meta`]): a scan fills the
+//! DOI and arXiv id it finds in the file, and never overwrites a field the user edited or an
+//! import or lookup filled. Titles, authors, tags and details are searchable through FTS5, and
+//! page text once the background text pass has read it ([`crate::library_text`]).
+//!
 //! [`scan`] indexes the watched folders (`library.folders`) as a cancellable job: callers run it
 //! on a worker thread ([`ScanJob::spawn`]). Files whose size and modified time are unchanged are
 //! not read again; their progress is refreshed from their sidecar. New and changed files are read
@@ -27,8 +32,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::library_meta::Field;
 use crate::{Locator, Sidecar};
-use crate::{library_schema, migrate, store};
+use crate::{ids, library_schema, migrate, store};
 
 /// The library database inside `<data>`.
 pub const LIBRARY_DB: &str = "library.sqlite";
@@ -98,7 +104,10 @@ pub struct Book {
     /// sidecar's file name. A file moved, renamed, edited or copied keeps it.
     pub book_id: String,
     pub title: String,
+    /// Every author, comma separated.
     pub author: String,
+    /// The year it was published, from an import, a lookup or the user.
+    pub year: Option<i32>,
     pub pages: u32,
     pub size: u64,
     /// Unix seconds.
@@ -174,7 +183,7 @@ pub fn now_unix() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-fn db_err(err: rusqlite::Error) -> String {
+pub(crate) fn db_err(err: rusqlite::Error) -> String {
     format!("library database: {err}")
 }
 
@@ -187,7 +196,7 @@ pub(crate) fn configure(conn: &Connection) -> Result<(), String> {
     conn.pragma_update(None, "foreign_keys", "ON").map_err(db_err)
 }
 
-fn open_connection(data: &Path) -> Result<Connection, String> {
+pub(crate) fn open_connection(data: &Path) -> Result<Connection, String> {
     std::fs::create_dir_all(data).map_err(|err| format!("can't create {}: {err}", data.display()))?;
     let path = data.join(LIBRARY_DB);
     let conn = Connection::open(&path).map_err(db_err)?;
@@ -203,7 +212,7 @@ fn clean_text(text: &str) -> String {
 
 /// The id of the tag called `name` (cleaned and capped), made if no tag has that name in any
 /// case.
-fn tag_id(conn: &Connection, name: &str, now: i64) -> Result<i64, String> {
+pub(crate) fn tag_id(conn: &Connection, name: &str, now: i64) -> Result<i64, String> {
     let name = crate::reference::clean(name, MAX_TAG_CHARS);
     if name.is_empty() {
         return Err("a tag needs a name".to_owned());
@@ -312,6 +321,20 @@ fn note_sidecar(conn: &Connection, book: i64, sidecar_id: Option<&str>) -> Resul
     Ok(())
 }
 
+/// Keeps the DOI and arXiv id a scan found in the file, where the book has none yet and nobody
+/// (the user, an import, a lookup) set one.
+fn fill_detected(conn: &Connection, book: i64, doi: Option<&str>, arxiv: Option<&str>) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare_cached(
+            "UPDATE books SET doi = CASE WHEN doi IS NULL AND (user_fields | source_fields) & ?4 = 0 THEN ?2 ELSE doi END,
+                arxiv = CASE WHEN arxiv IS NULL AND (user_fields | source_fields) & ?5 = 0 THEN ?3 ELSE arxiv END
+             WHERE id = ?1",
+        )
+        .map_err(db_err)?;
+    stmt.execute(params![book, doi, arxiv, Field::Doi.bit(), Field::Arxiv.bit()]).map_err(db_err)?;
+    Ok(())
+}
+
 /// A file as `book_files` keeps it.
 struct FileRow<'a> {
     path: &'a str,
@@ -361,9 +384,13 @@ impl LibraryDb {
         Ok(Self { conn: open_connection(data)?, data: data.to_path_buf() })
     }
 
-    /// `<data>`.
     pub fn data_dir(&self) -> &Path {
         &self.data
+    }
+
+    /// The connection, for the other library modules.
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
     }
 
     /// Every book in the library: not removed by the user, and one of its files there at the
@@ -375,7 +402,7 @@ impl LibraryDb {
             .conn
             .prepare_cached(
                 "SELECT b.id, b.path, b.book_id, b.title, b.author, b.pages, COALESCE(f.size, 0), b.added, b.last_opened, b.progress, b.page,
-                        b.finished, b.cover
+                        b.finished, b.cover, b.year
                  FROM books b LEFT JOIN book_files f ON f.path = b.path WHERE b.removed = 0 AND b.missing = 0",
             )
             .map_err(db_err)?;
@@ -387,6 +414,7 @@ impl LibraryDb {
                     book_id: row.get(2)?,
                     title: row.get(3)?,
                     author: row.get(4)?,
+                    year: row.get::<_, Option<i64>>(13)?.and_then(|year| i32::try_from(year).ok()),
                     pages: u32::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
                     size: u64::try_from(row.get::<_, i64>(6)?).unwrap_or(0),
                     added: row.get(7)?,
@@ -457,8 +485,10 @@ impl LibraryDb {
                     Match::Content => false,
                 };
                 tx.execute(
-                    "UPDATE books SET title = ?2, author = ?3, pages = ?4, cover = CASE WHEN ?5 THEN 0 ELSE cover END WHERE id = ?1",
-                    params![book, title, author, doc.pages, changed],
+                    "UPDATE books SET title = CASE WHEN (user_fields | source_fields) & ?6 = 0 THEN ?2 ELSE title END,
+                        author = CASE WHEN (user_fields | source_fields) & ?7 = 0 THEN ?3 ELSE author END,
+                        pages = ?4, cover = CASE WHEN ?5 THEN 0 ELSE cover END WHERE id = ?1",
+                    params![book, title, author, doc.pages, changed, Field::Title.bit(), Field::Authors.bit()],
                 )
                 .map_err(db_err)?;
                 book
@@ -696,6 +726,9 @@ struct Probed {
     reading: Option<SidecarReading>,
     /// The `doc.book_id` of the file's sidecar.
     sidecar_id: Option<String>,
+    /// The DOI and arXiv id the file names ([`detect_ids`]).
+    doi: Option<String>,
+    arxiv: Option<String>,
 }
 
 /// Progress kept in a document's sidecar.
@@ -786,9 +819,9 @@ fn push_file(found: &mut Vec<Found>, seen: &mut HashSet<PathBuf>, path: PathBuf)
     found.push(Found { path, size: meta.len(), mtime });
 }
 
-/// Reads one PDF: fingerprint, title, author, pages, its sidecar's progress and id, and its
-/// cover. `book_id`: the key of the book the library lists this path under, where its central
-/// sidecar is kept.
+/// Reads one PDF: fingerprint, title, author, pages, its sidecar's progress and id, the DOI and
+/// arXiv id it names, and its cover. `book_id`: the key of the book the library lists this path
+/// under, where its central sidecar is kept.
 fn probe(file: &Found, data: &Path, book_id: Option<&str>) -> Probed {
     let path = file.path.to_string_lossy().into_owned();
     let mut probed = Probed {
@@ -803,6 +836,8 @@ fn probe(file: &Found, data: &Path, book_id: Option<&str>) -> Probed {
         cover: CoverOut::Failed,
         reading: None,
         sidecar_id: None,
+        doi: None,
+        arxiv: None,
     };
     let bytes = if file.size <= MAX_READ_BYTES { std::fs::read(&file.path).ok() } else { None };
     let Some(bytes) = bytes else { return probed };
@@ -822,7 +857,37 @@ fn probe(file: &Found, data: &Path, book_id: Option<&str>) -> Probed {
     if let Some(first) = info.as_ref().and_then(|info| info.pages.first()) {
         probed.cover = render_cover(&bytes, first.width);
     }
+    (probed.doi, probed.arxiv) = detect_ids(&bytes, info.as_ref());
     probed
+}
+
+/// The DOI and arXiv id a PDF names, found without asking anyone: in its Info dictionary
+/// (publishers often put `doi:…` in the subject), its XMP packet, then its first page's text
+/// (arXiv stamps its id in the margin there). Each search is bounded ([`ids`]).
+fn detect_ids(bytes: &Arc<Vec<u8>>, info: Option<&pdfcraft_render::DocInfo>) -> (Option<String>, Option<String>) {
+    let (mut doi, mut arxiv) = (None, None);
+    if let Some(info) = info {
+        for text in [info.subject.as_deref(), info.keywords.as_deref(), info.title.as_deref()].into_iter().flatten() {
+            doi = doi.or_else(|| ids::find_doi(text));
+            arxiv = arxiv.or_else(|| ids::find_arxiv(text));
+        }
+    }
+    if (doi.is_none() || arxiv.is_none())
+        && let Some(packet) = ids::xmp_packet(bytes)
+    {
+        let (xmp_doi, xmp_arxiv) = ids::xmp_ids(packet);
+        doi = doi.or(xmp_doi);
+        arxiv = arxiv.or(xmp_arxiv);
+    }
+    if doi.is_none() && arxiv.is_none() && info.is_some_and(|info| !info.pages.is_empty()) {
+        let mut renderer = PageRenderer::new(bytes.clone(), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        if let Some(text) = page.text {
+            let text = text.plain_text();
+            (doi, arxiv) = (ids::find_doi(&text), ids::find_arxiv(&text));
+        }
+    }
+    (doi, arxiv)
 }
 
 /// Renders the first page `COVER_WIDTH` wide, as JPEG.
@@ -1087,9 +1152,11 @@ fn commit_batch(conn: &Connection, batch: &mut Vec<Probed>, scan: &Scan<'_>, rep
         let sidecar_id = probed.sidecar_id.as_deref();
         let book = match resolve(&tx, &probed.path, &probed.fingerprint, size, sidecar_id)? {
             Some((book, _)) => {
+                // A title or author the user typed, or an import or lookup filled, stays.
                 tx.execute(
-                    "UPDATE books SET title = ?2, author = ?3, pages = ?4 WHERE id = ?1",
-                    params![book, probed.title, probed.author, probed.pages],
+                    "UPDATE books SET title = CASE WHEN (user_fields | source_fields) & ?5 = 0 THEN ?2 ELSE title END,
+                        author = CASE WHEN (user_fields | source_fields) & ?6 = 0 THEN ?3 ELSE author END, pages = ?4 WHERE id = ?1",
+                    params![book, probed.title, probed.author, probed.pages, Field::Title.bit(), Field::Authors.bit()],
                 )
                 .map_err(db_err)?;
                 book
@@ -1100,6 +1167,7 @@ fn commit_batch(conn: &Connection, batch: &mut Vec<Probed>, scan: &Scan<'_>, rep
             )?,
         };
         note_sidecar(&tx, book, sidecar_id)?;
+        fill_detected(&tx, book, probed.doi.as_deref(), probed.arxiv.as_deref())?;
         let book_id: String = tx.query_row("SELECT book_id FROM books WHERE id = ?1", [book], |row| row.get(0)).map_err(db_err)?;
         let cover = write_cover(&probed.cover, &scan.request.data, &book_id);
         tx.execute("UPDATE books SET cover = ?2 WHERE id = ?1", params![book, cover.to_db()]).map_err(db_err)?;
@@ -1571,6 +1639,16 @@ pub(crate) mod tests {
         assert_eq!(missing, ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(), true), "a removed book is kept");
         let key = db.book_key("/usb/a-copy.pdf", "", 100).unwrap();
         assert_eq!(key.as_deref(), Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "stats and covers keep their key");
+        // Through versions 3 to 5: tags, details and the full-text index, over the same rows.
+        let version: i64 = db.conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 5);
+        let details = db.details(2).unwrap();
+        assert_eq!((details.title.as_str(), details.authors.as_str(), details.year, details.doi), ("Alpha", "Ada", None, None));
+        let mut found = crate::library_text::search_books(&db.conn, "broken").unwrap();
+        found.sort_unstable();
+        assert_eq!(found, [4, 5], "the books already listed are in the title index");
+        db.add_tag(4, "Revisit later", 1).unwrap();
+        assert_eq!(crate::library_text::search_books(&db.conn, "revisit").unwrap(), [4], "tags are found too");
         drop(db);
         assert!(LibraryDb::open(&data).is_ok(), "opening again changes nothing");
         std::fs::remove_dir_all(&root).ok();

@@ -14,22 +14,33 @@
 //! profile file formats are here too; nothing loads them yet.
 //!
 //! Library and stats (desktop only): [`library`] keeps `<data>/library.sqlite` (books, covers,
-//! collections) and scans folders as a cancellable job; [`stats`] keeps `<data>/stats.sqlite`
-//! (reading sessions, time per page) and turns it into summaries and a calendar.
+//! collections, tags, bibliographic details) and scans folders as a cancellable job;
+//! [`library_meta`] edits a book's details, imports BibTeX and Zotero libraries and looks papers
+//! up online when asked; [`library_text`] keeps the full-text index; [`stats`] keeps
+//! `<data>/stats.sqlite` (reading sessions, time per page) and turns it into summaries and a
+//! calendar. [`ids`], [`bibtex`], [`zotero`] and [`lookup`] read identifiers and references.
 //!
 //! Nothing here depends on egui, and no config file can crash it.
 
+pub mod bibtex;
 mod context;
 mod edit;
 mod error;
+pub mod ids;
 mod jsonc;
 mod keymap;
 mod keystroke;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod library;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod library_meta;
+#[cfg(not(target_arch = "wasm32"))]
 mod library_schema;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod library_text;
 mod load;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod lookup;
 #[cfg(not(target_arch = "wasm32"))]
 mod migrate;
 mod problem;
@@ -47,6 +58,8 @@ mod theme;
 mod validate;
 #[cfg(test)]
 mod vectors;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod zotero;
 
 pub use context::{ContextExpr, ContextNode, depth_of, holds, parse_stack};
 pub use edit::{set_user_values, with_values};

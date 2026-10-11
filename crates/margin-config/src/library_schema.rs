@@ -10,7 +10,7 @@ use crate::migrate;
 use crate::store;
 
 /// Every step, in order; the library is at version `STEPS.len()`.
-pub(crate) const STEPS: &[migrate::Step] = &[v1_books_by_path, v2_book_identity, v3_tags];
+pub(crate) const STEPS: &[migrate::Step] = &[v1_books_by_path, v2_book_identity, v3_tags, v4_details, v5_full_text];
 
 fn db_err(err: rusqlite::Error) -> String {
     err.to_string()
@@ -254,4 +254,32 @@ CREATE INDEX book_tags_tag ON book_tags(tag);
 
 fn v3_tags(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch(V3).map_err(db_err)
+}
+
+/// Version 4: a book's bibliographic details (`author` keeps every author, comma separated).
+/// `user_fields` marks the fields the user edited, which nothing else changes again;
+/// `source_fields` the ones an import or a lookup filled, which a scan doesn't overwrite with
+/// what the file says (bits: `library_meta::Field`). `looked_up`: when the book was last looked
+/// up online (Unix seconds).
+const V4: &str = "
+ALTER TABLE books ADD COLUMN year INTEGER;
+ALTER TABLE books ADD COLUMN doi TEXT;
+ALTER TABLE books ADD COLUMN arxiv TEXT;
+ALTER TABLE books ADD COLUMN publisher TEXT;
+ALTER TABLE books ADD COLUMN isbn TEXT;
+ALTER TABLE books ADD COLUMN abstract TEXT;
+ALTER TABLE books ADD COLUMN user_fields INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE books ADD COLUMN source_fields INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE books ADD COLUMN looked_up INTEGER;
+CREATE INDEX books_doi ON books(doi);
+CREATE INDEX books_arxiv ON books(arxiv);
+";
+
+fn v4_details(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(V4).map_err(db_err)
+}
+
+/// Version 5: full-text search (`library_text`), filled for the books already listed.
+fn v5_full_text(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(crate::library_text::SCHEMA).map_err(db_err)
 }

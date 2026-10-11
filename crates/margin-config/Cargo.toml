@@ -26,12 +26,18 @@ jsonc-parser = { version = "0.34", features = ["cst"] }
 schemars = "1"
 # Library covers: the first page through the existing renderer (already in the tree via the engine).
 pdfcraft-render = { workspace = true }
+# XMP packets (a PDF's DOI) and arXiv's Atom answers (already in the tree through xfa and xfdf).
+roxmltree = "0.20"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # library.sqlite and stats.sqlite, SQLite compiled in (no system library needed).
 rusqlite = { version = "0.40", features = ["bundled"] }
 # Decoding cached JPEG covers (already in the tree through the engine).
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# Looking up a paper's details (Crossref, arXiv), only when the user asks or turned on
+# `library.metadata_lookup`: the same client and TLS setup as PdfCraft's update check.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
 
 [dev-dependencies]
 # Generated schemas checked against an independent validator.

@@ -1224,6 +1224,7 @@ mod tests {
             book_id: "a".into(),
             title: "Gamma".into(),
             author: String::new(),
+            year: None,
             pages: 10,
             size: 0,
             added: 0,
