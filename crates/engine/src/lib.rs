@@ -1890,10 +1890,45 @@ pub struct SaveSnapshot {
     keys: Keys,
 }
 
+/// A file a save worker wrote: its bytes and, when the save rewrote the whole file, that file
+/// parsed and inspected again (a full rewrite renumbers objects, so editing continues from it).
+pub struct SavedFile {
+    pub bytes: Arc<Vec<u8>>,
+    reopened: Option<(pdfcraft_cos::Document, DocInfo)>,
+}
+
+/// What [`Session::acknowledge_save`] did with a written file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveAck {
+    /// Edits made during the write are still unsaved.
+    Superseded,
+    /// The document is clean.
+    Saved,
+    /// The document is clean and now edits the rewritten file: views redraw their pages.
+    Reopened,
+}
+
 impl SaveSnapshot {
     pub fn bytes(&self) -> Result<Arc<Vec<u8>>, EditError> {
         let Some(cos) = self.cos.as_ref().filter(|cos| cos.is_modified()) else { return Ok(self.bytes.clone()) };
         guard(|| write_incremental(cos, &self.options)).map_err(EditError::Write)?.map(Arc::new).map_err(|err| EditError::Write(err.to_string()))
+    }
+
+    /// `bytes` once written. A save that rewrote the whole file (a repaired file, an encryption
+    /// change, a redaction) parses and inspects it here, on the worker, so the acknowledgement
+    /// only swaps it in. If that fails, editing stays on the opened file and saves stay correct.
+    pub fn written(&self, bytes: Arc<Vec<u8>>) -> SavedFile {
+        let rewrote = self
+            .cos
+            .as_ref()
+            .is_some_and(|cos| cos.is_modified() && (cos.revisions().is_empty() || cos.encryption_changed() || cos.full_save_required()));
+        let reopen = || {
+            let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), self.keys.reopen.as_deref()).ok()?;
+            let info = inspect(bytes.clone(), self.keys.render.as_deref()).ok()?;
+            Some((cos, info))
+        };
+        let reopened = if rewrote { guard(reopen).ok().flatten() } else { None };
+        SavedFile { bytes, reopened }
     }
 }
 
@@ -2476,6 +2511,11 @@ impl Session {
 
     /// Rebuild working bytes, inspection and renderer from the current edit state.
     fn refresh(doc: &mut Document) -> Result<(), EditError> {
+        Self::refresh_inspected(doc, None)
+    }
+
+    /// [`Self::refresh`], reusing the inspection of the working file when a save worker made it.
+    fn refresh_inspected(doc: &mut Document, inspected: Option<DocInfo>) -> Result<(), EditError> {
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
         // A script may have laid an XFA form out again (rows added, subforms shown).
         if doc.xfa.is_some()
@@ -2488,9 +2528,11 @@ impl Session {
         } else {
             editor.cos.bytes().clone()
         };
-        let info = inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        let mut info = match inspected {
+            Some(info) => info,
+            None => inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?,
+        };
         // Keep the user's layer choices where the layers still exist.
-        let mut info = info;
         for l in &mut info.layers {
             if let Some(old) = doc.info.layers.iter().find(|o| o.id == l.id) {
                 l.visible = old.visible;
@@ -2541,22 +2583,28 @@ impl Session {
         })
     }
 
-    /// Acknowledge a background write. Newer edits remain dirty. Keeping the original graph
-    /// base coalesces this session into one incremental revision instead of appending a revision
-    /// for every small edit; the last written bytes remain the Revert target.
-    pub fn acknowledge_save(&mut self, snapshot: SaveSnapshot, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<bool, EditError> {
+    /// Acknowledge a background write. Newer edits remain dirty. An incremental save keeps the
+    /// opened graph as the base, which coalesces this session into one incremental revision
+    /// instead of appending one per small edit; the last written bytes remain the Revert target.
+    /// A full rewrite renumbered objects, so a current document continues from the written file
+    /// (as [`Self::mark_saved`] does), using the worker's parse and inspection.
+    pub fn acknowledge_save(&mut self, snapshot: SaveSnapshot, saved: SavedFile, path: Option<String>) -> Result<SaveAck, EditError> {
         let doc = self.doc_mut(snapshot.id)?;
         doc.saved_keys = snapshot.keys;
-        doc.saved_bytes = bytes;
+        doc.saved_bytes = saved.bytes;
         if let Some(path) = path {
             doc.name = std::path::Path::new(&path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
             doc.path = Some(path);
         }
-        let current = doc.generation == snapshot.generation;
-        if current {
-            doc.dirty = false;
+        if doc.generation != snapshot.generation {
+            return Ok(SaveAck::Superseded);
         }
-        Ok(current)
+        doc.dirty = false;
+        let (Some((cos, info)), Some(editor)) = (saved.reopened, doc.editor.as_mut()) else { return Ok(SaveAck::Saved) };
+        editor.cos = cos;
+        doc.generation += 1;
+        Self::refresh_inspected(doc, Some(info))?;
+        Ok(SaveAck::Reopened)
     }
 
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,

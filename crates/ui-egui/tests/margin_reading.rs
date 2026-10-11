@@ -133,9 +133,24 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     }
 }
 
-/// Run `secs` of app time.
+/// Run `secs` of app time. Each step lets the save worker land a write it was handed: the
+/// worker runs in real time, which app steps don't advance.
 fn wait(h: &mut Harness<'static, PdfCraftApp>, secs: f32) {
-    h.run_steps((secs / STEP_SECS).ceil() as usize);
+    for _ in 0..(secs / STEP_SECS).ceil() as usize {
+        h.run_steps(1);
+        land_saves(h);
+    }
+}
+
+/// Step until no PDF write of the first document is in flight (or 10 s of real time pass).
+fn land_saves(h: &mut Harness<'static, PdfCraftApp>) {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(2);
+    let id = h.state().views[0].id;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().margin_save_pending(id) && std::time::Instant::now() < deadline {
+        std::thread::sleep(POLL);
+        h.run_steps(1);
+    }
 }
 
 fn sidecar_json(place: &Place) -> serde_json::Value {
@@ -490,6 +505,7 @@ fn autosave_off_leaves_the_pdf_to_ctrl_s() {
     assert!(h.query_by_label_contains("Unsaved · ").is_some(), "the footer names the key that saves");
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::S);
     h.run_steps(3);
+    land_saves(&mut h);
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: false }, "Ctrl+S still saves");
 }
 
@@ -532,6 +548,7 @@ fn the_footer_tells_the_truth_about_saving() {
     std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
     h.get_by_label("Save").click();
     h.run_steps(3);
+    land_saves(&mut h);
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: true }, "Save retried");
     assert!(std::fs::read(place.doc()).unwrap().windows(10).any(|w| w == b"/Highlight"));
     drop(h);

@@ -126,9 +126,8 @@ struct Snapshot {
     at: f32,
     /// Share of the page's width at the window's centre, when known.
     x: Option<f32>,
-    /// The `[doc]` settings layer (`settings.view`).
-    view: Map<String, Value>,
-    view_state: ViewState,
+    /// The `[doc]` settings layer (`settings.view`), as [`view_layer`] writes it.
+    view: ViewState,
     remember: bool,
     trim: TrimRecord,
     bookmarks: Vec<Bookmark>,
@@ -144,14 +143,16 @@ struct TrimRecord {
     even: Margins,
 }
 
-/// Allocation-free state used to decide whether the JSON layer needs rebuilding.
+/// What the `[doc]` settings layer records, without its JSON: equal states write equal layers,
+/// so frames compare it without allocating.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ViewState {
     display: DisplayState,
     layout: PageLayout,
     cover: bool,
-    fit: Fit,
-    zoom: u32,
+    fit: &'static str,
+    /// Only a zoom fit records its zoom; the others recompute it from the window.
+    zoom: Option<u32>,
     read_width: Option<u32>,
     trim: bool,
     page_gap: Option<u32>,
@@ -159,12 +160,19 @@ struct ViewState {
 
 impl ViewState {
     fn of(view: &DocView) -> Self {
+        let fit = match (view.fit, view.margin.read_fit.is_some()) {
+            (Fit::None, true) => "read",
+            (Fit::Width, _) => "width",
+            (Fit::Page, _) => "page",
+            (Fit::Height | Fit::None, _) => "zoom",
+        };
         Self {
             display: view.margin.display,
             layout: view.layout,
             cover: view.cover,
-            fit: view.fit,
-            zoom: (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32,
+            fit,
+            zoom: (fit == "zoom").then(|| (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32),
+            // Fit "read" is only the same fit with the width it was picked at.
             read_width: view.margin.read_fit.map(|read| read.width_px.round() as u32),
             trim: view.margin.trim.on,
             page_gap: view.page_gap_px,
@@ -187,7 +195,7 @@ impl Snapshot {
                 || (self.page == page
                     && near(self.at, y)
                     && self.x.zip(x).is_none_or(|(left, right)| near(left, right))
-                    && self.view_state == ViewState::of(view)))
+                    && self.view == ViewState::of(view)))
             && self.trim == TrimRecord::of(&view.margin.trim)
             && self.bookmarks == view.margin.bookmarks
             && self.auto_add == auto_add
@@ -521,33 +529,25 @@ pub fn toggle_trim(view: &mut DocView) {
     go(view, spot);
 }
 
-/// The `[doc]` settings layer of `view` as shown now (`settings.view` in the sidecar).
-fn view_layer(view: &DocView) -> Map<String, Value> {
-    let mut layer = view.margin.display.settings_values();
-    let layout = match view.layout {
+/// The `[doc]` settings layer of a view state (`settings.view` in the sidecar).
+fn view_layer(state: &ViewState) -> Map<String, Value> {
+    let mut layer = state.display.settings_values();
+    let layout = match state.layout {
         PageLayout::Continuous => "scroll",
         PageLayout::Single => "single",
         PageLayout::TwoUp => "two_up",
     };
-    let fit = match (view.fit, view.margin.read_fit.is_some()) {
-        (Fit::None, true) => "read",
-        (Fit::Width, _) => "width",
-        (Fit::Page, _) => "page",
-        (Fit::Height | Fit::None, _) => "zoom",
-    };
     layer.insert("layout".into(), layout.into());
-    layer.insert("cover_alone".into(), view.cover.into());
-    layer.insert("fit".into(), fit.into());
-    if fit == "zoom" {
-        let percent = (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32;
+    layer.insert("cover_alone".into(), state.cover.into());
+    layer.insert("fit".into(), state.fit.into());
+    if let Some(percent) = state.zoom {
         layer.insert("zoom".into(), percent.into());
     }
-    // Fit "read" is only the same fit with the width it was picked at.
-    if let Some(read) = view.margin.read_fit {
-        layer.insert("reading_width_px".into(), (read.width_px.round() as u32).into());
+    if let Some(width) = state.read_width {
+        layer.insert("reading_width_px".into(), width.into());
     }
-    layer.insert("trim".into(), view.margin.trim.on.into());
-    if let Some(gap) = view.page_gap_px {
+    layer.insert("trim".into(), state.trim.into());
+    if let Some(gap) = state.page_gap {
         layer.insert("page_gap_px".into(), gap.into());
     }
     layer
@@ -561,8 +561,7 @@ fn snapshot(view: &DocView, auto_add: bool, remember: bool) -> Snapshot {
         page,
         at: y,
         x,
-        view: view_layer(view),
-        view_state: ViewState::of(view),
+        view: ViewState::of(view),
         remember,
         trim: TrimRecord::of(&view.margin.trim),
         bookmarks: view.margin.bookmarks.clone(),
@@ -703,10 +702,19 @@ pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
     }
 }
 
+/// A write of document `id` failed: the footer says so until the next change. A file made
+/// read-only since it opened shows as read-only, and autosave stops trying it.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_failed(app: &mut PdfCraftApp, id: pdfcraft_engine::DocId, generation: u64) {
+    let file_read_only = app
+        .session
+        .get(id)
+        .and_then(|doc| doc.path.as_ref())
+        .and_then(|path| std::fs::metadata(path).ok())
+        .is_some_and(|meta| meta.permissions().readonly());
     if let Some(view) = app.views.iter_mut().find(|view| view.id == id) {
         view.margin.autosave.failed = Some(generation);
+        view.margin.autosave.file_read_only |= file_read_only;
     }
 }
 
@@ -821,7 +829,7 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
             *view = Value::Object(Map::new());
         }
         if let Value::Object(view) = view {
-            view.extend(snap.view.clone());
+            view.extend(view_layer(&snap.view));
         }
         out.settings = Some(Value::Object(settings));
     }
@@ -911,7 +919,7 @@ pub fn sidecar_path(app: &PdfCraftApp, index: usize) -> Option<PathBuf> {
 /// file's comments. Returns what to tell the user.
 pub fn set_as_default(app: &mut PdfCraftApp, index: usize, row: DefaultRow) -> String {
     let Some(view) = app.views.get(index) else { return "No document is open.".to_owned() };
-    let layer = view_layer(view);
+    let layer = view_layer(&ViewState::of(view));
     let keys: &[&str] = match row {
         DefaultRow::PageColor => &PAGE_COLOR_KEYS,
         DefaultRow::Layout => &LAYOUT_KEYS,
@@ -957,7 +965,11 @@ mod snapshot_tests {
             assert_eq!(view.margin.sidecar.as_ref().unwrap().saved.as_ref().unwrap().bookmarks.as_ptr(), bookmark_allocation);
             assert_eq!(view.margin.snapshots_built.get(), 1, "idle frames must not rebuild JSON or clone bookmarks");
         }
+        // A fitted zoom follows the window and is not recorded, so it is no change to write.
         view.zoom = 1.5;
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.0, false), Step::Idle));
+        assert_eq!(view.margin.snapshots_built.get(), 1);
+        view.layout = PageLayout::TwoUp;
         assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.0, false), Step::WakeAt(_)));
         let pending_allocation = view.margin.sidecar.as_ref().unwrap().pending.as_ref().unwrap().0.bookmarks.as_ptr();
         assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.5, false), Step::WakeAt(_)));

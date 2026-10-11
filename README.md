@@ -69,9 +69,9 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - Back returns to the exact place before a jump (a link, the outline, a search, the scrubber), with
   a short "Back to p. N" pill after each jump.
 - Smooth screen steps with Space and Page Down that leave part of the previous screen visible.
-- Focus mode (<kbd>F</kbd>, or the <kbd>ctrl-secondary-h</kbd> keymap binding) hides the header,
-  sidebar, footer and annotate rail without changing the sidebar choice; toggle again or press
-  <kbd>Esc</kbd> to leave.
+- Focus mode (<kbd>F</kbd> or <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>H</kbd>; <kbd>Ctrl</kbd>+<kbd>H</kbd>
+  on Linux; also in the command palette) hides the header, sidebar, footer and annotate rail
+  without changing the sidebar choice; press the same key or <kbd>Esc</kbd> to leave.
 - Full screen with a hidden top bar that shows the title and a way out.
 - Find lives in one place: a field in the header and its results in the sidebar's Find tab, with
   match case and whole-word options.
@@ -99,8 +99,10 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   background worker; edits made during a save remain dirty until the next write completes.
   The footer says truthfully whether the file is saved, saving, failed, read-only or signed.
   Within an unsigned document's session, incremental saves coalesce into one revision while
-  preserving the original PDF bytes. Edits that require a full rewrite, such as applying
-  redactions, still use that safe rewrite. Quitting waits for pending writes.
+  preserving the original PDF bytes. Saves that must rewrite the whole file (a repaired file,
+  applied redactions, changed encryption) do so once and later saves append to it. Save As and
+  Save asked for during a write all happen, in order. A file made read-only after opening is
+  never replaced. Quitting waits for pending writes.
 - Your place, layout, page colour, trim and page bookmarks live in a small sidecar file next to
   the PDF (`paper.pdf.margin.json`), or in Margin's data folder when that folder is not writable.
   Sidecars are never written just because you opened a file.
@@ -244,9 +246,10 @@ saved for that document only, unless you press **Set as default** there.
 
 `reader.remember_per_document: false` opens with your global view settings and does not update
 the document's saved reading position or view choices; bookmarks and annotations still persist.
-The footer's `time_left` detail shows the current section and, once reading statistics have a
-pace, an estimate of the time remaining. Rail items replace the default list in the specified
-order; `|` adds a divider, an empty list hides the buttons, and unknown command ids are skipped.
+The footer's `time_left` detail estimates the time left in the document once reading statistics
+have a pace (the header already names the section). Rail items replace the default list in the
+specified order; `|` adds a divider, an empty list hides the buttons, and unknown command ids are
+skipped.
 
 Only implemented settings appear in the generated defaults and schema. Legacy `perf.*`,
 `reader.start`, `reader.find.regex`, `ui.rail.tool_options`, `view.gamma`, `view.saturation`,

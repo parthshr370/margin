@@ -444,9 +444,6 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return };
         #[cfg(not(target_arch = "wasm32"))]
         self.wait_margin_saves();
-        if self.session.get(id).is_none() {
-            return;
-        }
         match self.session.revert(id) {
             Ok(()) => {
                 if let Some(d) = self.session.get(id)

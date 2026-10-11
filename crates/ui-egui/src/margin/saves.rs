@@ -1,16 +1,29 @@
 //! Margin PDF writes: one worker owns serialization and atomic replacement. The UI holds
 //! immutable graph snapshots, never a whole-file copy or a reparsed saved document.
+//!
+//! Each document has at most one write in flight. Writes asked for meanwhile (Save, Save As,
+//! close-after-save) wait in order and all happen; none replaces another. Callbacks run only
+//! once the document's last requested write holds every edit made before it.
 
-use std::collections::HashMap;
-use std::sync::{Arc, mpsc};
+use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc;
 use std::thread::JoinHandle;
 
-use pdfcraft_engine::{DocId, SaveSnapshot};
+use pdfcraft_engine::{DocId, SaveAck, SaveSnapshot, SavedFile};
 
 use crate::{Flavor, PdfCraftApp};
 
 type AfterSave = Box<dyn FnOnce(&mut PdfCraftApp) + Send>;
 type SaveWriter = Box<dyn Fn(&str, &[u8]) -> Result<(), String> + Send>;
+
+/// Replace `destination` atomically. A file made read-only after Margin opened it is refused:
+/// on Unix a rename would still replace it and silently drop the flag.
+fn write_pdf(destination: &str, bytes: &[u8]) -> Result<(), String> {
+    if std::fs::metadata(destination).is_ok_and(|meta| meta.permissions().readonly()) {
+        return Err(format!("{destination} is read-only; Save As writes a copy"));
+    }
+    crate::editing::write_atomically(destination, bytes).map_err(|error| error.to_string())
+}
 
 struct Job {
     snapshot: SaveSnapshot,
@@ -19,12 +32,21 @@ struct Job {
 
 struct Completion {
     job: Job,
-    result: Result<Arc<Vec<u8>>, String>,
+    result: Result<SavedFile, String>,
+}
+
+/// A write asked for while another write of the same document is in flight.
+struct Request {
+    destination: String,
+    after: Vec<AfterSave>,
 }
 
 struct Pending {
-    after: Vec<AfterSave>,
+    /// Where the in-flight job writes.
     destination: String,
+    /// Runs once the in-flight write succeeds and nothing newer is waiting.
+    after: Vec<AfterSave>,
+    next: VecDeque<Request>,
 }
 
 #[derive(Default)]
@@ -49,7 +71,7 @@ impl SaveQueue {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let bytes = job.snapshot.bytes().map_err(|error| error.to_string())?;
                         writer(&job.destination, &bytes)?;
-                        Ok(bytes)
+                        Ok(job.snapshot.written(bytes))
                     }))
                     .unwrap_or_else(|_| Err("the save worker failed unexpectedly; the document remains unsaved".into()));
                     if finished.send(Completion { job, result }).is_err() {
@@ -91,10 +113,17 @@ impl Drop for SaveQueue {
 
 impl PdfCraftApp {
     pub(crate) fn queue_margin_save(&mut self, id: DocId, destination: String, after: Option<AfterSave>) -> bool {
+        self.request_margin_save(id, Request { destination, after: after.into_iter().collect() })
+    }
+
+    fn request_margin_save(&mut self, id: DocId, request: Request) -> bool {
+        let Request { destination, mut after } = request;
         if let Some(pending) = self.margin_saves.pending.get_mut(&id) {
-            pending.destination = destination;
-            if let Some(after) = after {
-                pending.after.push(after);
+            match pending.next.back_mut() {
+                Some(last) if last.destination == destination => last.after.append(&mut after),
+                // Same file as the write in flight: its completion writes again if edits arrived meanwhile.
+                None if pending.destination == destination => pending.after.append(&mut after),
+                _ => pending.next.push_back(Request { destination, after }),
             }
             return true;
         }
@@ -105,15 +134,13 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        if self.margin_saves.sender.is_none() {
-            let writer: SaveWriter =
-                Box::new(|destination, bytes| crate::editing::write_atomically(destination, bytes).map_err(|error| error.to_string()));
-            if let Err(error) = self.margin_saves.start(self.ctx.clone(), writer) {
-                self.margin_save_failed(id, error);
-                return false;
-            }
+        if self.margin_saves.sender.is_none()
+            && let Err(error) = self.margin_saves.start(self.ctx.clone(), Box::new(write_pdf))
+        {
+            self.margin_save_failed(id, error);
+            return false;
         }
-        let pending = Pending { after: after.into_iter().collect(), destination: destination.clone() };
+        let pending = Pending { destination: destination.clone(), after, next: VecDeque::new() };
         let sent = self.margin_saves.sender.as_ref().is_some_and(|sender| sender.send(Job { snapshot, destination }).is_ok());
         if !sent {
             self.margin_save_failed(id, "the save worker is unavailable".into());
@@ -134,42 +161,65 @@ impl PdfCraftApp {
         let Completion { job, result } = completion;
         let id = job.snapshot.id;
         let generation = job.snapshot.generation;
-        let pending = self.margin_saves.pending.remove(&id);
-        match result {
+        let (mut after, mut next) = match self.margin_saves.pending.remove(&id) {
+            Some(Pending { after, next, .. }) => (after, next),
+            None => (Vec::new(), VecDeque::new()),
+        };
+        let holds_every_edit = match result {
             Err(error) => {
                 super::reading::save_failed(self, id, generation);
                 self.notify(format!("Couldn't save the PDF: {error}"));
+                // A failed write never runs its callbacks (close-after-save keeps the tab open).
+                after.clear();
+                false
             }
-            Ok(bytes) => match self.session.acknowledge_save(job.snapshot, bytes, Some(job.destination.clone())) {
-                Err(error) => self.margin_save_failed(id, error.to_string()),
-                Ok(current) => {
+            Ok(saved) => match self.session.acknowledge_save(job.snapshot, saved, Some(job.destination.clone())) {
+                Err(error) => {
+                    self.margin_save_failed(id, error.to_string());
+                    after.clear();
+                    false
+                }
+                Ok(ack) => {
                     super::reading::saved_pdf(self, id);
-                    let needs_destination = pending.as_ref().is_some_and(|pending| pending.destination != job.destination);
-                    if current && !needs_destination {
-                        self.forget_recovery(id);
-                        if let Some(pending) = pending {
-                            for after in pending.after {
-                                after(self);
-                            }
-                        }
-                    } else if let Some(pending) = pending.filter(|pending| !pending.after.is_empty() || needs_destination) {
-                        // Save As and close-after-save must include edits made during the write.
-                        self.queue_margin_save(
-                            id,
-                            pending.destination,
-                            Some(Box::new(move |app| {
-                                for after in pending.after {
-                                    after(app);
-                                }
-                            })),
-                        );
+                    if ack == SaveAck::Reopened
+                        && let Some(doc) = self.session.get(id)
+                        && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
+                    {
+                        view.document_changed(&doc.info);
                     }
+                    ack != SaveAck::Superseded
                 }
             },
+        };
+        match next.front_mut() {
+            // Later requests carry this write's callbacks: they run once the last write lands.
+            Some(first) => {
+                after.append(&mut first.after);
+                first.after = after;
+            }
+            None if holds_every_edit => {
+                self.forget_recovery(id);
+                for callback in after {
+                    callback(self);
+                }
+            }
+            // Save and close-after-save include edits made during the write.
+            None if !after.is_empty() => next.push_back(Request { destination: job.destination, after }),
+            None => {}
+        }
+        // Every requested destination is written; a refused request leaves the rest to try.
+        while let Some(request) = next.pop_front() {
+            if self.request_margin_save(id, request) {
+                if let Some(pending) = self.margin_saves.pending.get_mut(&id) {
+                    pending.next = next;
+                }
+                break;
+            }
         }
     }
 
-    pub(crate) fn margin_save_pending(&self, id: DocId) -> bool {
+    /// Whether a write of document `id` is in flight or waiting behind one (Margin only).
+    pub fn margin_save_pending(&self, id: DocId) -> bool {
         self.margin_saves.contains(id)
     }
 
@@ -203,6 +253,7 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
@@ -230,6 +281,140 @@ mod tests {
 
     fn edit(app: &mut PdfCraftApp, title: &str) {
         assert!(app.apply_edit(Edit::SetInfo { key: "Title".into(), value: title.into() }));
+    }
+
+    const WAIT: Duration = Duration::from_secs(5);
+
+    fn text(path: &std::path::Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    fn title_on_disk(path: &std::path::Path) -> Option<String> {
+        pdfcraft_render::inspect(Arc::new(std::fs::read(path).unwrap()), None).unwrap().title
+    }
+
+    fn set_read_only(path: &std::path::Path, read_only: bool) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(read_only);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// Each write reports its destination, then waits for one release: a write is reliably in
+    /// flight while the test edits and asks for more.
+    fn hold_writes(app: &mut PdfCraftApp) -> (mpsc::Receiver<String>, mpsc::Sender<()>) {
+        let (started, started_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        app.margin_saves
+            .start(
+                None,
+                Box::new(move |destination, bytes| {
+                    started.send(destination.to_owned()).map_err(|error| error.to_string())?;
+                    release_rx.recv().map_err(|error| error.to_string())?;
+                    write_pdf(destination, bytes)
+                }),
+            )
+            .unwrap();
+        (started_rx, release)
+    }
+
+    #[test]
+    fn every_destination_asked_for_during_a_write_is_written_in_order() {
+        let (mut app, id, root) = app("every-destination", blank());
+        let (started, release) = hold_writes(&mut app);
+        let original = root.join("document.pdf");
+        let copies = [root.join("first.pdf"), root.join("second.pdf")];
+        edit(&mut app, "autosaved");
+        assert!(app.queue_margin_save(id, text(&original), None));
+        assert_eq!(started.recv_timeout(WAIT).unwrap(), text(&original));
+        edit(&mut app, "copied");
+        let callbacks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for copy in &copies {
+            let counter = callbacks.clone();
+            let count_callback: AfterSave = Box::new(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            });
+            assert!(app.queue_margin_save(id, text(copy), Some(count_callback)));
+        }
+        for _ in 0..3 {
+            release.send(()).unwrap();
+        }
+        app.wait_margin_saves();
+        let order: Vec<String> = started.try_iter().collect();
+        assert_eq!(order, [text(&copies[0]), text(&copies[1])], "each copy is written once, after the first write");
+        assert_eq!(title_on_disk(&original).as_deref(), Some("autosaved"));
+        for copy in &copies {
+            assert_eq!(title_on_disk(copy).as_deref(), Some("copied"), "{copy:?} holds the edits made before it was asked for");
+        }
+        assert_eq!(callbacks.load(Ordering::SeqCst), 2, "callbacks run once the last write lands");
+        let doc = app.session.get(id).unwrap();
+        assert!(!doc.dirty);
+        assert_eq!(doc.path.as_deref(), Some(text(&copies[1]).as_str()));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn save_as_asked_for_during_a_failing_write_still_writes_the_copy() {
+        let (mut app, id, root) = app("failed-then-copy", blank());
+        let (started, release) = hold_writes(&mut app);
+        let original = root.join("document.pdf");
+        let before = std::fs::read(&original).unwrap();
+        let copy = root.join("copy.pdf");
+        edit(&mut app, "kept");
+        assert!(app.queue_margin_save(id, text(&original), None));
+        started.recv_timeout(WAIT).unwrap();
+        set_read_only(&original, true);
+        assert!(app.queue_margin_save(id, text(&copy), None));
+        release.send(()).unwrap();
+        release.send(()).unwrap();
+        app.wait_margin_saves();
+        assert_eq!(std::fs::read(&original).unwrap(), before, "the read-only original is untouched");
+        assert!(std::fs::metadata(&original).unwrap().permissions().readonly());
+        assert_eq!(title_on_disk(&copy).as_deref(), Some("kept"));
+        assert!(!app.session.get(id).unwrap().dirty);
+        assert_eq!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::Saved { autosave: true });
+        set_read_only(&original, false);
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_made_read_only_after_opening_is_never_replaced() {
+        let (mut app, id, root) = app("made-read-only", blank());
+        let original = root.join("document.pdf");
+        let before = std::fs::read(&original).unwrap();
+        set_read_only(&original, true);
+        edit(&mut app, "unsaved");
+        assert!(app.queue_margin_save(id, text(&original), None));
+        app.wait_margin_saves();
+        assert_eq!(std::fs::read(&original).unwrap(), before);
+        assert!(std::fs::metadata(&original).unwrap().permissions().readonly(), "a rename never strips the flag");
+        assert!(app.session.get(id).unwrap().dirty);
+        assert_eq!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::ReadOnly { dirty: true });
+        set_read_only(&original, false);
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quitting_during_a_write_finishes_it_before_the_app_goes() {
+        const SLOW_WRITE: Duration = Duration::from_millis(300);
+        let (mut app, id, root) = app("quit-during", blank());
+        let original = root.join("document.pdf");
+        app.margin_saves
+            .start(
+                None,
+                Box::new(|destination, bytes| {
+                    std::thread::sleep(SLOW_WRITE);
+                    write_pdf(destination, bytes)
+                }),
+            )
+            .unwrap();
+        edit(&mut app, "written at quit");
+        assert!(app.queue_margin_save(id, text(&original), None));
+        drop(app);
+        assert_eq!(title_on_disk(&original).as_deref(), Some("written at quit"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
