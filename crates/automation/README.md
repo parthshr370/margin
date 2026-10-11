@@ -42,3 +42,5 @@ Implemented: `initialize` (protocol 2025-06-18, 2025-03-26, 2024-11-05), `ping`,
 2. Add a `ToolDef` in `src/tools.rs`: a precise description, the schema, `ro()`/`destructive()`, and `cmd()` if a registry command exists.
 3. Handle it in `Automation::call`, validating pages and positions with the existing helpers.
 4. Add an end-to-end test in `tests/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
+
+Markdown export is exposed as `doc_export_markdown`: it exports selected 1-based pages from the current document state, writes the note and adjacent image assets atomically under the same root rules, and uses deterministic `image-0001.png` names. Standard Markdown references images as `![image](image-0001.png)`; `obsidian: true` uses `![[image-0001.png]]`. The engine API is `export::markdown(&ExportSource, &[usize], title, obsidian) -> Result<pdfcraft_export::Markdown, String>`, and the structured writer is `pdfcraft_export::markdown(&[Page], title, obsidian)`.

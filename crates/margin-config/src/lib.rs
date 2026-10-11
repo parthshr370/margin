@@ -33,7 +33,7 @@ mod profile;
 mod registry;
 pub mod resolve;
 pub mod schema;
-mod settings;
+pub mod settings;
 mod sidecar;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stats;
@@ -44,7 +44,7 @@ mod validate;
 mod vectors;
 
 pub use context::{ContextExpr, ContextNode, depth_of, holds, parse_stack};
-pub use edit::{set_user_values, with_values};
+pub use edit::{set_user_values, set_user_values_if_missing, with_values};
 pub use error::{Error, Result};
 pub use keymap::{
     BindingTarget, CompileOptions, Compiled, CompiledBinding, CompiledKeymap, KEYMAP_FILE, KeymapBlock, KeymapFile, KeymapSource, MARGIN_KEYMAP,
@@ -56,8 +56,8 @@ pub use problem::{Problem, Severity};
 pub use profile::{Profile, ProfileMatch};
 pub use registry::{CommandEntry, CommandId, CommandInfo, Group, MARGIN_NAMESPACES, Registry, Source};
 pub use settings::{
-    FindOptions, Fit, KeymapBase, Keys, Layout, Library, LibrarySort, LibraryView, PageColor, Perf, Rail, RailSide, Reader, SETTINGS_SCHEMA_URL,
-    SETTINGS_VERSION, Settings, Sidebar, SidebarTab, Start, Stats, TileFormat, ToolOptions, Ui, View,
+    ExportTarget, FindOptions, Fit, KeymapBase, Keys, Layout, Library, LibrarySort, LibraryView, NoteColor, NoteUpdateMode, Notes, PageColor, Perf,
+    Rail, RailSide, Reader, SETTINGS_SCHEMA_URL, SETTINGS_VERSION, Settings, Sidebar, SidebarTab, Start, Stats, TileFormat, ToolOptions, Ui, View,
 };
 pub use sidecar::{
     Bookmark, Highlight, HighlightSource, HighlightStyle, Locator, PageNote, PdfAnnot, Progress, Sidecar, SidecarDoc, SidecarFormat, SidecarObsidian,

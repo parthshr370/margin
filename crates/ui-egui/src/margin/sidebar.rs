@@ -348,6 +348,9 @@ fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize
     let count = doc.info.annotations.iter().filter(|a| super::obsidian::is_markup(a)).count();
     pane_title(ui, t, "Highlights", Some(count));
     if count == 0 {
+        if let Some(view) = app.views.get_mut(index) {
+            super::obsidian::panel_block(ui, t, &mut view.comments.notes);
+        }
         empty(ui, t, &["No highlights yet.", "Pick Highlight in the rail, then select text."]);
         return;
     }

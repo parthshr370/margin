@@ -98,6 +98,19 @@ impl Exporter {
     }
 }
 
+/// Structured Markdown for selected pages, with image assets returned separately.
+pub fn markdown(src: &ExportSource, pages: &[usize], title: &str, obsidian: bool) -> Result<pdfcraft_export::Markdown, String> {
+    let mut session = crate::Session::new();
+    let id = session.open("Markdown export", None, src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
+    let document = session.get(id).ok_or("the export document could not be read")?;
+    let available = document.export_pages();
+    let mut selected = Vec::with_capacity(pages.len());
+    for &page in pages {
+        selected.push(available.get(page).cloned().ok_or_else(|| format!("page {} does not exist", page + 1))?);
+    }
+    Ok(pdfcraft_export::markdown(&selected, title, obsidian))
+}
+
 /// Premultiplied RGBA → an image file of `format`.
 pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: ImageFormat) -> Result<Vec<u8>, String> {
     match format {

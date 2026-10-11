@@ -298,6 +298,7 @@ mod tests {
         let text = default_settings_jsonc();
         let parsed = crate::jsonc::parse(&text).unwrap().value.unwrap();
         assert_eq!(parsed, serde_json::to_value(Settings::default()).unwrap());
+        assert_eq!(parsed["notes"]["front_matter_template"], "---\nsource: \"{{source}}\"\n---\n\n");
         assert!(text.contains("\"zoom\": 100, // percent, used when fit is \"zoom\"; 8..6400, the page view's own zoom limits"), "{text}");
         assert!(text.contains("\"view\": { // [doc] how a document is shown"), "{text}");
     }
@@ -408,6 +409,16 @@ mod tests {
             (json!({ "ui": { "rail": { "side": "up" } } }), false),
             (json!({ "reader": { "find": { "case": true } } }), true),
             (json!({ "perf": { "tile_px": 100000 } }), false),
+            (json!({ "notes": { "vault": "" } }), true),
+            (
+                json!({ "notes": { "export_target": "readwise_csv", "update_mode": "append", "colors": [{ "name": "Blue", "rgb": [0, 128, 255] }] } }),
+                true,
+            ),
+            (json!({ "notes": { "export_target": "html" } }), false),
+            (json!({ "notes": { "colors": [] } }), false),
+            (json!({ "notes": { "colors": [{ "name": "", "rgb": [0, 0, 0] }] } }), false),
+            (json!({ "notes": { "colors": [{ "name": "Blue", "rgb": [0, 128, 256] }] } }), false),
+            (json!({ "notes": { "vault": "relative" } }), false),
         ];
         for (fixture, valid) in fixtures {
             assert_eq!(validator.is_valid(&fixture), valid, "schema on {fixture}");
@@ -423,6 +434,13 @@ mod tests {
     #[test]
     fn settings_schema_requires_no_key() {
         assert!(!settings_schema().to_string().contains("\"required\""));
+    }
+
+    #[test]
+    fn empty_vault_disables_instead_of_becoming_an_empty_path() {
+        let loaded = Settings::from_user_text(r#"{ "notes": { "vault": "" } }"#, "settings.jsonc");
+        assert_eq!(loaded.problems, []);
+        assert_eq!(loaded.settings.notes.vault, None);
     }
 
     #[test]

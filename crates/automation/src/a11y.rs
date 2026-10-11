@@ -269,6 +269,32 @@ impl Automation {
         write_atomic(&path, &bytes)?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "format": format.extension() }))
     }
+    pub(crate) fn doc_export_markdown(&self, a: &Args) -> Result<Value> {
+        let path = self.resolve(a.str("path")?, true)?;
+        if path.is_dir() {
+            return Err(failed(format!("{}: is a folder, not a file", path.display())));
+        }
+        let doc = self.doc(a)?;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..doc.info.pages.len()).collect(),
+        };
+        let markdown = pdfcraft_engine::export::markdown(
+            &doc.export_source(),
+            &pages,
+            &doc.info.title.clone().unwrap_or_else(|| doc.name.clone()),
+            a.opt_bool("obsidian")?.unwrap_or(false),
+        )
+        .map_err(failed)?;
+        write_atomic(&path, markdown.text.as_bytes())?;
+        let mut image_paths = Vec::with_capacity(markdown.images.len());
+        for (name, bytes) in markdown.images {
+            let image_path = child(path.parent().unwrap_or_else(|| std::path::Path::new(".")), &name);
+            write_atomic(&image_path, &bytes)?;
+            image_paths.push(image_path.to_string_lossy().into_owned());
+        }
+        Ok(json!({ "path": path.to_string_lossy(), "bytes": markdown.text.len(), "images": image_paths }))
+    }
 
     fn pdfa_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");

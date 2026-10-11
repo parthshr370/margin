@@ -86,8 +86,29 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   Change a colour, copy, open or delete from the card.
 - Obsidian: copy a highlight as a PDF++ style callout
   (`> [!PDF|yellow] [[paper.pdf#page=4|paper, p.4]]` followed by the quote), open the page in
-  Obsidian, copy all highlights as Markdown, or write them to a reading note in your vault. Writing
-  only appends and never duplicates an entry, and Margin never writes outside the vault.
+  Obsidian, or write them to a reading note in your vault. Writing updates and recolours Margin's
+  hash-marked blocks in place and removes deleted highlights. A block edited in Obsidian, or an
+  older entry without an ownership hash, is kept and reported rather than overwritten. Text
+  outside Margin's block markers stays untouched; writes are atomic and confined to the vault.
+- The Highlights tab's format picker applies to **Copy all** and **Export highlights**:
+  Obsidian/PDF++, plain Markdown, Logseq outline blocks, Readwise CSV, or JSON. CSV follows
+  [Readwise's bulk-import format](https://docs.readwise.io/readwise/docs/importing-highlights).
+  Exports extract missing page text in a background job with progress.
+- **Export paper as Markdown** writes headings, paragraphs, lists and detected tables, with
+  images as adjacent files. **Export paper to vault** writes a `-paper.md` beside the reading
+  note and uses Obsidian image embeds. Existing paper exports and images are never overwritten.
+- Right-click the area-snapshot rail button and choose **Save snapshot to note**, then drag a
+  region: Margin renders it at 300 DPI, saves a PNG under `notes.snapshot_folder` in the vault,
+  and adds an image embed and PDF page link to the reading note.
+- Configure the vault, reading-note path, front matter, header, highlight template, palette and
+  export target in the live-reloaded `notes` block of `settings.jsonc`. The Settings modal can
+  pick the vault folder. Existing app-state vault settings migrate without replacing explicit
+  settings; CLI `notes.vault`, `notes.note_template` and `notes.colors` write settings.jsonc.
+  Templates use literal `{{variable}}` substitution, never code. Available variables include
+  `title`, `title-slug`, `authors`, `year`, `doi`, `arxiv`, `citekey`, `tags`, `date`, `progress`,
+  `page`, `color`, `color-name`, `text`, `note`, and `link`; unavailable metadata is empty.
+  Path values are slugged, front-matter values are quote-escaped, and inserted values are not
+  reinterpreted as templates. `notes.update_mode: "append"` opts out of updates and deletions.
 
 **Saving**
 

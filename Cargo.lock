@@ -4201,6 +4201,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
  "skrifa 0.44.0",
  "sys-locale",
  "toml",

@@ -137,6 +137,16 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         let (label, shortcut) = item.tooltip(app);
                         let on = item.active(app.quick_tool);
                         let r = ui.add_enabled_ui(enabled, |ui| look::rail_button(ui, item.icon(), BUTTON, on, &label, shortcut.as_deref())).inner;
+                        if *item == RailItem::Command("edit.snapshot") {
+                            r.context_menu(|ui| {
+                                if ui.add_enabled(app.notes.vault.is_some(), egui::Button::new("Save snapshot to note")).clicked() {
+                                    app.notes.snapshot_to_note = true;
+                                    app.quick_tool = QuickTool::Snapshot;
+                                    app.notify("Drag a region to save a 300 DPI snapshot to the reading note");
+                                    ui.close();
+                                }
+                            });
+                        }
                         if r.clicked() {
                             clicked = Some(*item);
                         }

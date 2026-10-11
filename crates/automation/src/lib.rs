@@ -558,6 +558,7 @@ impl Automation {
             "action_list" => self.action_list()?,
             "pdfa_verify" => self.pdfa_verify(&a)?,
             "doc_export_office" => self.doc_export_office(&a)?,
+            "doc_export_markdown" => self.doc_export_markdown(&a)?,
             "pdfa_convert" => self.pdfa_convert(&a)?,
             "action_run" => self.action_run(&a)?,
             "doc_compare_report" => self.doc_compare_report(&a)?,

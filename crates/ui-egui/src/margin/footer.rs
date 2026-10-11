@@ -39,7 +39,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let marks = super::scrubber::Marks {
         pages: labels.len(),
         sections: doc.info.outline.iter().filter_map(|o| o.page).collect(),
-        dots: super::pages::highlight_dots(&doc.info),
+        dots: super::pages::highlight_dots(&doc.info, app.views.get(index).map_or(&[], |view| view.comments.notes.markup_indices.as_slice())),
     };
     let status = crate::margin::reading::save_status(app, index);
     let save_key = look::shortcut(app, "file.save");

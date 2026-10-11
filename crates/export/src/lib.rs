@@ -308,6 +308,98 @@ fn items(pages: &[Page]) -> Vec<Item<'_>> {
     out
 }
 
+/// Markdown text and the image files it references.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Markdown {
+    pub text: String,
+    pub images: Vec<(String, Vec<u8>)>,
+}
+
+fn markdown_text(text: &str, table_cell: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars().filter(|ch| allowed(*ch)) {
+        match ch {
+            '|' if table_cell => out.push_str("\\|"),
+            '\\' | '`' | '*' | '_' | '{' | '}' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '.' | '!'
+                if table_cell || matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '!' | '#') =>
+            {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' | '\r' if table_cell => out.push(' '),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Markdown text with extracted images returned separately under deterministic safe names.
+pub fn markdown(pages: &[Page], title: &str, obsidian: bool) -> Markdown {
+    let mut text = format!("# {}\n\n", markdown_text(title, false));
+    let mut images = Vec::new();
+    for part in items(pages) {
+        match part {
+            Item::Para(block, heading) => {
+                let content = markdown_text(&block.text, false);
+                if heading != 0 {
+                    text.push_str(&format!("{} {}\n\n", "#".repeat(usize::from(heading).saturating_add(1)), content));
+                } else if let Some((bullet, body)) = block
+                    .text
+                    .trim()
+                    .strip_prefix("• ")
+                    .map(|body| ("- ", body))
+                    .or_else(|| block.text.trim().strip_prefix("- ").map(|body| ("- ", body)))
+                {
+                    text.push_str(&format!("{bullet}{}\n", markdown_text(body, false)));
+                } else if let Some((number, body)) =
+                    block.text.trim().split_once(". ").filter(|(prefix, _)| !prefix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_digit()))
+                {
+                    text.push_str(&format!("{}. {}\n", number, markdown_text(body, false)));
+                } else {
+                    text.push_str(&content);
+                    text.push_str("\n\n");
+                }
+            }
+            Item::Table(table) => {
+                for (row_index, row) in table.rows.iter().enumerate() {
+                    text.push_str("| ");
+                    for (column, cell) in row.iter().enumerate() {
+                        if column != 0 {
+                            text.push_str(" | ");
+                        }
+                        text.push_str(&markdown_text(&cell.text, true));
+                    }
+                    text.push_str(" |\n");
+                    if row_index == 0 {
+                        text.push_str("| ");
+                        for (column, _) in row.iter().enumerate() {
+                            if column != 0 {
+                                text.push_str(" | ");
+                            }
+                            text.push_str("---");
+                        }
+                        text.push_str(" |\n");
+                    }
+                }
+                text.push('\n');
+            }
+            Item::Img(image) => {
+                let name = format!("image-{:04}.{}", images.len().saturating_add(1), image.ext);
+                if obsidian {
+                    text.push_str(&format!("![[{name}]]\n\n"));
+                } else {
+                    text.push_str(&format!("![image]({name})\n\n"));
+                }
+                images.push((name, image.bytes.clone()));
+            }
+            Item::PageBreak => text.push_str("\n---\n\n"),
+        }
+    }
+    Markdown { text, images }
+}
+
 /// Whether a character may appear in the output. XML 1.0 forbids the C0 controls other than tab,
 /// line feed and carriage return, and U+FFFE/U+FFFF. Text extracted from PDFs often holds them
 /// (fonts without a usable `/ToUnicode`), and Word refuses a whole document over one (#72).
@@ -638,6 +730,32 @@ pub fn rtf(pages: &[Page]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_writes_headings_tables_lists_and_separate_images() {
+        let mut p = table_page();
+        p.blocks.push(Block { text: "A heading".into(), rect: [72.0, 700.0, 300.0, 730.0], size: 22.0, bold: true, italic: false });
+        p.blocks.push(Block { text: "• item".into(), rect: [72.0, 480.0, 300.0, 491.0], size: 11.0, bold: false, italic: false });
+        p.images.push(Image { ext: "png", bytes: vec![1, 2, 3], rect: [72.0, 400.0, 100.0, 430.0] });
+        let standard = markdown(std::slice::from_ref(&p), "Title", false);
+        assert!(standard.text.contains("## A heading"), "{}", standard.text);
+        assert!(standard.text.contains("| Meter | Unit | Reading |"), "{}", standard.text);
+        assert!(standard.text.contains("- item"), "{}", standard.text);
+        assert!(standard.text.contains("![image](image-0001.png)"), "{}", standard.text);
+        assert_eq!(standard.images, [("image-0001.png".into(), vec![1, 2, 3])]);
+        assert!(markdown(&[p], "Title", true).text.contains("![[image-0001.png]]"));
+    }
+
+    #[test]
+    fn markdown_escapes_hostile_text_and_table_delimiters() {
+        let page = Page {
+            blocks: vec![Block { text: "# [bad](x) ! <script> &".into(), rect: [0.0, 10.0, 300.0, 21.0], size: 11.0, bold: false, italic: false }],
+            ..Page::default()
+        };
+        let output = markdown(&[page], "# title", false);
+        assert!(output.text.contains("\\# \\[bad\\]\\(x\\) \\! &lt;script&gt; &"), "{}", output.text);
+        assert!(output.images.is_empty());
+    }
 
     fn page() -> Page {
         let b = |t: &str, y: f64, size: f64, bold: bool| Block { text: t.into(), rect: [72.0, y, 500.0, y + size], size, bold, italic: false };

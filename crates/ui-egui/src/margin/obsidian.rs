@@ -10,13 +10,20 @@
 //! which PdfCraft's glyph list can't reproduce, so a guessed range would mark the wrong words;
 //! the highlight itself is a real annotation in the PDF, so Obsidian shows it on that page.
 //!
-//! The reading note is only ever appended to: entries go under `## Highlights`, each behind a
-//! `<!-- margin:<key> -->` marker (the annotation's `/NM`), so writing twice adds nothing. Notes
-//! are written atomically (temporary file, then rename) and never outside the vault.
+//! Margin owns only explicitly bounded, hash-verified highlight blocks. Edited blocks and
+//! legacy unbounded entries are preserved and reported. Writes stay atomic and inside the vault.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+#[path = "notes_format.rs"]
+mod format;
+use format::TemplateContext;
+#[path = "notes_worker.rs"]
+mod worker;
+use margin_config::settings::{ExportTarget, NoteUpdateMode};
+use worker::WorkerState;
 
 use pdfcraft_engine::{DocId, Document};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
@@ -73,6 +80,11 @@ pub struct Notes {
     pub note_template: String,
     /// `notes.colors`: the highlight palette, the first being the default highlight colour.
     pub colors: Vec<NoteColor>,
+    pub config: margin_config::settings::Notes,
+    cached: HashMap<DocId, CachedDocument>,
+    jobs: HashMap<DocId, Arc<Mutex<WorkerState>>>,
+    /// The snapshot rail's vault destination applies to the next completed area selection.
+    pub snapshot_to_note: bool,
     /// `notes.autoadd`: paths of the open documents whose new highlights go to their note as
     /// made. Each document's sidecar remembers its flag (`margin::reading`).
     pub autoadd: BTreeSet<String>,
@@ -91,6 +103,10 @@ impl Default for Notes {
             vault: None,
             note_template: DEFAULT_NOTE_TEMPLATE.to_string(),
             colors: default_colors(),
+            config: margin_config::settings::Notes::default(),
+            cached: HashMap::new(),
+            jobs: HashMap::new(),
+            snapshot_to_note: false,
             autoadd: BTreeSet::new(),
             launch_obsidian: true,
             palette_published: false,
@@ -101,26 +117,25 @@ impl Default for Notes {
 
 #[derive(Clone, Debug)]
 struct AutoaddWatch {
-    /// The document's edit generation when `keys` was taken.
     generation: u64,
-    /// Entry keys of the text-markup comments seen so far.
-    keys: BTreeSet<String>,
-    /// New highlights not yet written (written once their note is no longer being typed).
-    pending: Vec<String>,
+    dirty: bool,
 }
 
 impl Notes {
-    /// The settings as stored in the app's persisted JSON (key `notes`). Autoadd is per document,
-    /// in its sidecar.
-    pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "vault": self.vault.as_ref().map(|v| v.to_string_lossy().into_owned()),
-            "note_template": self.note_template,
-            "colors": self.colors.iter().map(|c| [c.name.clone(), hex(c.rgb)]).collect::<Vec<_>>(),
-        })
+    pub fn apply_config(&mut self, config: &margin_config::settings::Notes) {
+        let same_palette = self.colors.len() == config.colors.len()
+            && self.colors.iter().zip(&config.colors).all(|(runtime, stored)| runtime.name == stored.name && runtime.rgb == stored.rgb);
+        if &self.config == config && self.vault == config.vault && self.note_template == config.note_template && same_palette {
+            return;
+        }
+        self.vault = config.vault.clone();
+        self.note_template = config.note_template.clone();
+        self.colors = config.colors.iter().map(|color| NoteColor { name: color.name.clone(), rgb: color.rgb }).collect();
+        self.config = config.clone();
+        self.palette_published = false;
+        self.cached.clear();
     }
-
-    /// Restore from [`Self::to_json`]. Settings are untrusted: anything invalid keeps its default.
+    /// Restore legacy app-state notes until they can be migrated into settings.jsonc.
     pub fn restore(&mut self, v: &serde_json::Value) {
         if let Some(vault) = v["vault"].as_str().map(PathBuf::from).filter(|p| p.is_absolute()) {
             self.vault = Some(vault);
@@ -336,58 +351,14 @@ fn marker(key: &str) -> String {
     format!("{MARKER_OPEN}{safe}{MARKER_CLOSE}")
 }
 
-/// Append `entries` (key, callout) under [`HIGHLIGHTS_HEADING`] of `existing` (`None`: a new note,
-/// started with `header`). Entries whose marker is already there are skipped. Returns the new
-/// text and how many entries were added; nothing else in the note changes.
-pub fn append_entries(existing: Option<&str>, header: &str, entries: &[(String, String)]) -> (String, usize) {
-    let mut text = existing.map(str::to_string).unwrap_or_else(|| format!("{header}{HIGHLIGHTS_HEADING}\n"));
-    let mut seen = BTreeSet::new();
-    let fresh: Vec<String> = entries
-        .iter()
-        .filter(|(key, _)| {
-            let m = marker(key);
-            !text.contains(&m) && seen.insert(m)
-        })
-        .map(|(key, callout)| format!("{}\n{callout}", marker(key)))
-        .collect();
-    if fresh.is_empty() {
-        return (text, 0);
-    }
-    let heading_end = find_heading(&text).unwrap_or_else(|| {
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(HIGHLIGHTS_HEADING);
-        text.push('\n');
-        text.len()
-    });
-    // The section runs to the next heading of its level or higher.
-    let section_end = next_section(&text, heading_end).unwrap_or(text.len());
-    let (before, after) = text.split_at(section_end);
-    let mut out = before.to_string();
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    if !out.ends_with("\n\n") {
-        out.push('\n');
-    }
-    out.push_str(&fresh.join("\n"));
-    if !after.is_empty() {
-        out.push('\n');
-        out.push_str(after);
-    }
-    (out, fresh.len())
-}
-
 /// Byte offset just past the `## Highlights` line.
 fn find_heading(text: &str) -> Option<usize> {
     let mut offset = 0;
+    let mut inside_block = false;
     for line in text.split_inclusive('\n') {
         offset += line.len();
-        if line.trim_end() == HIGHLIGHTS_HEADING {
+        update_block_boundary(line, &mut inside_block);
+        if !inside_block && line.trim_end() == HIGHLIGHTS_HEADING {
             return Some(offset);
         }
     }
@@ -397,13 +368,23 @@ fn find_heading(text: &str) -> Option<usize> {
 /// Byte offset of the first `#` or `##` heading at or after `from`.
 fn next_section(text: &str, from: usize) -> Option<usize> {
     let mut offset = from;
+    let mut inside_block = false;
     for line in text.get(from..)?.split_inclusive('\n') {
-        if line.starts_with("# ") || line.starts_with("## ") {
+        update_block_boundary(line, &mut inside_block);
+        if !inside_block && (line.starts_with("# ") || line.starts_with("## ")) {
             return Some(offset);
         }
         offset += line.len();
     }
     None
+}
+
+fn update_block_boundary(line: &str, inside: &mut bool) {
+    if (line.starts_with("<!-- margin:") && line.contains(" sha256:")) || line.starts_with("<!-- margin-snapshot:") {
+        *inside = true;
+    } else if line.starts_with("<!-- /margin:") || line.starts_with("<!-- /margin-snapshot:") {
+        *inside = false;
+    }
 }
 
 /// The text of `page` under a text-markup comment: the glyphs whose centres fall inside one of its
@@ -474,20 +455,24 @@ pub(crate) fn markup_comments(info: &DocInfo) -> Vec<&Annotation> {
 /// Write `contents` to `path` through a temporary file in the same folder and a rename, so the
 /// note is never seen half written.
 pub fn write_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let dir = path.parent().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "the note has no folder"))?;
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temp = dir.join(format!(".{name}.margin-{}.tmp", std::process::id()));
-    let written = std::fs::File::create(&temp).and_then(|mut f| {
-        f.write_all(contents.as_bytes())?;
-        f.sync_all()
-    });
-    let result = written.and_then(|()| std::fs::rename(&temp, path));
+    write_bytes_atomically(path, contents.as_bytes())
+}
+
+fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let folder = path.parent().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "the export has no folder"))?;
+    let name =
+        path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "the export has no file name"))?.to_string_lossy();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(std::io::Error::other)?.as_nanos();
+    let temporary = folder.join(format!(".{name}.margin-{}-{stamp}.tmp", std::process::id()));
+    // create_new refuses stale files and symlinks; never truncate somebody else's temporary file.
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+    let result = file.write_all(bytes).and_then(|()| file.sync_all()).and_then(|()| std::fs::rename(&temporary, path));
     if result.is_err()
-        && let Err(e) = std::fs::remove_file(&temp)
-        && e.kind() != std::io::ErrorKind::NotFound
+        && let Err(error) = std::fs::remove_file(&temporary)
+        && error.kind() != std::io::ErrorKind::NotFound
     {
-        log::warn!("couldn't remove the temporary note {}: {e}", temp.display());
+        log::warn!("Couldn't remove temporary export {}: {error}", temporary.display());
     }
     result
 }
@@ -528,35 +513,115 @@ fn read_note(path: &Path) -> Result<Option<String>, String> {
     std::fs::read_to_string(path).map(Some).map_err(|e| format!("Couldn't read {}: {e}.", path.display()))
 }
 
-/// What the notes features need to know about one open document.
+/// Immutable note context; canonical paths are resolved only when the document cache changes.
+#[derive(Clone, Debug)]
 struct DocNotes {
     title: String,
     link: PdfLink,
-    /// The reading note's vault-relative path, or why there is none.
     note: Result<String, String>,
+    variables: BTreeMap<String, String>,
+    owner: String,
 }
 
 impl DocNotes {
     fn of(notes: &Notes, doc: &Document) -> Self {
         let file = doc.path.as_deref().map(Path::new);
-        let name = file.and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| doc.name.clone());
-        let title = Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| name.clone());
+        let name = file.and_then(Path::file_name).map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| doc.name.clone());
+        let title = doc
+            .info
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| Path::new(&name).file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| name.clone()));
         let link = PdfLink::for_pdf(notes.vault.as_deref(), file, &name);
-        let note = match &notes.vault {
-            Some(_) => note_path(&notes.note_template, &title),
-            None => Err("Set notes.vault to your Obsidian vault folder first.".to_string()),
+        let source = match &link {
+            PdfLink::Vault(path) => format!("[[{path}]]"),
+            PdfLink::External(path) => file_url(path),
         };
-        Self { title, link, note }
+        let owner = if file.is_some() { source.clone() } else { format!("{source}:{:?}", doc.id) };
+        let mut variables = BTreeMap::from([
+            ("title".into(), title.clone()),
+            ("title-slug".into(), slug(&title)),
+            ("authors".into(), doc.info.author.clone().unwrap_or_default()),
+            ("tags".into(), doc.info.keywords.clone().unwrap_or_default()),
+            ("source".into(), source),
+            ("date".into(), current_date()),
+            ("progress".into(), String::new()),
+        ]);
+        for name in ["year", "doi", "arxiv", "page", "color", "color-name", "text", "note", "link"] {
+            variables.insert(name.into(), String::new());
+        }
+        variables.insert("citekey".into(), derive_citekey(&variables));
+        let note = if notes.vault.is_some() {
+            format::render(&notes.note_template, &variables, TemplateContext::Path).and_then(|path| note_path(&path, ""))
+        } else {
+            Err("Set notes.vault to your Obsidian vault folder first.".into())
+        };
+        Self { title, link, note, variables, owner }
     }
 
-    /// The front matter of a new reading note.
-    fn header(&self) -> String {
-        let source = match &self.link {
-            PdfLink::Vault(rel) => format!("[[{rel}]]"),
-            PdfLink::External(abs) => file_url(abs),
-        };
-        format!("---\nsource: \"{}\"\n---\n\n", source.replace('"', "'"))
+    fn header(&self, notes: &Notes) -> Result<String, String> {
+        let mut header = format::render(&notes.config.front_matter_template, &self.variables, TemplateContext::FrontMatter)?;
+        header.push_str(&format::render(&notes.config.header_template, &self.variables, TemplateContext::Text)?);
+        Ok(header)
     }
+
+    fn highlight(&self, notes: &Notes, highlight: &Highlight) -> Result<String, String> {
+        let mut variables = self.variables.clone();
+        let color_name = notes
+            .colors
+            .iter()
+            .find(|color| color.name.eq_ignore_ascii_case(&highlight.color))
+            .map(|color| color.name.clone())
+            .unwrap_or_else(|| highlight.color.clone());
+        variables.extend([
+            ("page".into(), highlight.label.clone()),
+            ("color".into(), highlight.color.clone()),
+            ("color-name".into(), color_name),
+            ("text".into(), highlight.text.clone()),
+            ("note".into(), highlight.note.clone()),
+            ("link".into(), self.link.markdown(highlight.page, &display_text(&self.title, &highlight.label))),
+            ("callout".into(), callout(highlight, &self.link, &self.title)),
+        ]);
+        format::render(&notes.config.highlight_template, &variables, TemplateContext::Text)
+    }
+}
+
+fn derive_citekey(variables: &BTreeMap<String, String>) -> String {
+    let author = variables
+        .get("authors")
+        .and_then(|authors| authors.split([',', ';']).next())
+        .and_then(|author| author.split_whitespace().last())
+        .unwrap_or_default();
+    let title = variables.get("title").and_then(|title| title.split_whitespace().next()).unwrap_or("untitled");
+    format!("{}{}-{}", slug(author), variables.get("year").map(String::as_str).unwrap_or_default(), slug(title))
+}
+
+fn current_date() -> String {
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs());
+    // Gregorian civil date from whole UTC days; no local timezone or filesystem queries.
+    let days = i64::try_from(seconds / 86_400).unwrap_or(i64::MAX / 2).saturating_add(719_468);
+    let era = days / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = month_index + if month_index < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[derive(Clone, Debug)]
+struct CachedDocument {
+    path: Option<String>,
+    generation: u64,
+    vault: Option<PathBuf>,
+    template: String,
+    context: DocNotes,
+    indices: Arc<Vec<usize>>,
+    shown: Result<String, String>,
 }
 
 /// Builds [`Highlight`]s for one document, extracting page text on demand.
@@ -615,10 +680,13 @@ pub enum Request {
     Open(Option<(usize, usize)>),
     /// Copy every highlight's callout.
     CopyAll,
-    /// Append every highlight to the reading note.
+    /// Synchronize highlights without overwriting user-edited blocks.
     Write,
     /// Turn "Add highlights to this note" on or off for the document.
     ToggleAutoadd,
+    SetTarget(ExportTarget),
+    ExportHighlights,
+    ExportPaper(bool),
 }
 
 /// Per-view state the notes buttons read and write (lives in `CommentView`). `enabled` is only
@@ -632,6 +700,9 @@ pub struct NotesUi {
     /// The PDF isn't in the vault, so callouts link to its file.
     pub external: bool,
     pub request: Option<Request>,
+    pub target: ExportTarget,
+    pub progress: Option<(usize, usize)>,
+    pub(crate) markup_indices: Arc<Vec<usize>>,
 }
 
 impl NotesUi {
@@ -643,7 +714,16 @@ impl NotesUi {
 
 impl Default for NotesUi {
     fn default() -> Self {
-        Self { enabled: false, autoadd: false, note: Err(String::new()), external: false, request: None }
+        Self {
+            enabled: false,
+            autoadd: false,
+            note: Err(String::new()),
+            external: false,
+            request: None,
+            target: ExportTarget::Obsidian,
+            progress: None,
+            markup_indices: Arc::new(Vec::new()),
+        }
     }
 }
 
@@ -700,6 +780,10 @@ pub(crate) fn panel_block(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
         ui.spacing_mut().item_spacing = egui::vec2(look::GAP, look::GAP);
         note_row(ui, t, notes);
         autoadd_row(ui, t, notes);
+        export_row(ui, notes);
+        if let Some((done, total)) = notes.progress {
+            ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).text(format!("Exporting {done} / {total}")));
+        }
         action_row(ui, notes);
     });
     ui.add_space(look::GAP);
@@ -774,8 +858,8 @@ fn action_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = look::GAP;
         let copy = look::Button::secondary(look::ButtonSize::Compact, "Copy all").icon("copy").fixed_width(width).show(ui);
-        let copy_tip = if notes.external { EXTERNAL_TIP } else { "Copy every highlight as PDF++ callouts" };
-        if look::tooltip(copy, copy_tip, None).clicked() {
+        let copy_tip = format!("Copy every highlight as {}", target_label(notes.target));
+        if look::tooltip(copy, &copy_tip, None).clicked() {
             notes.ask(ui.ctx(), Request::CopyAll);
         }
         let write = ui
@@ -784,12 +868,50 @@ fn action_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
             })
             .inner;
         let write_tip = match &notes.note {
-            Ok(_) => "Append highlights the note doesn't have yet".to_owned(),
+            Ok(_) => "Update Margin's highlight blocks; preserve user edits".to_owned(),
             Err(why) => format!("Write to note: {why}"),
         };
         if look::tooltip(write, &write_tip, None).clicked() {
             notes.ask(ui.ctx(), Request::Write);
         }
+    });
+}
+
+fn target_label(target: ExportTarget) -> &'static str {
+    match target {
+        ExportTarget::Obsidian => "Obsidian / PDF++",
+        ExportTarget::Markdown => "Markdown",
+        ExportTarget::Logseq => "Logseq",
+        ExportTarget::ReadwiseCsv => "Readwise CSV",
+        ExportTarget::Json => "JSON",
+    }
+}
+
+fn export_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
+    ui.horizontal(|ui| {
+        let mut selected = notes.target;
+        egui::ComboBox::from_id_salt("highlight-export-target").selected_text(target_label(selected)).width(145.0).show_ui(ui, |ui| {
+            for target in [ExportTarget::Obsidian, ExportTarget::Markdown, ExportTarget::Logseq, ExportTarget::ReadwiseCsv, ExportTarget::Json] {
+                ui.selectable_value(&mut selected, target, target_label(target));
+            }
+        });
+        if selected != notes.target {
+            notes.ask(ui.ctx(), Request::SetTarget(selected));
+        }
+        ui.menu_button("Export", |ui| {
+            if ui.button("Export highlights…").clicked() {
+                notes.ask(ui.ctx(), Request::ExportHighlights);
+                ui.close();
+            }
+            if ui.button("Export paper as Markdown…").clicked() {
+                notes.ask(ui.ctx(), Request::ExportPaper(false));
+                ui.close();
+            }
+            if ui.add_enabled(notes.note.is_ok(), egui::Button::new("Export paper to vault")).clicked() {
+                notes.ask(ui.ctx(), Request::ExportPaper(true));
+                ui.close();
+            }
+        });
     });
 }
 
@@ -811,6 +933,7 @@ pub fn tick(app: &mut PdfCraftApp) {
     if !app.notes.palette_published {
         publish_palette(app);
     }
+    poll_jobs(app);
     for i in 0..app.views.len() {
         refresh_view(app, i);
         if let Some(request) = app.views.get_mut(i).and_then(|v| v.comments.notes.request.take()) {
@@ -833,28 +956,148 @@ fn publish_palette(app: &mut PdfCraftApp) {
 fn refresh_view(app: &mut PdfCraftApp, i: usize) {
     let Some(view) = app.views.get_mut(i) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
-    let d = DocNotes::of(&app.notes, doc);
-    let shown = d.note.map(|rel| {
-        let vault = app.notes.vault.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        std::iter::once(vault.as_str()).chain(rel.split('/')).collect::<Vec<_>>().join(" / ")
+    let stale = app.notes.cached.get(&doc.id).is_none_or(|cached| {
+        cached.path != doc.path
+            || cached.generation != doc.edit_generation()
+            || cached.vault != app.notes.vault
+            || cached.template != app.notes.note_template
     });
-    let ui = &mut view.comments.notes;
-    ui.enabled = true;
-    ui.autoadd = doc.path.as_ref().is_some_and(|p| app.notes.autoadd.contains(p));
-    ui.external = d.link.is_external();
-    ui.note = shown;
+    if stale {
+        let mut context = DocNotes::of(&app.notes, doc);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(book) = app.margin_library.books().iter().find(|book| Some(&book.path) == doc.path.as_ref()) {
+            context.title = book.title.clone();
+            context.variables.insert("title".into(), book.title.clone());
+            context.variables.insert("title-slug".into(), slug(&book.title));
+            context.variables.insert("authors".into(), book.author.clone());
+            context.variables.insert("progress".into(), format!("{:.0}", book.progress * 100.0));
+            context.variables.insert("citekey".into(), derive_citekey(&context.variables));
+            context.note = if app.notes.vault.is_some() {
+                format::render(&app.notes.note_template, &context.variables, TemplateContext::Path).and_then(|path| note_path(&path, ""))
+            } else {
+                context.note
+            };
+        }
+        let mut indices: Vec<usize> =
+            doc.info.annotations.iter().enumerate().filter_map(|(index, annotation)| is_markup(annotation).then_some(index)).collect();
+        indices.sort_by(|left, right| match (doc.info.annotations.get(*left), doc.info.annotations.get(*right)) {
+            (Some(left), Some(right)) => {
+                left.page.cmp(&right.page).then(right.rect[3].total_cmp(&left.rect[3])).then(left.rect[0].total_cmp(&right.rect[0]))
+            }
+            _ => std::cmp::Ordering::Equal,
+        });
+        let shown = context.note.clone().map(|relative| {
+            let vault = app.notes.vault.as_deref().and_then(Path::file_name).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            std::iter::once(vault.as_str()).chain(relative.split('/')).collect::<Vec<_>>().join(" / ")
+        });
+        app.notes.cached.insert(
+            doc.id,
+            CachedDocument {
+                path: doc.path.clone(),
+                generation: doc.edit_generation(),
+                vault: app.notes.vault.clone(),
+                template: app.notes.note_template.clone(),
+                context,
+                indices: Arc::new(indices),
+                shown,
+            },
+        );
+    }
+    let Some(cached) = app.notes.cached.get(&doc.id) else { return };
+    let notes_ui = &mut view.comments.notes;
+    notes_ui.enabled = true;
+    notes_ui.autoadd = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
+    notes_ui.external = cached.context.link.is_external();
+    if notes_ui.note != cached.shown {
+        notes_ui.note = cached.shown.clone();
+    }
+    notes_ui.target = app.notes.config.export_target;
+    notes_ui.markup_indices = cached.indices.clone();
+    notes_ui.progress = app.notes.jobs.get(&doc.id).and_then(|job| job.lock().ok().map(|state| (state.done, state.total)));
+}
+
+fn poll_jobs(app: &mut PdfCraftApp) {
+    let completed: Vec<_> = app
+        .notes
+        .jobs
+        .iter()
+        .filter_map(|(id, job)| match job.lock() {
+            Ok(mut state) => {
+                let retry = state.retry_write;
+                state.result.take().map(|result| (*id, retry, result))
+            }
+            Err(_) => Some((*id, false, Err("The note worker stopped unexpectedly. Your PDF is unchanged.".into()))),
+        })
+        .collect();
+    for (id, retry_write, result) in completed {
+        app.notes.jobs.remove(&id);
+        match result {
+            Ok(completed) => {
+                let result = completed
+                    .clipboard
+                    .map_or(Ok(()), |text| copy_to_clipboard(app, text))
+                    .and_then(|()| completed.uri.map_or(Ok(()), |uri| launch_uri(app, &uri)));
+                match result {
+                    Ok(()) => app.notify(completed.message),
+                    Err(error) => super::toast::failed(app, error, None),
+                }
+            }
+            Err(error) => super::toast::failed(app, error, retry_write.then_some(super::toast::Action::WriteNote(id))),
+        }
+    }
+    if !app.notes.jobs.is_empty()
+        && let Some(ctx) = &app.ctx
+    {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
+    app.notes.cached.retain(|id, _| app.session.get(*id).is_some());
+}
+
+pub(crate) fn cached_markup<'a>(info: &'a DocInfo, indices: &'a [usize]) -> impl Iterator<Item = &'a Annotation> {
+    indices.iter().filter_map(|index| info.annotations.get(*index))
+}
+
+pub fn save_snapshot_to_note(app: &mut PdfCraftApp, index: usize, page: usize, rect: [f32; 4]) -> Result<(), String> {
+    refresh_view(app, index);
+    worker::start(app, index, worker::Work::Snapshot { page, rect })
 }
 
 fn run(app: &mut PdfCraftApp, i: usize, request: Request) {
     let result = match request {
         Request::CopyCallout(page, index) => copy_callout(app, i, page, index),
-        Request::Open(which) => open_in_obsidian(app, i, which),
-        Request::CopyAll => copy_all(app, i),
-        Request::Write => write_note(app, i, None).map(|(rel, added)| match added {
-            0 => format!("{rel} already has every highlight"),
-            1 => format!("Wrote 1 callout to {rel}"),
-            n => format!("Wrote {n} callouts to {rel}"),
-        }),
+        Request::Open(which) => {
+            let only = which
+                .map(|(page, index)| {
+                    app.views
+                        .get(i)
+                        .and_then(|view| app.session.get(view.id))
+                        .and_then(|doc| {
+                            doc.info
+                                .annotations
+                                .iter()
+                                .find(|annotation| annotation.page == page && annotation.index == index && is_markup(annotation))
+                        })
+                        .map(entry_key)
+                        .into_iter()
+                        .collect()
+                })
+                .or_else(|| Some(Vec::new()));
+            worker::start(app, i, worker::Work::Write { only, open: true, automatic: false }).map(|()| "Writing reading note…".into())
+        }
+        Request::CopyAll => worker::start(app, i, worker::Work::Copy).map(|()| "Preparing highlights…".into()),
+        Request::Write => {
+            worker::start(app, i, worker::Work::Write { only: None, open: false, automatic: false }).map(|()| "Writing reading note…".into())
+        }
+        Request::ExportHighlights => worker::pick_export(app, i, false).map(|()| "Choose a highlight export destination".into()),
+        Request::ExportPaper(true) => {
+            worker::start(app, i, worker::Work::Paper { destination: worker::PaperDestination::Vault }).map(|()| "Exporting paper…".into())
+        }
+        Request::ExportPaper(false) => worker::pick_export(app, i, true).map(|()| "Choose a paper export destination".into()),
+        Request::SetTarget(target) => {
+            let mut config = app.notes.config.clone();
+            config.export_target = target;
+            super::settings::persist_notes(app, config).map(|()| "Highlight export target updated".into())
+        }
         Request::ToggleAutoadd => toggle_autoadd(app, i),
     };
     match result {
@@ -898,64 +1141,6 @@ fn copy_callout(app: &mut PdfCraftApp, i: usize, page: usize, index: usize) -> R
     let text = callout_for(app, i, page, index)?;
     copy_to_clipboard(app, text)?;
     Ok("Copied callout".to_string())
-}
-
-/// Every highlight of view `i` as callouts, one blank line apart, and how many there are.
-pub fn markdown_all(app: &PdfCraftApp, i: usize) -> Result<(String, usize), String> {
-    let view = app.views.get(i).ok_or("No document is open.")?;
-    let doc = app.session.get(view.id).ok_or("No document is open.")?;
-    let d = DocNotes::of(&app.notes, doc);
-    let mut reader = HighlightReader::new(&app.notes, doc, &view.texts);
-    let list: Vec<String> = markup_comments(&doc.info).into_iter().map(|a| callout(&reader.highlight(a), &d.link, &d.title)).collect();
-    Ok((list.join("\n"), list.len()))
-}
-
-fn copy_all(app: &mut PdfCraftApp, i: usize) -> Result<String, String> {
-    let (text, n) = markdown_all(app, i)?;
-    if n == 0 {
-        return Err("This document has no highlights yet.".to_string());
-    }
-    copy_to_clipboard(app, text)?;
-    Ok(if n == 1 { "Copied 1 callout".to_string() } else { format!("Copied {n} callouts") })
-}
-
-/// Append the highlights of view `i` to its reading note (only the ones whose keys are in
-/// `only`, when given). Returns the note's vault-relative path and how many entries were added.
-pub fn write_note(app: &PdfCraftApp, i: usize, only: Option<&[String]>) -> Result<(String, usize), String> {
-    let view = app.views.get(i).ok_or("No document is open.")?;
-    let doc = app.session.get(view.id).ok_or("No document is open.")?;
-    let d = DocNotes::of(&app.notes, doc);
-    let rel = d.note.clone()?;
-    let vault = app.notes.vault.as_deref().ok_or("Set notes.vault to your Obsidian vault folder first.")?;
-    let path = resolve_note(vault, &rel)?;
-    let mut reader = HighlightReader::new(&app.notes, doc, &view.texts);
-    let entries: Vec<(String, String)> = markup_comments(&doc.info)
-        .into_iter()
-        .filter(|a| only.is_none_or(|keys| keys.contains(&entry_key(a))))
-        .map(|a| {
-            let h = reader.highlight(a);
-            (h.key.clone(), callout(&h, &d.link, &d.title))
-        })
-        .collect();
-    let existing = read_note(&path)?;
-    let (text, added) = append_entries(existing.as_deref(), &d.header(), &entries);
-    if added > 0 || existing.is_none() {
-        write_atomically(&path, &text).map_err(|e| format!("Couldn't write {rel}: {e}."))?;
-    }
-    Ok((rel, added))
-}
-
-fn open_in_obsidian(app: &mut PdfCraftApp, i: usize, which: Option<(usize, usize)>) -> Result<String, String> {
-    let key = which.and_then(|(page, index)| {
-        let doc = app.session.get(app.views.get(i)?.id)?;
-        doc.info.annotations.iter().find(|a| a.page == page && a.index == index && is_markup(a)).map(entry_key)
-    });
-    let keys: Vec<String> = key.into_iter().collect();
-    let (rel, _) = write_note(app, i, Some(&keys))?;
-    let vault = app.notes.vault.as_deref().ok_or("Set notes.vault to your Obsidian vault folder first.")?;
-    let uri = obsidian_uri(vault, &rel).ok_or("The vault folder has no name Obsidian could know it by.")?;
-    launch_uri(app, &uri)?;
-    Ok(format!("Opened {rel} in Obsidian"))
 }
 
 /// Hand an `obsidian://` address to the system's handler for its scheme (Obsidian registers it).
@@ -1017,18 +1202,21 @@ fn toggle_autoadd(app: &mut PdfCraftApp, i: usize) -> Result<String, String> {
 /// (`on`/`off`, for the active document).
 pub fn set_option(app: &mut PdfCraftApp, key: &str, value: &str) -> Result<(), String> {
     let value = value.trim();
+    // CLI options arrive before the first frame; load existing templates instead of replacing
+    // them with the runtime defaults when changing only the vault or palette.
+    let mut config = app.margin_keys.settings_for_open().notes;
     match key {
-        "notes.vault" if value.is_empty() => app.notes.vault = None,
+        "notes.vault" if value.is_empty() => config.vault = None,
         "notes.vault" => {
             let vault = PathBuf::from(value);
             if !vault.is_absolute() || !vault.is_dir() {
                 return Err(format!("notes.vault must be an existing folder given by its full path, not {value}"));
             }
-            app.notes.vault = Some(vault);
+            config.vault = Some(vault);
         }
         "notes.note_template" => {
             note_path(value, "title")?;
-            app.notes.note_template = value.to_string();
+            config.note_template = value.to_string();
         }
         "notes.colors" => {
             let colors = value
@@ -1040,8 +1228,7 @@ pub fn set_option(app: &mut PdfCraftApp, key: &str, value: &str) -> Result<(), S
                 .collect::<Option<Vec<_>>>()
                 .filter(|c| !c.is_empty())
                 .ok_or("notes.colors: Name=#rrggbb pairs separated by commas")?;
-            app.notes.colors = colors;
-            app.notes.palette_published = false;
+            config.colors = colors.into_iter().map(|color| margin_config::settings::NoteColor { name: color.name, rgb: color.rgb }).collect();
         }
         "notes.autoadd" => {
             let on = match value {
@@ -1055,62 +1242,36 @@ pub fn set_option(app: &mut PdfCraftApp, key: &str, value: &str) -> Result<(), S
             if on != is_on {
                 toggle_autoadd(app, i)?;
             }
+            return Ok(());
         }
         other => return Err(format!("unknown option {other}")),
     }
-    Ok(())
+    super::settings::persist_notes(app, config)
 }
 
-/// Autoadd for view `i`: note new highlights as the document changes, and write the ones whose
-/// note isn't being typed any more (the note typed into a new highlight goes into its callout).
+/// Every annotation edit schedules a full synchronization, including recolours and deletions.
+/// Wait until comment typing finishes; keep the pending generation if another job is running.
 fn autoadd(app: &mut PdfCraftApp, i: usize) {
     let Some(view) = app.views.get(i) else { return };
     let id = view.id;
     let Some(doc) = app.session.get(id) else { return };
-    if !doc.path.as_ref().is_some_and(|p| app.notes.autoadd.contains(p)) {
+    if !doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path)) {
         app.notes.watched.remove(&id);
         return;
     }
     let generation = doc.edit_generation();
-    let current = || markup_comments(&doc.info).into_iter().map(entry_key).collect::<BTreeSet<_>>();
-    let watch = app.notes.watched.entry(id).or_insert_with(|| AutoaddWatch { generation, keys: current(), pending: Vec::new() });
+    let watch = app.notes.watched.entry(id).or_insert(AutoaddWatch { generation, dirty: false });
     if watch.generation != generation {
-        let now = current();
-        for key in now.difference(&watch.keys) {
-            if !watch.pending.contains(key) {
-                watch.pending.push(key.clone());
-            }
-        }
-        // Undone highlights stop waiting.
-        watch.pending.retain(|k| now.contains(k));
-        watch.keys = now;
         watch.generation = generation;
+        watch.dirty = true;
     }
-    if watch.pending.is_empty() {
+    if !watch.dirty || view.comments.editing.is_some() || !app.notes.jobs.is_empty() {
         return;
     }
-    let typing = view.comments.editing.as_ref().and_then(|(page, index, _)| {
-        doc.info.annotations.iter().find(|a| a.page == *page && a.index == *index && a.in_reply_to.is_none()).map(entry_key)
-    });
-    let ready: Vec<String> = watch.pending.iter().filter(|k| Some(*k) != typing.as_ref()).cloned().collect();
-    if ready.is_empty() {
-        return;
+    watch.dirty = false;
+    if let Err(error) = worker::start(app, i, worker::Work::Write { only: None, open: false, automatic: true }) {
+        super::toast::failed(app, error, Some(super::toast::Action::WriteNote(id)));
     }
-    watch.pending.retain(|k| !ready.contains(k));
-    match write_note(app, i, Some(&ready)) {
-        Ok((rel, added)) if added > 0 => app.notify(format!("Added to {rel}")),
-        Ok(_) => {}
-        // A failed write stays on screen until dismissed; the highlight stays in the PDF and Retry
-        // (Write to note) writes it.
-        Err(e) => {
-            let retry = app.views.get(i).map(|v| super::toast::Action::WriteNote(v.id));
-            super::toast::failed(app, e, retry);
-        }
-    }
-}
-
-fn hex(rgb: [u8; 3]) -> String {
-    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
 
 fn parse_hex(text: &str) -> Option<[u8; 3]> {
@@ -1178,34 +1339,6 @@ mod tests {
     }
 
     #[test]
-    fn appending_is_idempotent_by_key() {
-        let entries = vec![("nm-1".to_string(), "> [!PDF|yellow] one\n".to_string()), ("nm-2".to_string(), "> [!PDF|red] two\n".to_string())];
-        let (first, added) = append_entries(None, "---\nsource: \"[[a.pdf]]\"\n---\n\n", &entries);
-        assert_eq!(added, 2);
-        assert_eq!(
-            first,
-            "---\nsource: \"[[a.pdf]]\"\n---\n\n## Highlights\n\n<!-- margin:nm-1 -->\n> [!PDF|yellow] one\n\n<!-- margin:nm-2 -->\n> [!PDF|red] two\n"
-        );
-        let (second, added) = append_entries(Some(&first), "", &entries);
-        assert_eq!((second.as_str(), added), (first.as_str(), 0));
-        assert_eq!(second.matches("<!-- margin:nm-1 -->").count(), 1);
-    }
-
-    #[test]
-    fn appending_goes_under_the_highlights_heading_and_keeps_the_rest() {
-        let note = "# Paper\n\nmy thoughts\n\n## Highlights\n\n<!-- margin:old -->\n> [!PDF|yellow] old\n\n## Questions\n\n- why?\n";
-        let (out, added) = append_entries(Some(note), "", &[("new".into(), "> [!PDF|red] new\n".into())]);
-        assert_eq!(added, 1);
-        assert_eq!(
-            out,
-            "# Paper\n\nmy thoughts\n\n## Highlights\n\n<!-- margin:old -->\n> [!PDF|yellow] old\n\n<!-- margin:new -->\n> [!PDF|red] new\n\n## Questions\n\n- why?\n"
-        );
-        // A note without the heading gets it at the end.
-        let (out, _) = append_entries(Some("# Paper\nnotes"), "", &[("k".into(), "> c\n".into())]);
-        assert_eq!(out, "# Paper\nnotes\n\n## Highlights\n\n<!-- margin:k -->\n> c\n");
-    }
-
-    #[test]
     fn markers_cannot_close_early() {
         assert_eq!(marker("a-->b\n"), "<!-- margin:a--_b_ -->");
     }
@@ -1239,11 +1372,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_round_trip_and_reject_garbage() {
-        let notes = Notes { vault: Some(PathBuf::from("/v")), ..Notes::default() };
-        let mut back = Notes::default();
-        back.restore(&notes.to_json());
-        assert_eq!((back.vault, back.colors), (notes.vault.clone(), notes.colors.clone()));
+    fn legacy_runtime_restore_validates_and_yields_to_settings() {
+        let mut restored = Notes::default();
+        restored.restore(&serde_json::json!({ "vault": "/v", "note_template": "legacy.md", "colors": [["Blue", "#0080ff"]] }));
+        assert_eq!(restored.vault.as_deref(), Some(Path::new("/v")));
+        assert_eq!(restored.colors.first().map(|color| color.name.as_str()), Some("Blue"));
+        restored.apply_config(&margin_config::settings::Notes::default());
+        assert_eq!(restored.vault, None);
+        assert_eq!(restored.colors, default_colors());
         let mut bad = Notes::default();
         bad.restore(&serde_json::json!({ "vault": "relative", "note_template": "../x.md", "colors": [["", "#zzzzzz"]] }));
         assert_eq!((bad.vault, bad.note_template, bad.colors), (None, DEFAULT_NOTE_TEMPLATE.to_string(), default_colors()));
