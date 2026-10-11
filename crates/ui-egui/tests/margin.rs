@@ -868,7 +868,8 @@ fn recent_in_the_document_menu_opens_and_focuses() {
         click(h, "Document: save, export, print, settings");
         h.get_by_label_contains("Recent").hover();
         h.run_steps(3);
-        h.get_by_label_contains(name).click();
+        // The menu row, not the open document's tab of the same name (a tab is toggled on or off).
+        h.get_by(|node| node.label().is_some_and(|label| label.contains(name)) && node.toggled().is_none()).click();
         h.run_steps(4);
     };
     pick(&mut h, "other.pdf");

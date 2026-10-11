@@ -188,7 +188,10 @@ fn a_note_path_leaving_the_vault_is_refused_with_a_toast() {
     h.run_steps(20);
     assert_eq!(h.state().margin_chrome.notices.held(), Some(held.as_str()), "kept past routine messages");
     h.get_by_label("Retry");
-    h.get_by_label("Dismiss").click();
+    // The toast's ×, at the bottom; the notice bar over the page (the xref-less fixture is
+    // repaired on open) has its own Dismiss.
+    let dismiss = h.get_all_by_label("Dismiss").max_by(|a, b| a.rect().bottom().total_cmp(&b.rect().bottom())).expect("a Dismiss button");
+    dismiss.click();
     h.run_steps(2);
     assert!(h.state().margin_chrome.notices.held().is_none());
 }

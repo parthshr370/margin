@@ -183,6 +183,16 @@ fn margin_read_only_scan_offers_save_as_before_ocr() {
     settle_scan(&mut harness);
     harness.get_by_label("Save as…").click();
     settle_scan(&mut harness);
+    // Margin saves on a background worker; the path moves to the copy once it is written.
+    const SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+    const POLL: std::time::Duration = std::time::Duration::from_millis(10);
+    let id = harness.state().active_ids().unwrap().1;
+    let deadline = std::time::Instant::now() + SAVE_TIMEOUT;
+    while harness.state().margin_save_pending(id) && std::time::Instant::now() < deadline {
+        harness.run_steps(1);
+        std::thread::sleep(POLL);
+    }
+    harness.run_steps(2);
     let app = harness.state();
     assert_eq!(std::fs::read(&original).unwrap(), scan_bytes, "the source scan was not touched");
     assert!(writable.is_file());
