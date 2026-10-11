@@ -33,6 +33,7 @@ pub mod reading;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod saves;
 pub mod saving;
+pub mod scan_prompt;
 pub mod scroll_step;
 pub mod scrubber;
 pub mod selection;
@@ -377,6 +378,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
             }
             crate::canvas::document_area(app, i, ui);
             selection::show(app, ui.ctx(), i, ui.clip_rect());
+            scan_prompt::show(app, ui.ctx(), i);
         }
     });
     app.process_pending_edits();

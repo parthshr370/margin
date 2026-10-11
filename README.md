@@ -75,6 +75,11 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - Full screen with a hidden top bar that shows the title and a way out.
 - Find lives in one place: a field in the header and its results in the sidebar's Find tab, with
   match case and whole-word options.
+- Scanned, image-only pages offer text recognition from Find or when you try to select or
+  highlight text. Recognize one page or the whole document locally, with progress and Cancel.
+  Recognition adds an invisible text layer as one undoable PDF edit; the image stays unchanged.
+  Dismiss the offer once per open document. Signed or PDF-restricted documents are not changed;
+  read-only files offer Save as to make a writable copy first.
 - Sidebar tabs: Contents (the outline, following the section you are reading), Highlights, Pages
   (a thumbnail grid with the current page marked and highlight dots), Bookmarks, Find, and Tools
   (PdfCraft's tools that work in this build). In a narrow window the sidebar floats over the page.
@@ -190,6 +195,11 @@ sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-
 ```
 
 The packaging scripts for the release builds are in [`packaging/`](packaging/).
+The macOS app/DMG and every Linux format include the Latin OCR models, their CC-BY-SA-4.0
+licence texts and attribution. Packaging runs `cargo xtask models` to fetch and SHA-256 verify
+them. For a development build, run that command yourself once; models live in the gitignored
+`assets/models/` directory. Packaged Linux builds look in `share/margin/models` relative to
+`bin/margin`, so keep both directories together when using the tarball.
 
 ## Configuration
 

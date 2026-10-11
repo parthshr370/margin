@@ -14,6 +14,8 @@
 # (https://nfpm.goreleaser.com); appimagetool for the AppImage (downloaded into
 # $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04, glibc 2.35) so the
 # binary runs on newer ones. Optional: desktop-file-validate, appstreamcli, zsyncmake.
+# Every format carries the OCR models in share/margin/models (`cargo xtask models` fetches and
+# verifies them with curl on the first run).
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
@@ -26,7 +28,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -62,6 +64,7 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$MARGIN_ASSETS/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/margin"
 copy_margin_docs "$STAGE/usr/share/doc/margin"
+copy_margin_models "$STAGE/usr/share/margin/models"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
@@ -96,7 +99,6 @@ fi
 if has appimage; then
   APPDIR="$WORK/Margin.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
   ln -s usr/bin/margin "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$MARGIN_ASSETS/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"

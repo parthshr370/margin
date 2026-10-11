@@ -78,9 +78,15 @@ impl Models {
     /// - `models/` beside it: the Windows MSI and portable zip;
     /// - `../Resources/models`: the macOS app bundle (`Contents/MacOS` → `Contents/Resources`);
     /// - `../share/pdfcraft/models`: the FHS-style trees (`bin/` → `share/`) of the Linux
-    ///   deb/rpm/tar.gz/AppImage/Flatpak and the FreeBSD tarball, wherever they are installed.
+    ///   deb/rpm/tar.gz/AppImage/Flatpak and the FreeBSD tarball, wherever they are installed;
+    /// - `../share/margin/models`: the same trees of Margin's Linux packages (packaging/margin).
     pub fn dirs_beside_exe(exe_dir: &Path) -> Vec<PathBuf> {
-        vec![exe_dir.join("models"), exe_dir.join("../Resources/models"), exe_dir.join("../share/pdfcraft/models")]
+        vec![
+            exe_dir.join("models"),
+            exe_dir.join("../Resources/models"),
+            exe_dir.join("../share/pdfcraft/models"),
+            exe_dir.join("../share/margin/models"),
+        ]
     }
 }
 
@@ -254,7 +260,8 @@ mod tests {
     }
 
     /// #103: every release package's layout puts the models where the installed app looks.
-    /// Mirrors packaging/{windows/package.ps1,macos/package.sh,linux/package.sh,freebsd/package.sh}.
+    /// Mirrors packaging/{windows/package.ps1,macos/package.sh,linux/package.sh,freebsd/package.sh}
+    /// and packaging/margin/{macos,linux}/package.sh.
     #[test]
     fn finds_the_models_in_every_release_package_layout() {
         let base = std::env::temp_dir().join(format!("pdfcraft-ocr-layouts-{}", std::process::id()));
@@ -266,6 +273,9 @@ mod tests {
             ("appimage", "PdfCraft.AppDir/usr/bin", "PdfCraft.AppDir/usr/share/pdfcraft/models"),
             ("flatpak", "app/bin", "app/share/pdfcraft/models"),
             ("freebsd", "usr/local/bin", "usr/local/share/pdfcraft/models"),
+            ("margin-macos", "Margin.app/Contents/MacOS", "Margin.app/Contents/Resources/models"),
+            ("margin-linux-deb-rpm", "usr/bin", "usr/share/margin/models"),
+            ("margin-linux-tar", "margin-0.1.0-linux-x86_64/bin", "margin-0.1.0-linux-x86_64/share/margin/models"),
         ];
         for (name, exe_dir, models_dir) in layouts {
             let root = base.join(name);
