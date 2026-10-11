@@ -432,6 +432,9 @@ pub struct PdfCraftApp {
     pub failed_inbox: FailedInbox,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
+    /// Margin's macOS menu bar, once installed (`margin::menu_bar::install`).
+    #[cfg(target_os = "macos")]
+    pub(crate) menu_bar: Option<margin::menu_bar::MenuBar>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// Save to this path instead of asking (tests and automation).
@@ -680,6 +683,8 @@ impl PdfCraftApp {
             inbox: Default::default(),
             failed_inbox: Default::default(),
             os_events: None,
+            #[cfg(target_os = "macos")]
+            menu_bar: None,
             close_request: None,
             save_override: None,
             props_draft: None,
@@ -1659,6 +1664,10 @@ impl eframe::App for PdfCraftApp {
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
     /// page grid can show (and use) the gap under it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // A menu bar Cut, Copy, Paste or Select All clicked last frame reaches the focused field
+        // as its key would have.
+        #[cfg(target_os = "macos")]
+        raw.events.extend(margin::menu_bar::take_pending_input(self));
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
         }
@@ -1736,6 +1745,8 @@ impl eframe::App for PdfCraftApp {
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
+        #[cfg(target_os = "macos")]
+        margin::menu_bar::tick(self, ctx);
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);

@@ -6,7 +6,7 @@ use egui::{Align, Layout};
 use pdfcraft_engine::commands;
 
 use crate::margin::look::{self, GAP_LARGE};
-use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at};
+use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, window_chrome};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
@@ -56,10 +56,14 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             let full = ui.max_rect();
+            // The whole bar, its padding too, moves the window where nothing else takes the press.
+            window_chrome::drag_area(app, ui, full.expand2(egui::vec2(GAP_LARGE, 0.0)), ui.id().with("margin-header-drag"));
+            let traffic_lights = window_chrome::traffic_lights_inset(ui.ctx(), full);
             let mut left_end = full.left();
             let mut right_start = full.right();
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
+                ui.add_space(traffic_lights);
                 left_cluster(app, ui);
                 left_end = ui.min_rect().right();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

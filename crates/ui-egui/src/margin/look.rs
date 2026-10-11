@@ -351,24 +351,52 @@ pub(crate) fn shortcut(app: &PdfCraftApp, command: &str) -> Option<String> {
     shortcut_with(app, command, &Value::Null)
 }
 
+/// What runs a command from the keyboard in Margin.
+pub(crate) enum CommandKeys<'a> {
+    /// A keymap binding, in its canonical keystrokes (`shift-super-s`), one per chord step.
+    Bound(&'a [String]),
+    /// PdfCraft's own shortcut, which the keymap leaves alone.
+    Static(commands::Shortcut),
+}
+
 /// The keys that run `command` with `args`: its first keymap binding still in effect (a later
 /// binding or unbind of the same keys in the same context replaces it), else PdfCraft's own
 /// shortcut while the keymap leaves that alone.
-pub(crate) fn shortcut_with(app: &PdfCraftApp, command: &str, args: &Value) -> Option<String> {
-    let mac = cfg!(target_os = "macos");
+pub(crate) fn command_keys<'a>(app: &'a PdfCraftApp, command: &str, args: &Value) -> Option<CommandKeys<'a>> {
+    command_keys_where(app, command, args, |_| true)
+}
+
+/// [`command_keys`] among the bindings whose keys `usable` accepts (the macOS menu bar can show
+/// only a single ⌘ keystroke, so it skips `f3` for the `secondary-g` after it).
+pub(crate) fn command_keys_where<'a>(
+    app: &'a PdfCraftApp,
+    command: &str,
+    args: &Value,
+    usable: impl Fn(&[String]) -> bool,
+) -> Option<CommandKeys<'a>> {
     if let Some(table) = app.margin_keys.keymap() {
         let bindings = &table.bindings;
         let bound = bindings.iter().enumerate().find(|(i, binding)| {
             binding.command.as_deref() == Some(command)
                 && binding.args == *args
+                && usable(&binding.keys)
                 && !bindings[i + 1..].iter().any(|later| later.context_text == binding.context_text && later.keys == binding.keys)
         });
         if let Some((_, binding)) = bound {
-            return Some(keysheet::pretty_keys(&binding.keys, mac));
+            return Some(CommandKeys::Bound(&binding.keys));
         }
     }
     let spec = commands::command(command).filter(|_| args.is_null())?;
-    spec.shortcut.filter(|_| app.margin_keys.falls_back(spec)).map(|keys| keys.label(mac))
+    spec.shortcut.filter(|_| app.margin_keys.falls_back(spec)).map(CommandKeys::Static)
+}
+
+/// [`command_keys`] as the keyboard sheet writes them.
+pub(crate) fn shortcut_with(app: &PdfCraftApp, command: &str, args: &Value) -> Option<String> {
+    let mac = cfg!(target_os = "macos");
+    Some(match command_keys(app, command, args)? {
+        CommandKeys::Bound(keys) => keysheet::pretty_keys(keys, mac),
+        CommandKeys::Static(shortcut) => shortcut.label(mac),
+    })
 }
 
 /// A Margin option popover toggled by `button`, under the stable `id` (so a change made inside it

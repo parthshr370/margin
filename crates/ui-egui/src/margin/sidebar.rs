@@ -9,7 +9,7 @@
 use egui::{Align2, CornerRadius, Rect, Sense, vec2};
 
 use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
-use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, reading};
+use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, reading, window_chrome};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{DocView, Flavor, PdfCraftApp, icons};
@@ -136,10 +136,15 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let summary = super::stats::active_summary_parts(app);
     #[cfg(target_arch = "wasm32")]
     let summary = None;
+    let body = ui.max_rect();
+    window_chrome::drag_area(app, ui, Rect::from_min_size(body.min, vec2(body.width(), super::header::HEIGHT)), ui.id().with("margin-sidebar-drag"));
+    // Under the traffic lights the buttons share the header's row: centred on it, after them.
+    let traffic_lights = window_chrome::traffic_lights_inset(ui.ctx(), Rect::from_min_max(body.min + vec2(GAP_LARGE, 0.0), body.max));
+    let top_margin = if traffic_lights > 0.0 { ((super::header::HEIGHT - TOP_BUTTON) / 2.0) as i8 } else { edge };
     egui::Panel::top("margin_sidebar_top")
-        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: edge, bottom: 0 }))
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: edge, right: edge, top: top_margin, bottom: 0 }))
         .show(ui, |ui| {
-            top_buttons(app, ui);
+            top_buttons(app, ui, traffic_lights);
             document_card(app, ui, t, summary);
         });
     // The tab strip is chrome (its top edge is the panel's separator where the theme has frame
@@ -153,9 +158,10 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .show(ui, |ui| pane(app, ui, t));
 }
 
-fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui, traffic_lights: f32) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
+        ui.add_space(traffic_lights);
         let library = look::shortcut(app, "library.open");
         if look::icon_button(ui, "book-open", TOP_BUTTON, false, "Library", library.as_deref()).clicked() {
             #[cfg(not(target_arch = "wasm32"))]
