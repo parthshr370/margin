@@ -88,6 +88,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$WORK/bin/margin" "$APP/Contents/MacOS/Margin"
 cp "$WORK/Margin.icns" "$APP/Contents/Resources/Margin.icns"
 copy_margin_docs "$APP/Contents/Resources"
+copy_margin_models "$APP/Contents/Resources/models"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${PDFCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"

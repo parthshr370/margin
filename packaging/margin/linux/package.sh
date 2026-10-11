@@ -62,6 +62,7 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$MARGIN_ASSETS/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/margin"
 copy_margin_docs "$STAGE/usr/share/doc/margin"
+copy_margin_models "$STAGE/usr/share/margin/models"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
@@ -96,7 +97,6 @@ fi
 if has appimage; then
   APPDIR="$WORK/Margin.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
   ln -s usr/bin/margin "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$MARGIN_ASSETS/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"

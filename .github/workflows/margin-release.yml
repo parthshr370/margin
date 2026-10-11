@@ -86,6 +86,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: margin-release-linux-${{ matrix.arch }}
+      - name: Fetch verified OCR models and licences
+        run: cargo xtask models
       - name: Build and package (AppImage, deb, rpm, tar.gz)
         run: packaging/margin/linux/package.sh
       - name: Check the packages
@@ -93,6 +95,10 @@ jobs:
           dpkg-deb --info dist/release/*.deb
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/margin$|metainfo|applications|hicolor/512x512'
           ldd target/release/margin
+          for model in text-detection.rten text-recognition.rten; do
+            test -s "target/margin-linux-package/root/usr/share/margin/models/$model"
+            test -s "target/margin-linux-package/root/usr/share/margin/models/$model.LICENCE.txt"
+          done
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
             APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version | grep -Fx "margin $MARGIN_VERSION"
@@ -120,6 +126,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: margin-release-macos-universal
+      - name: Fetch verified OCR models and licences
+        run: cargo xtask models
       - name: Build, sign ad-hoc, make the DMG
         run: packaging/margin/macos/package.sh --arch universal
       - name: Check the DMG
@@ -130,6 +138,10 @@ jobs:
           plutil -extract CFBundleIdentifier raw "$mnt/Margin.app/Contents/Info.plist" | grep -Fx io.github.parthshr370.Margin
           lipo -archs "$mnt/Margin.app/Contents/MacOS/Margin"
           "$mnt/Margin.app/Contents/MacOS/Margin" --version | grep -Fx "margin $MARGIN_VERSION"
+          for model in text-detection.rten text-recognition.rten; do
+            cmp "assets/models/$model" "$mnt/Margin.app/Contents/Resources/models/$model"
+            cmp "assets/models/$model.LICENCE.txt" "$mnt/Margin.app/Contents/Resources/models/$model.LICENCE.txt"
+          done
           # The signature survived packaging. Not --strict: the HFS image that makehybrid builds
           # reports com.apple.FinderInfo attributes on files in the bundle, which --strict calls detritus;
           # package.sh already verified the app with --strict before it went into the image.
