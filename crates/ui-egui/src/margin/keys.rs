@@ -864,7 +864,8 @@ mod tests {
     #[test]
     fn static_shortcuts_fall_back_only_where_unbound() {
         let registry = Registry::load().unwrap();
-        let user = "[{ \"bindings\": { \"ctrl-p\": \"view.palette\", \"ctrl-s\": null } }]";
+        // `secondary` is Cmd on macOS and Ctrl elsewhere, where PdfCraft's static Print and Save sit.
+        let user = "[{ \"bindings\": { \"secondary-p\": \"view.palette\", \"secondary-s\": null } }]";
         let compiled = {
             let options = CompileOptions { os: Os::current(), chord_timeout_ms: 1000, annotate_letters: true };
             margin_config::compile(&registry, &[KeymapSource { file: "keymap.jsonc", text: user }], &options)
@@ -884,7 +885,7 @@ mod tests {
             ..MarginKeys::default()
         };
         let spec = |id: &str| commands::command(id).unwrap();
-        assert!(!keys.falls_back(spec("print.dialog")), "Ctrl+P belongs to the keymap now");
+        assert!(!keys.falls_back(spec("print.dialog")), "Cmd/Ctrl+P belongs to the keymap now");
         assert!(!keys.falls_back(spec("file.save")), "an unbind hides the static shortcut too");
         assert!(keys.falls_back(spec("file.open")), "untouched shortcuts keep working");
         assert!(MarginKeys::default().falls_back(spec("file.open")), "before loading, everything falls back");
