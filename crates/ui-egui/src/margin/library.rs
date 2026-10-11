@@ -7,13 +7,18 @@
 //! virtualised: only the rows on screen are laid out, and only their covers are loaded.
 //!
 //! Covers are the first page through PdfCraft's renderer, cached as JPEG in
-//! `<data>/cache/thumbs/`; a few are decoded per frame so scrolling never stalls.
+//! `<data>/cache/thumbs/`, decoded on a worker thread and uploaded a few per frame
+//! ([`covers`]). The shelf's order is kept between frames and made again only when the books,
+//! the search, the sort or the shelf change, so a frame costs the rows on screen, not the
+//! library's size.
 
-use std::collections::HashMap;
+mod covers;
+
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, Vec2, pos2, vec2};
-use margin_config::library::{self as store, Book, Collection, Cover, LibraryDb, Opened, ScanJob, ScanRequest};
+use margin_config::library::{self as store, Book, Collection, LibraryDb, Opened, ScanJob, ScanRequest};
 use margin_config::{LibrarySort, LibraryView};
 
 use super::look::{self, ButtonSize, GAP, GAP_LARGE};
@@ -48,9 +53,6 @@ const SEARCH_WIDTH: f32 = 300.0;
 const COLLECTION_FIELD_WIDTH: f32 = 176.0;
 const BUTTON: f32 = 32.0;
 const BAR_WIDTH: f32 = 70.0;
-/// Covers decoded per frame, and most kept as textures (far ones are dropped first).
-const COVERS_PER_FRAME: usize = 6;
-const MAX_TEXTURES: usize = 200;
 /// The search field's id (`library.search` focuses it).
 const SEARCH_ID: &str = "margin-library-search";
 
@@ -77,13 +79,6 @@ impl Shelf {
             Self::Collections => "Collections",
         }
     }
-}
-
-/// A decoded cover.
-struct CoverTex {
-    texture: TextureHandle,
-    /// The frame it was last drawn in.
-    used: u64,
 }
 
 /// The library's state. Opens nothing in the PdfCraft flavor.
@@ -114,12 +109,17 @@ pub struct LibraryState {
     focus_search: bool,
     /// The name typed for a new collection.
     new_collection: String,
-    covers: HashMap<String, CoverTex>,
-    frame: u64,
-    /// Covers decoded this frame (at most [`COVERS_PER_FRAME`]).
-    decoded: usize,
-    /// The egui pass `frame` and `decoded` count (the library and the Stats sheet share them).
-    cover_pass: u64,
+    covers: covers::Covers,
+    /// Bumped each time the books are read again; what is kept between frames remembers it.
+    generation: u64,
+    /// Each book's search text, lower case, in the order of `books`.
+    haystacks: Vec<String>,
+    /// The shelf as last ordered, and the Continue reading book.
+    ordered: Option<Ordered>,
+    /// The Continue reading line for (generation, book).
+    hero_line: Option<(u64, usize, String)>,
+    /// How many times the shelf was ordered (tests check it isn't every frame).
+    orders_built: usize,
     /// The tab to go back to from the library (`library.open` toggles).
     back_to: Option<usize>,
     /// The library showed last frame.
@@ -145,7 +145,12 @@ impl LibraryState {
 
     /// Covers decoded and ready to draw.
     pub fn covers_loaded(&self) -> usize {
-        self.covers.len()
+        self.covers.loaded()
+    }
+
+    /// How many times the shelf has been filtered and sorted.
+    pub fn orders_built(&self) -> usize {
+        self.orders_built
     }
 
     /// The database, once opened.
@@ -190,7 +195,11 @@ fn reload(app: &mut PdfCraftApp) {
     state.stale = false;
     let Some(db) = &state.db else { return };
     match db.books() {
-        Ok(books) => state.books = books,
+        Ok(books) => {
+            state.haystacks = books.iter().map(haystack).collect();
+            state.books = books;
+            state.generation = state.generation.wrapping_add(1);
+        }
         Err(err) => log::warn!("library: {err}"),
     }
     match db.collections() {
@@ -379,7 +388,7 @@ fn poll_scan(app: &mut PdfCraftApp) {
     app.margin_library.scan = None;
     app.margin_library.stale = true;
     // Covers may have been rewritten: decode them again.
-    app.margin_library.covers.clear();
+    app.margin_library.covers.scan_ended();
     match report {
         Ok(report) if report.cancelled => app.notify("Library scan stopped"),
         Ok(report) => log::info!("library: {} PDFs, {} read, {} covers, {} missing", report.found, report.indexed, report.covers, report.missing),
@@ -467,8 +476,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     reload(app);
     begin_cover_pass(&mut app.margin_library, &ctx);
     let t = Tokens::get(&ctx);
-    let order = ordered(&app.margin_library);
-    let hero = hero_book(&app.margin_library);
+    let (order, hero) = ordered(&mut app.margin_library);
     let hero_line = hero.map(|index| hero_meta(app, index));
     let mut actions = Vec::new();
     let full = ui.available_rect_before_wrap();
@@ -501,7 +509,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.allocate_rect(full, Sense::hover());
-    trim_textures(&mut app.margin_library);
+    app.margin_library.covers.trim();
     apply(app, &ctx, actions);
 }
 
@@ -510,8 +518,61 @@ pub(crate) fn hidden(app: &mut PdfCraftApp) {
     app.margin_library.shown = false;
 }
 
+/// What the shelf was ordered for: the books' generation and every choice that filters or sorts.
+struct Ordered {
+    generation: u64,
+    query: String,
+    sort: LibrarySort,
+    shelf: Shelf,
+    folder: Option<String>,
+    collection: Option<i64>,
+    /// The books the shelf shows, in order (indices into `books`).
+    order: Arc<[usize]>,
+    /// The Continue reading book.
+    hero: Option<usize>,
+}
+
+impl Ordered {
+    fn holds_for(&self, state: &LibraryState) -> bool {
+        self.generation == state.generation
+            && self.query == state.query
+            && self.sort == state.sort
+            && self.shelf == state.shelf
+            && self.folder == state.folder
+            && self.collection == state.collection
+    }
+}
+
+/// The text a book is found by: title, author and file name, lower case.
+fn haystack(book: &Book) -> String {
+    let name = Path::new(&book.path).file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+    format!("{}\n{}\n{name}", book.title, book.author).to_lowercase()
+}
+
+/// The shelf's books in order and the Continue reading book: kept, and made again only when the
+/// books, the search, the sort, the shelf or its folder or collection changed.
+fn ordered(state: &mut LibraryState) -> (Arc<[usize]>, Option<usize>) {
+    if let Some(kept) = state.ordered.as_ref().filter(|kept| kept.holds_for(state)) {
+        return (kept.order.clone(), kept.hero);
+    }
+    let order: Arc<[usize]> = shelf_order(state).into();
+    let hero = hero_book(state);
+    state.orders_built = state.orders_built.saturating_add(1);
+    state.ordered = Some(Ordered {
+        generation: state.generation,
+        query: state.query.clone(),
+        sort: state.sort,
+        shelf: state.shelf,
+        folder: state.folder.clone(),
+        collection: state.collection,
+        order: order.clone(),
+        hero,
+    });
+    (order, hero)
+}
+
 /// The indices of the books the shelf, folder or collection and search show, sorted.
-fn ordered(state: &LibraryState) -> Vec<usize> {
+fn shelf_order(state: &LibraryState) -> Vec<usize> {
     let query = state.query.trim().to_lowercase();
     let mut order: Vec<usize> = state
         .books
@@ -524,12 +585,7 @@ fn ordered(state: &LibraryState) -> Vec<usize> {
             Shelf::Folders => state.folder.as_deref().is_none_or(|folder| Path::new(&book.path).starts_with(folder)),
             Shelf::Collections => state.collection.is_none_or(|collection| book.collections.contains(&collection)),
         })
-        .filter(|(_, book)| {
-            query.is_empty() || book.title.to_lowercase().contains(&query) || book.author.to_lowercase().contains(&query) || {
-                let name = Path::new(&book.path).file_name().map(|name| name.to_string_lossy().to_lowercase());
-                name.is_some_and(|name| name.contains(&query))
-            }
-        })
+        .filter(|(index, _)| query.is_empty() || state.haystacks.get(*index).is_some_and(|text| text.contains(&query)))
         .map(|(index, _)| index)
         .collect();
     let books = &state.books;
@@ -565,8 +621,12 @@ fn hero_book(state: &LibraryState) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-/// "p. 6 of 14 · 43% · ~34 min left".
+/// "p. 6 of 14 · 43% · ~34 min left", kept until the books are read again.
 fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
+    let generation = app.margin_library.generation;
+    if let Some((_, _, line)) = app.margin_library.hero_line.as_ref().filter(|(at, book, _)| *at == generation && *book == index) {
+        return line.clone();
+    }
     let Some(book) = app.margin_library.books.get(index) else { return String::new() };
     let (page, pages, progress, book_id) = (book.page, book.pages, book.progress, book.book_id.clone());
     let mut parts = Vec::new();
@@ -581,7 +641,9 @@ fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
     {
         parts.push(format!("~{} left", margin_config::stats::format_duration(seconds)));
     }
-    parts.join("   ")
+    let line = parts.join("   ");
+    app.margin_library.hero_line = Some((generation, index, line.clone()));
+    line
 }
 
 fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
@@ -1004,39 +1066,23 @@ pub(crate) fn paint_book_cover(app: &mut PdfCraftApp, ui: &egui::Ui, t: &Tokens,
     paint_cover(app, ui, t, rect, book);
 }
 
-/// Starts a new frame's cover budget once per egui pass, whoever draws covers first.
+/// Starts a new frame's cover budget once per egui pass, whoever draws covers first; books
+/// whose cover couldn't be read are scanned once to make it again.
 fn begin_cover_pass(state: &mut LibraryState, ctx: &egui::Context) {
-    let pass = ctx.cumulative_pass_nr();
-    if state.cover_pass != pass {
-        state.cover_pass = pass;
-        state.frame = state.frame.wrapping_add(1);
-        state.decoded = 0;
+    for file in state.covers.begin_frame(ctx) {
+        let file = PathBuf::from(file);
+        if !state.pending_files.contains(&file) {
+            state.pending_files.push(file);
+        }
     }
 }
 
-/// The book's cover texture, decoding it now if the frame's budget allows.
+/// The book's cover texture once decoded (on the worker; on this thread in tests).
 fn cover_texture(app: &mut PdfCraftApp, ctx: &egui::Context, book: &Book) -> Option<TextureHandle> {
+    let inline = app.margin_library.run_inline || app.run_inline;
     let state = &mut app.margin_library;
-    let frame = state.frame;
-    if let Some(cover) = state.covers.get_mut(&book.book_id) {
-        cover.used = frame;
-        return Some(cover.texture.clone());
-    }
-    if book.cover != Cover::Cached {
-        return None;
-    }
-    if state.decoded >= COVERS_PER_FRAME {
-        ctx.request_repaint();
-        return None;
-    }
     let data = state.db.as_ref()?.data_dir().to_path_buf();
-    let (width, height, rgba) = store::load_cover(&store::cover_path(&data, &book.book_id))?;
-    let size = [usize::try_from(width).ok()?, usize::try_from(height).ok()?];
-    let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-    state.decoded += 1;
-    let texture = ctx.load_texture(format!("cover-{}", book.book_id), image, egui::TextureOptions::LINEAR);
-    state.covers.insert(book.book_id.clone(), CoverTex { texture: texture.clone(), used: frame });
-    Some(texture)
+    state.covers.texture(ctx, &data, book, inline)
 }
 
 /// Opens the book at `path` (or shows its tab). The sidecar restores the page as any open does;
@@ -1051,19 +1097,6 @@ pub(crate) fn open_book(app: &mut PdfCraftApp, path: &str) {
     let Some(view) = app.active.and_then(|index| app.views.get_mut(index)) else { return };
     if !super::reading::has_saved_place(view) {
         view.go_to_page(usize::try_from(page).unwrap_or(usize::MAX));
-    }
-}
-
-/// Drops the covers drawn longest ago once there are more than [`MAX_TEXTURES`].
-fn trim_textures(state: &mut LibraryState) {
-    if state.covers.len() <= MAX_TEXTURES {
-        return;
-    }
-    let mut ages: Vec<(u64, String)> = state.covers.iter().map(|(key, cover)| (cover.used, key.clone())).collect();
-    ages.sort_unstable();
-    let excess = state.covers.len() - MAX_TEXTURES;
-    for (_, key) in ages.into_iter().take(excess) {
-        state.covers.remove(&key);
     }
 }
 

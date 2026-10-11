@@ -124,11 +124,24 @@ fn scanning_200_pdfs_indexes_them_with_covers_within_budget() {
     assert!(books.iter().all(|book| book.cover == Cover::Cached), "every book has a cover");
     assert!(books.iter().any(|book| book.title == "Book 007" && book.author == "Test Author" && book.pages == 3));
     assert!(took < SCAN_BUDGET, "indexed in {took:?}");
-    // The grid shows: covers of the books on screen are decoded, only those.
+    // The grid shows: covers of the books on screen are decoded (on a worker), only those.
+    let start = Instant::now();
+    while h.state().margin_library.covers_loaded() == 0 && start.elapsed() < Duration::from_secs(5) {
+        h.run_steps(1);
+        std::thread::sleep(Duration::from_millis(5));
+    }
     h.run_steps(10);
     let loaded = h.state().margin_library.covers_loaded();
     assert!(loaded > 0 && loaded < BOOKS, "{loaded} covers decoded");
     assert!(h.query_all_by_label_contains("Book ").next().is_some(), "books are listed");
+    // Frames that change nothing don't filter and sort the books again.
+    let built = h.state().margin_library.orders_built();
+    h.run_steps(20);
+    assert_eq!(h.state().margin_library.orders_built(), built, "the shelf's order is kept between frames");
+    h.state_mut().margin_library.query = "book 01".into();
+    h.run_steps(2);
+    assert_eq!(h.state().margin_library.orders_built(), built + 1, "and made again when the search changes");
+    h.state_mut().margin_library.query.clear();
     drop(h);
 
     // A rescan of unchanged files reads none of them again.
