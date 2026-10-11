@@ -45,8 +45,9 @@ const EXPORT_MENU: &[&str] = &["export.text", "export.docx", "export.html", "exp
 /// settings, shortcuts), since the Library shows no reader header.
 const APP_MENU: &[Option<&str>] = &[Some("file.open"), Some("recent"), None, Some("app.preferences"), Some("help.shortcuts")];
 
-/// The header. While the active document is being searched, the find field takes the title's
-/// place; returns true when the header has no room for it, so it needs its own row.
+/// The header, and under it the open documents' tab strip. While the active document is being
+/// searched, the find field takes the title's place; returns true when the header has no room
+/// for it, so it needs its own row.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut needs_row = false;
@@ -75,6 +76,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
                 title(app, ui, &t, full, left_end, right_start);
             }
         });
+    // The open documents, under the header (hidden with it).
+    crate::margin::tabs::strip(app, ui);
     needs_row
 }
 

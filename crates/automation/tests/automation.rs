@@ -248,6 +248,31 @@ fn combine_extract_and_split() {
     }
 }
 
+/// Forward and inverse SyncTeX search from a synthetic `a.synctex` beside `a.pdf`: line 10 of
+/// `a.tex` is a line box 1 in from the left with its baseline 2 in from the top (Unit 1 means
+/// scaled points: 4736286 sp = 72 pt).
+#[test]
+fn synctex_forward_and_inverse_search() {
+    let dir = workdir("synctex");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let missing = a.call("synctex_forward", &json!({ "doc": doc, "source": "a.tex", "line": 10 })).unwrap_err();
+    assert!(matches!(missing, ToolError::Failed(m) if m.contains("no SyncTeX file")));
+    let synctex = "SyncTeX Version:1\nInput:1:./a.tex\nOutput:pdf\nMagnification:1000\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{1\n\
+        [1,1:4736286,47362860:30000000,40000000,0\n(1,10:4736286,9472572:30000000,655360,131072\ng1,10:4736286,9472572\n)\n]\n}1\nPostamble:\n";
+    std::fs::write(dir.join("a.synctex"), synctex).unwrap();
+    let source = dir.canonicalize().unwrap().join("a.tex");
+    let hit = ok(&mut a, "synctex_forward", json!({ "doc": doc, "source": source.to_str().unwrap(), "line": 10 }));
+    assert_eq!((hit["page"].as_u64(), hit["line"].as_u64()), (Some(1), Some(10)));
+    let rect: Vec<f64> = hit["boxes"][0].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!((rect[0] - 72.0).abs() < 0.1, "1 in from the left: {rect:?}");
+    assert!(rect[1] < 144.0 && rect[3] > 144.0 && rect[1] > 130.0, "around the baseline 2 in from the top: {rect:?}");
+    let place = ok(&mut a, "synctex_inverse", json!({ "doc": doc, "page": 1, "x": 100, "y": 140 }));
+    assert_eq!(place["line"], 10);
+    assert!(place["file"].as_str().unwrap().ends_with("a.tex"));
+    assert!(a.call("synctex_inverse", &json!({ "doc": doc, "page": 5, "x": 1, "y": 1 })).is_err());
+}
+
 #[test]
 fn errors_are_specific_and_safe() {
     let dir = workdir("errors");

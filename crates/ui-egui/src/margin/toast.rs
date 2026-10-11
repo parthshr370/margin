@@ -40,11 +40,14 @@ impl Notices {
     }
 }
 
-/// A failure kept on screen.
+/// A failure or question kept on screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Held {
     text: String,
     action: Option<Action>,
+    /// A question's second answer; a question has no dismiss ×, one of its answers must be
+    /// picked.
+    second: Option<Action>,
 }
 
 /// The routine message `text` offers Undo while `doc` is the active document.
@@ -54,17 +57,23 @@ struct UndoOffer {
     doc: DocId,
 }
 
-/// What a held failure's button does.
+/// What a held message's button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     /// Write the document's highlights to its reading note again ("Write to note").
     WriteNote(DocId),
+    /// The document's file changed on disk while it had unsaved edits: show the file's version.
+    Reload(DocId),
+    /// …or keep the edits; Save then writes them over the file's version.
+    KeepMine(DocId),
 }
 
 impl Action {
     fn label(self) -> &'static str {
         match self {
             Self::WriteNote(_) => "Retry",
+            Self::Reload(_) => "Reload",
+            Self::KeepMine(_) => "Keep mine",
         }
     }
 
@@ -75,13 +84,28 @@ impl Action {
                     view.comments.notes.ask(ctx, Request::Write);
                 }
             }
+            Self::Reload(doc) => super::reload::resolve(app, doc, true),
+            Self::KeepMine(doc) => super::reload::resolve(app, doc, false),
         }
     }
 }
 
 /// Show `text` until the reader dismisses it or runs `action`; routine messages don't replace it.
 pub(crate) fn failed(app: &mut PdfCraftApp, text: impl Into<String>, action: Option<Action>) {
-    app.margin_chrome.notices.held = Some(Held { text: text.into(), action });
+    app.margin_chrome.notices.held = Some(Held { text: text.into(), action, second: None });
+}
+
+/// Ask `text` with two answers, kept on screen until one is picked.
+pub(crate) fn ask(app: &mut PdfCraftApp, text: impl Into<String>, first: Action, second: Action) {
+    app.margin_chrome.notices.held = Some(Held { text: text.into(), action: Some(first), second: Some(second) });
+}
+
+/// Take back a question whose first answer is `first`, once it no longer applies.
+pub(crate) fn withdraw(app: &mut PdfCraftApp, first: Action) {
+    let notices = &mut app.margin_chrome.notices;
+    if notices.held.as_ref().is_some_and(|held| held.action == Some(first) && held.second.is_some()) {
+        notices.held = None;
+    }
 }
 
 /// A routine message that offers Undo (a deletion `edit.undo` reverses) while `doc` is active.
@@ -132,11 +156,13 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill_top: Option<
             ui.spacing_mut().item_spacing.y = GAP;
             if let Some((text, _)) = &routine {
                 let action = offers_undo.then_some("Undo");
-                clicked.undo = card(ui, &t, text, max_width, action, false).is_some();
+                clicked.undo = card(ui, &t, text, max_width, &[action], false).is_some();
             }
             if let Some(held) = &held {
-                match card(ui, &t, &held.text, max_width, held.action.map(Action::label), true) {
-                    Some(Pressed::Action) => clicked.action = held.action,
+                let labels = [held.action.map(Action::label), held.second.map(Action::label)];
+                match card(ui, &t, &held.text, max_width, &labels, held.second.is_none()) {
+                    Some(Pressed::Action(0)) => clicked.action = held.action,
+                    Some(Pressed::Action(_)) => clicked.action = held.second,
                     Some(Pressed::Dismiss) => clicked.dismiss = true,
                     None => {}
                 }
@@ -167,18 +193,19 @@ struct Clicked {
     dismiss: bool,
 }
 
-/// A button pressed on a card: its action, or its dismiss ×.
+/// A button pressed on a card: one of its actions (by position), or its dismiss ×.
 enum Pressed {
-    Action,
+    Action(usize),
     Dismiss,
 }
 
-/// One message: its text, wrapped within `max_width` less its buttons, then the `action` button
-/// and, when `dismissable`, a × button.
-fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, action: Option<&str>, dismissable: bool) -> Option<Pressed> {
+/// One message: its text, wrapped within `max_width` less its buttons, then the `actions`
+/// buttons and, when `dismissable`, a × button.
+fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, actions: &[Option<&str>], dismissable: bool) -> Option<Pressed> {
     let pad = egui::Margin::symmetric(GAP_LARGE as i8, (GAP / 2.0) as i8);
     let close = if dismissable { BUTTON_HEIGHT + GAP } else { 0.0 };
-    let reserved = action.map_or(0.0, |label| look::Button::secondary(look::ButtonSize::Compact, label).width(ui) + GAP) + close + pad.sum().x;
+    let buttons: f32 = actions.iter().flatten().map(|label| look::Button::secondary(look::ButtonSize::Compact, label).width(ui) + GAP).sum();
+    let reserved = buttons + close + pad.sum().x;
     let wrap = (max_width - reserved).max(BUTTON_HEIGHT);
     let galley = ui.painter().layout(text.to_owned(), theme::regular(TEXT_SIZE), t.text, wrap);
     let mut pressed = None;
@@ -187,10 +214,12 @@ fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, action: Optio
             ui.spacing_mut().item_spacing.x = GAP;
             ui.set_min_height(BUTTON_HEIGHT);
             ui.add(egui::Label::new(galley).selectable(false));
-            if let Some(label) = action
-                && look::button_secondary(ui, look::ButtonSize::Compact, label).clicked()
-            {
-                pressed = Some(Pressed::Action);
+            for (index, label) in actions.iter().enumerate() {
+                if let Some(label) = label
+                    && look::button_secondary(ui, look::ButtonSize::Compact, label).clicked()
+                {
+                    pressed = Some(Pressed::Action(index));
+                }
             }
             if dismissable && look::icon_button(ui, "x", BUTTON_HEIGHT, false, "Dismiss", None).clicked() {
                 pressed = Some(Pressed::Dismiss);

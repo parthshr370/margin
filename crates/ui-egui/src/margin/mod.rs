@@ -31,6 +31,7 @@ pub mod pagecolor;
 pub mod pages;
 pub mod rail;
 pub mod reading;
+pub mod reload;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod saves;
 pub mod saving;
@@ -45,6 +46,8 @@ pub mod sidebar;
 pub mod stats;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stats_sheet;
+pub mod synctex;
+pub mod tabs;
 pub mod toast;
 pub mod tools;
 pub mod trim;
@@ -72,6 +75,9 @@ pub struct ReaderChrome {
     before_find: Option<(SidebarTab, bool)>,
     /// Nothing was restored from a previous run: the first `sync` applies `ui.sidebar`.
     first_start: bool,
+    /// Each document's sidebar tab, kept while another document shows (a search's Find tab is
+    /// kept as the tab it replaced).
+    doc_tabs: std::collections::HashMap<pdfcraft_engine::DocId, SidebarTab>,
     /// The sidebar has been drawn once this run ([`Self::start_narrow`] decided).
     start_seen: bool,
     /// A narrow window closed the sidebar at start, not the reader: it is saved as open, and
@@ -92,6 +98,7 @@ impl Default for ReaderChrome {
             synced_doc: None,
             before_find: None,
             first_start: true,
+            doc_tabs: Default::default(),
             start_seen: false,
             closed_for_narrow_start: false,
             notices: toast::Notices::default(),
@@ -273,6 +280,7 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
         | marks::SAVE_COPY_ID => return marks::run(app, id),
         #[cfg(not(target_arch = "wasm32"))]
         "library.open" | "library.search" | "app.stats" => return library::run(app, id),
+        "view.tab.next" | "view.tab.prev" | "view.tab.go" => return tabs::run(app, id, args),
         _ => return false,
     }
     true
@@ -318,6 +326,8 @@ pub(crate) fn sync(app: &mut PdfCraftApp) {
     let doc = app.active_ids().map(|(_, id)| id);
     let chrome = &mut app.margin_chrome;
     if doc != chrome.synced_doc {
+        // Each document comes back on its own sidebar tab (`tabs`).
+        tabs::switch_sidebar_tab(chrome, &app.views, doc);
         // PdfCraft opens a document on Comments or Bookmarks when it has them; that is not the
         // reader's choice, so the tab stays.
         chrome.synced_doc = doc;
@@ -386,6 +396,9 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
             }
             crate::canvas::document_area(app, i, ui);
             marks::paint(app, ui, i);
+            if !dismissing {
+                synctex::inverse_click(app, ui.ctx(), i);
+            }
             selection::show(app, ui.ctx(), i, ui.clip_rect());
             scan_prompt::show(app, ui.ctx(), i);
         }

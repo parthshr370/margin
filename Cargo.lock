@@ -4075,6 +4075,7 @@ name = "pdfcraft-engine"
 version = "0.6.0"
 dependencies = [
  "chrono",
+ "flate2",
  "icu_properties",
  "idna",
  "image",

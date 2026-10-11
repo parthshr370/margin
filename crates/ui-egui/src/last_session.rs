@@ -122,7 +122,10 @@ impl PdfCraftApp {
                 if self.views.len() > before
                     && let Some(view) = self.views.last_mut()
                 {
-                    view.go_to_page(f.page);
+                    // Margin's sidecar already put it at the exact spot on that page.
+                    if self.flavor != crate::Flavor::Margin || !crate::margin::reading::has_saved_place(view) {
+                        view.go_to_page(f.page);
+                    }
                     if last.active.as_ref() == Some(&f.path) {
                         active = Some(self.views.len() - 1);
                     }
