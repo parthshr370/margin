@@ -181,6 +181,9 @@ pub struct Bookmark {
     /// label, "" for none
     #[serde(default)]
     pub name: String,
+    /// RFC 3339 UTC of the last rename, for merging two writers' copies
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
     /// RFC 3339 UTC
     pub created: String,
     /// fields from newer versions, kept on rewrite
