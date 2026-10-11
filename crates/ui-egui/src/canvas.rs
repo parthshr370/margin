@@ -2701,7 +2701,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             };
                             hover_text = Some((p, label));
                         }
-                        if resp.clicked() && tool == QuickTool::Select && !consumed {
+                        // In Margin the SyncTeX click opens the source line instead (`margin::synctex`).
+                        let synctex_click = || {
+                            flavor == crate::Flavor::Margin
+                                && crate::margin::synctex::claims_click(
+                                    app.margin_keys.settings().reader.synctex_click,
+                                    ui.input(|input| input.modifiers),
+                                    doc.path.as_deref(),
+                                )
+                        };
+                        if resp.clicked() && tool == QuickTool::Select && !consumed && !synctex_click() {
                             clicked_link = Some(l.target.clone());
                         }
                     }

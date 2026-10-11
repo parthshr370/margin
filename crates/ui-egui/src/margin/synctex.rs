@@ -473,6 +473,12 @@ pub(crate) fn inverse_click(app: &mut PdfCraftApp, ctx: &egui::Context, index: u
     app.margin_synctex.queued.push(Query::Inverse { doc: view.id, page, x, y });
 }
 
+/// Whether a click with `modifiers` on `pdf`'s pages is SyncTeX's: `reader.synctex_click` is held
+/// and the PDF has a SyncTeX file. The canvas then doesn't also follow a link under the pointer.
+pub(crate) fn claims_click(click: margin_config::SynctexClick, modifiers: egui::Modifiers, pdf: Option<&str>) -> bool {
+    click_held(click, modifiers) && pdf.is_some_and(|pdf| synctex::file_for(Path::new(pdf)).is_some())
+}
+
 fn click_held(click: margin_config::SynctexClick, modifiers: egui::Modifiers) -> bool {
     use margin_config::SynctexClick as C;
     match click {
