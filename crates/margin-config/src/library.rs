@@ -21,8 +21,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::store;
 use crate::{Locator, Sidecar};
+use crate::{library_schema, migrate, store};
 
 /// The library database inside `<data>`.
 pub const LIBRARY_DB: &str = "library.sqlite";
@@ -32,8 +32,6 @@ pub const THUMBS_DIR: &str = "cache/thumbs";
 pub const COVER_WIDTH: u32 = 240;
 /// Covers are small, so a modest JPEG quality is invisible at that size.
 const COVER_QUALITY: u8 = 80;
-/// The schema version (`PRAGMA user_version`).
-const SCHEMA_VERSION: i64 = 1;
 /// Folder levels a scan descends.
 const MAX_DEPTH: usize = 16;
 /// Directory entries a scan reads in total, so a huge tree can't stall it.
@@ -166,52 +164,12 @@ pub(crate) fn configure(conn: &Connection) -> Result<(), String> {
     conn.pragma_update(None, "foreign_keys", "ON").map_err(db_err)
 }
 
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS books (
-    id INTEGER PRIMARY KEY,
-    path TEXT NOT NULL UNIQUE,
-    fingerprint TEXT NOT NULL,
-    title TEXT NOT NULL,
-    author TEXT NOT NULL DEFAULT '',
-    pages INTEGER NOT NULL DEFAULT 0,
-    size INTEGER NOT NULL DEFAULT 0,
-    mtime INTEGER NOT NULL DEFAULT 0,
-    added INTEGER NOT NULL,
-    last_opened INTEGER,
-    progress REAL NOT NULL DEFAULT 0,
-    page INTEGER NOT NULL DEFAULT 0,
-    finished INTEGER NOT NULL DEFAULT 0,
-    removed INTEGER NOT NULL DEFAULT 0,
-    missing INTEGER NOT NULL DEFAULT 0,
-    cover INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS books_fingerprint ON books(fingerprint);
-CREATE TABLE IF NOT EXISTS folders (
-    path TEXT PRIMARY KEY,
-    last_scan INTEGER
-);
-CREATE TABLE IF NOT EXISTS collections (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    created INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS collection_books (
-    collection INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-    book INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
-    PRIMARY KEY (collection, book)
-);
-";
-
 fn open_connection(data: &Path) -> Result<Connection, String> {
     std::fs::create_dir_all(data).map_err(|err| format!("can't create {}: {err}", data.display()))?;
-    let conn = Connection::open(data.join(LIBRARY_DB)).map_err(db_err)?;
+    let path = data.join(LIBRARY_DB);
+    let conn = Connection::open(&path).map_err(db_err)?;
     configure(&conn)?;
-    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).map_err(db_err)?;
-    if version > SCHEMA_VERSION {
-        return Err(format!("library database: written by a newer Margin (schema {version}); not changed"));
-    }
-    conn.execute_batch(SCHEMA).map_err(db_err)?;
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION).map_err(db_err)?;
+    migrate::upgrade(&conn, &path, &migrate::Schema { name: "library database", steps: library_schema::STEPS })?;
     Ok(conn)
 }
 

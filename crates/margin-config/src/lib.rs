@@ -27,7 +27,11 @@ mod keymap;
 mod keystroke;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod library;
+#[cfg(not(target_arch = "wasm32"))]
+mod library_schema;
 mod load;
+#[cfg(not(target_arch = "wasm32"))]
+mod migrate;
 mod problem;
 mod profile;
 mod registry;
