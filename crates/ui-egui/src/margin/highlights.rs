@@ -1011,7 +1011,14 @@ fn act(ctx: &egui::Context, action: Action, input: &CardInput<'_>, view: &mut Do
         (Entry::Pdf(page, index), Action::OpenInObsidian) => view.comments.notes.ask(ctx, Request::Open(Some((*page, *index)))),
         (Entry::Pdf(page, index), Action::Color(i)) => {
             if let Some(color) = input.shared.notes.colors.get(i) {
-                out.edit = Some(Edit::StyleAnnotation { page: *page, index: *index, color: Some(color.rgb_f64()), opacity: None, width: None, endings: None });
+                out.edit = Some(Edit::StyleAnnotation {
+                    page: *page,
+                    index: *index,
+                    color: Some(color.rgb_f64()),
+                    opacity: None,
+                    width: None,
+                    endings: None,
+                });
             }
         }
         (Entry::Pdf(page, index), Action::EditNote) => view.comments.editing = Some((*page, *index, row.note.clone().unwrap_or_default())),

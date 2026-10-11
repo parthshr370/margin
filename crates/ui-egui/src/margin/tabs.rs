@@ -252,7 +252,9 @@ fn status_word(status: SaveStatus) -> Option<&'static str> {
 fn dot_color(t: &Tokens, status: SaveStatus) -> Option<Color32> {
     match status {
         SaveStatus::Saving => Some(t.text_faint),
-        SaveStatus::Unsaved | SaveStatus::Failed | SaveStatus::ReadOnly { dirty: true, .. } | SaveStatus::Signed { dirty: true, .. } => Some(t.accent),
+        SaveStatus::Unsaved | SaveStatus::Failed | SaveStatus::ReadOnly { dirty: true, .. } | SaveStatus::Signed { dirty: true, .. } => {
+            Some(t.accent)
+        }
         _ => None,
     }
 }
