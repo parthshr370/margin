@@ -100,6 +100,18 @@ fn settings_rows_write_the_preferences() {
 
     // Acrobat JavaScript: the session's switch.
     let javascript = h.state().session.javascript();
+    // Below the Library and Notes sections: the reader scrolls the body down to it.
+    const SCROLL_TO_END: f32 = -4000.0;
+    let body = h.get_by_role_and_label(Role::TextInput, "Your name").rect().center();
+    h.hover_at(body);
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, SCROLL_TO_END),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(3);
     h.get_by_role_and_label(Role::CheckBox, "Acrobat JavaScript").click();
     h.run_steps(2);
     assert_eq!(h.state().session.javascript(), !javascript);

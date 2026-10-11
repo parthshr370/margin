@@ -394,9 +394,15 @@ pub(crate) fn dispatch(app: &mut PdfCraftApp, ctx: &egui::Context) {
     scroll_step::drive(app, ctx);
 }
 
-fn resolve_keys(app: &mut PdfCraftApp, ctx: &egui::Context) {
+/// Loads the settings and keymap on the first Margin frame and reloads them after a change on
+/// disk. Every frame, before the shortcuts: a modal dialog stops key dispatch, not the settings it
+/// may be showing (a Settings window open on the first frame must read and write real files).
+pub(crate) fn load(app: &mut PdfCraftApp, ctx: &egui::Context) {
     ensure_loaded(app, ctx);
     poll(app, ctx);
+}
+
+fn resolve_keys(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let stack = context_stack(app, ctx);
     let os = Os::current();
     let now = ctx.input(|input| input.time);
