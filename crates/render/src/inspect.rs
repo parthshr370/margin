@@ -27,6 +27,9 @@ const MAX_LAYER_STATE: usize = 1024;
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
 
+/// Destination aliases and indirect values can form hostile cycles.
+const MAX_DESTINATION_DEPTH: u32 = 16;
+
 fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
 }
@@ -137,13 +140,34 @@ impl PageInfo {
 #[derive(Clone, Debug)]
 pub struct Link {
     pub page: usize,
+    /// Index in the page's `/Annots`, shared with editable links.
+    pub index: usize,
     pub rect: [f32; 4],
     pub target: LinkTarget,
 }
 
+/// An internal destination (ISO 32000-2 §12.3.2.2). Coordinates are in PDF user
+/// space, not displayed-page coordinates; `None` preserves a PDF `null` value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Destination {
+    pub page: usize,
+    pub top: Option<f32>,
+    pub left: Option<f32>,
+    /// An explicit XYZ zoom; zero and null mean leave the zoom unchanged.
+    pub zoom: Option<f32>,
+}
+
+impl Destination {
+    /// Destination point in displayed-page points (after the PDF's rotation).
+    /// A missing coordinate falls back to the crop box's top-left.
+    pub fn view_position(self, page: &PageInfo) -> [f32; 2] {
+        page.user_to_view(self.left.unwrap_or(page.crop[0]), self.top.unwrap_or(page.crop[3]))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkTarget {
-    Page(usize),
+    Page(Destination),
     Uri(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
@@ -167,6 +191,7 @@ pub enum LayerOp {
 pub struct OutlineItem {
     pub title: String,
     pub page: Option<usize>,
+    pub destination: Option<Destination>,
     pub children: Vec<OutlineItem>,
     pub open: bool,
 }
@@ -449,16 +474,41 @@ impl<'a> Inspector<'a> {
 
     // ── destinations ────────────────────────────────────────────────────────────────────────
 
-    fn dest_page(&self, dest: &Object, depth: u32) -> Option<usize> {
-        if depth > 8 {
+    fn destination(&self, dest: &Object, depth: u32) -> Option<Destination> {
+        if depth > MAX_DESTINATION_DEPTH {
             return None;
         }
-        match self.resolve(dest) {
-            Object::Array(a) => a.first().and_then(|p| self.page_of(p)),
-            Object::Dictionary(d) => d.get(b"D").ok().and_then(|d| self.dest_page(d, depth + 1)),
-            Object::String(key, _) | Object::Name(key) => self.named_dest(key).and_then(|d| self.dest_page(d, depth + 1)),
+        match dest {
+            Object::Reference(id) => self.doc.objects.get(id).and_then(|d| self.destination(d, depth + 1)),
+            Object::Array(a) => {
+                let page = self.page_of(a.first()?).filter(|p| *p < self.page_index.len())?;
+                let number = |i| a.get(i).and_then(|o| self.dest_number(o, 0));
+                let (left, top, zoom) = match a.get(1).and_then(|o| o.as_name().ok()) {
+                    Some(b"XYZ") => (number(2), number(3), number(4).filter(|z| *z > 0.0)),
+                    Some(b"FitH" | b"FitBH") => (None, number(2), None),
+                    Some(b"FitV" | b"FitBV") => (number(2), None, None),
+                    Some(b"FitR") => (number(2), number(5), None),
+                    _ => (None, None, None),
+                };
+                Some(Destination { page, top, left, zoom })
+            }
+            Object::Dictionary(d) => d.get(b"D").ok().and_then(|d| self.destination(d, depth + 1)),
+            Object::String(key, _) | Object::Name(key) => self.named_dest(key).and_then(|d| self.destination(d, depth + 1)),
             _ => None,
         }
+    }
+
+    fn dest_number(&self, value: &Object, depth: u32) -> Option<f32> {
+        if depth > MAX_DESTINATION_DEPTH {
+            return None;
+        }
+        let n = match value {
+            Object::Reference(id) => return self.doc.objects.get(id).and_then(|o| self.dest_number(o, depth + 1)),
+            Object::Integer(n) => *n as f32,
+            Object::Real(n) => *n,
+            _ => return None,
+        };
+        n.is_finite().then_some(n)
     }
 
     fn named_dest(&self, key: &[u8]) -> Option<&'a Object> {
@@ -531,17 +581,17 @@ impl<'a> Inspector<'a> {
                 break; // cycle
             }
             let Some(d) = self.dict(o) else { break };
-            let page = d
-                .get(b"Dest")
-                .ok()
-                .and_then(|dest| self.dest_page(dest, 0))
-                .or_else(|| d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.dest_page(dest, 0)));
+            let destination =
+                d.get(b"Dest").ok().and_then(|dest| self.destination(dest, 0)).or_else(|| {
+                    d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.destination(dest, 0))
+                });
+            let page = destination.map(|d| d.page);
             let children = match (d.get(b"First").ok(), depth < 32) {
                 (Some(f), true) => self.outline_siblings(f, seen, depth + 1),
                 _ => Vec::new(),
             };
             let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
-            items.push(OutlineItem { title: self.text(d, b"Title").unwrap_or_default(), page, children, open });
+            items.push(OutlineItem { title: self.text(d, b"Title").unwrap_or_default(), page, destination, children, open });
             cur = d.get(b"Next").ok();
             if items.len() > 100_000 {
                 break;
@@ -609,7 +659,7 @@ impl<'a> Inspector<'a> {
                     info.attachments.push(self.attachment(name, fs, AttachmentSource::Annotation { page, index }));
                 }
                 if subtype == "Link" {
-                    if let Some(link) = self.link(page, d) {
+                    if let Some(link) = self.link(page, index, d) {
                         if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                             info.has_javascript = true;
                         }
@@ -669,14 +719,14 @@ impl<'a> Inspector<'a> {
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
     }
 
-    fn link(&self, page: usize, d: &Dictionary) -> Option<Link> {
+    fn link(&self, page: usize, index: usize, d: &Dictionary) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
-            LinkTarget::Page(self.dest_page(dest, 0)?)
+            LinkTarget::Page(self.destination(dest, 0)?)
         } else {
             let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
             match self.name(a, b"S").as_deref() {
-                Some("GoTo") => LinkTarget::Page(self.dest_page(a.get(b"D").ok()?, 0)?),
+                Some("GoTo") => LinkTarget::Page(self.destination(a.get(b"D").ok()?, 0)?),
                 Some("URI") => {
                     LinkTarget::Uri(a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok()).map(|b| String::from_utf8_lossy(b).into_owned())?)
                 }
@@ -685,7 +735,7 @@ impl<'a> Inspector<'a> {
                 None => return None,
             }
         };
-        Some(Link { page, rect, target })
+        Some(Link { page, index, rect, target })
     }
 
     /// A set-OCG-state action: `/State` is `ON`, `OFF` or `Toggle`, each followed by the groups
@@ -1003,6 +1053,66 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn destinations_preserve_explicit_named_and_outline_positions() {
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Dests << /legacy << /D [3 0 R /FitH 120] >> /cycle /cycle >> /Names << /Dests << /Names [(citation) [3 0 R /XYZ 12 150 1.5]] >> >> /Outlines 9 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Subtype /Link /Rect [0 0 10 10] /Dest [3 0 R /XYZ 10 160 2] >> endobj
+5 0 obj << /Subtype /Link /Rect [10 0 20 10] /A << /S /GoTo /D (citation) >> >> endobj
+6 0 obj << /Subtype /Link /Rect [20 0 30 10] /Dest /legacy >> endobj
+7 0 obj << /Subtype /Link /Rect [30 0 40 10] /Dest [3 0 R /XYZ null null 0] >> endobj
+8 0 obj << /Subtype /Link /Rect [40 0 50 10] /Dest /cycle >> endobj
+9 0 obj << /First 10 0 R >> endobj
+10 0 obj << /Title (Citation) /Dest (citation) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let info = inspect(Arc::new(pdf.to_vec()), None).expect("synthetic PDF opens");
+        let explicit = Destination { page: 0, left: Some(10.0), top: Some(160.0), zoom: Some(2.0) };
+        let named = Destination { page: 0, left: Some(12.0), top: Some(150.0), zoom: Some(1.5) };
+        assert_eq!(info.links.len(), 4, "cyclic destination is ignored");
+        assert_eq!(info.links[0].target, LinkTarget::Page(explicit));
+        assert_eq!(info.links[1].target, LinkTarget::Page(named));
+        assert_eq!(info.links[2].target, LinkTarget::Page(Destination { page: 0, left: None, top: Some(120.0), zoom: None }));
+        assert_eq!(info.links[3].target, LinkTarget::Page(Destination { page: 0, left: None, top: None, zoom: None }));
+        assert_eq!(info.outline[0].destination, Some(named));
+        assert_eq!(named.view_position(&info.pages[0]), [12.0, 50.0]);
+    }
+
+    #[test]
+    fn hostile_destination_values_and_reference_cycles_are_bounded() {
+        use lopdf::dictionary;
+        let mut doc = Document::with_version("1.7");
+        let pages = doc.new_object_id();
+        let page =
+            doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()] });
+        doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }.into());
+        let cycle = doc.new_object_id();
+        doc.objects.insert(cycle, Object::Reference(cycle));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        let inspector = Inspector::new(&doc);
+        let parse = |mode: &str, values: Vec<Object>| {
+            let mut array = vec![page.into(), Object::Name(mode.as_bytes().to_vec())];
+            array.extend(values);
+            inspector.destination(&Object::Array(array), 0)
+        };
+        assert_eq!(
+            parse("XYZ", vec![Object::Boolean(true), Object::Real(f32::NAN), (-1).into()]),
+            Some(Destination { page: 0, left: None, top: None, zoom: None })
+        );
+        assert_eq!(
+            parse("XYZ", vec![cycle.into(), Object::Real(f32::INFINITY), Object::Real(f32::NEG_INFINITY)]),
+            Some(Destination { page: 0, left: None, top: None, zoom: None })
+        );
+        assert_eq!(parse("FitBH", vec![80.into()]).unwrap().top, Some(80.0));
+        assert_eq!(parse("FitR", vec![10.into(), 20.into(), 100.into(), 180.into()]).unwrap().top, Some(180.0));
+        assert_eq!(inspector.destination(&Object::Reference(cycle), 0), None);
+        assert_eq!(inspector.destination(&Object::Array(vec![(-1).into(), Object::Name(b"Fit".to_vec())]), 0), None);
+        assert_eq!(inspector.destination(&Object::Array(vec![i64::MAX.into(), Object::Name(b"Fit".to_vec())]), 0), None);
+    }
+
     #[test]
     fn png_predictor_rows_longer_than_the_data_are_refused_before_allocating() {
         // Vendored lopdf patch: a fuzzed `/Columns 4294967295` allocated two 4 GiB rows before

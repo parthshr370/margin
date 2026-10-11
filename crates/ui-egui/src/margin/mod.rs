@@ -22,6 +22,7 @@ pub mod keys;
 pub mod keysheet;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod library;
+pub mod links;
 pub mod look;
 pub mod motion;
 pub mod obsidian;
@@ -436,7 +437,7 @@ mod tests {
     use pdfcraft_render::OutlineItem;
 
     fn item(title: &str, page: Option<usize>, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page, children, open: false }
+        OutlineItem { title: title.into(), page, destination: None, children, open: false }
     }
 
     #[test]
