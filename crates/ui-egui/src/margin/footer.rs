@@ -34,9 +34,6 @@ const PAGE_INPUT_CHARS: usize = 64;
 const HINT_TEXT_CHARS: usize = 16;
 
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    if app.margin_chrome.focus_mode {
-        return;
-    }
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
     let detail = reading_detail(app, index);
@@ -116,42 +113,30 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// `reader.time_left`: the time the rest of the document takes at the reader's recorded pace.
+/// Nothing until reading statistics have a pace (the header already names the section).
+#[cfg(not(target_arch = "wasm32"))]
 fn reading_detail(app: &mut PdfCraftApp, index: usize) -> Option<String> {
     if !app.margin_keys.settings().reader.time_left {
         return None;
     }
     let view = app.views.get(index)?;
     let (id, current) = (view.id, view.current);
-    #[cfg(not(target_arch = "wasm32"))]
-    let seconds = {
-        let pages = app.session.get(id)?.info.pages.len();
-        let left = u32::try_from(pages.saturating_sub(current.saturating_add(1))).ok()?;
-        let book = app.margin_stats.book(id).map(str::to_owned);
-        book.and_then(|book| super::stats::summary(app, &book)).and_then(|summary| summary.seconds_left(left))
-    };
-    #[cfg(target_arch = "wasm32")]
-    let seconds = None;
-    let outline = &app.session.get(id)?.info.outline;
-    let section = super::current_section(outline, current).and_then(|path| super::outline_at(outline, &path)).map(|entry| entry.title.as_str());
-    detail_text(section, seconds)
+    let pages = app.session.get(id)?.info.pages.len();
+    let left = u32::try_from(pages.saturating_sub(current.saturating_add(1))).ok()?;
+    let book = app.margin_stats.book(id)?.to_owned();
+    time_left_text(super::stats::summary(app, &book)?.seconds_left(left)?)
 }
 
-fn detail_text(section: Option<&str>, seconds: Option<f64>) -> Option<String> {
-    let section = section.map(str::trim).filter(|section| !section.is_empty());
-    #[cfg(not(target_arch = "wasm32"))]
-    let remaining = seconds
-        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-        .map(|seconds| format!("~{} left", margin_config::stats::format_duration(seconds)));
-    #[cfg(target_arch = "wasm32")]
-    let remaining: Option<String> = {
-        let _ = seconds;
-        None
-    };
-    match (section, remaining) {
-        (Some(section), Some(remaining)) => Some(format!("{section} · {remaining}")),
-        (Some(section), None) => Some(section.to_owned()),
-        (None, remaining) => remaining,
-    }
+/// Statistics are desktop-only, so a browser never has a pace.
+#[cfg(target_arch = "wasm32")]
+fn reading_detail(_app: &mut PdfCraftApp, _index: usize) -> Option<String> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn time_left_text(seconds: f64) -> Option<String> {
+    (seconds.is_finite() && seconds >= 0.0).then(|| format!("~{} left", margin_config::stats::format_duration(seconds)))
 }
 
 /// The page field and what follows it: the current page's label (a page label such as `iv`, or
@@ -316,22 +301,4 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32
         command = Some(("view.fit.toggle_width", Value::Null));
     }
     command
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn footer_detail_never_invents_a_pace_or_empty_section() {
-        assert_eq!(detail_text(None, None), None);
-        assert_eq!(detail_text(Some("  "), None), None);
-        assert_eq!(detail_text(Some(" Chapter 2 "), None).as_deref(), Some("Chapter 2"));
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            assert_eq!(detail_text(Some("Chapter 2"), Some(120.0)).as_deref(), Some("Chapter 2 · ~2m left"));
-            assert_eq!(detail_text(None, Some(f64::NAN)), None);
-            assert_eq!(detail_text(None, Some(-1.0)), None);
-        }
-    }
 }

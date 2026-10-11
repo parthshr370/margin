@@ -203,7 +203,7 @@ pub struct Reader {
     pub link_preview: bool,
     /// show the colour/note menu when text is selected
     pub selection_popover: bool,
-    /// footer shows the current section and estimated reading time left
+    /// footer estimates the time left in the document from your recorded reading pace
     pub time_left: bool,
     /// reload when the file changes on disk; page, zoom and colour kept
     pub reload_on_change: bool,
