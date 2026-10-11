@@ -2990,3 +2990,78 @@ fn recovered_user_passwords_reach_the_renderer_byte_for_byte() {
     assert_eq!(crate::renderer_password(&[0x9A, b'l', 0x9A, b'k', 0xA0]), "ılık€");
     assert_eq!(crate::renderer_password(&[0xC7, b'o', b'k']), "Çok");
 }
+
+#[test]
+fn background_save_keeps_newer_edits_and_reverts_to_written_revision() {
+    let (mut session, id) = session_with(2);
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "written".into() }).unwrap();
+    let snapshot = session.save_snapshot(id).unwrap();
+    let saved = snapshot.bytes().unwrap();
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "newer".into() }).unwrap();
+    let written = snapshot.written(saved.clone());
+    assert_eq!(session.acknowledge_save(snapshot, written, None).unwrap(), SaveAck::Superseded);
+    assert!(session.get(id).unwrap().dirty);
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("newer"));
+    assert!(Arc::ptr_eq(&session.get(id).unwrap().saved_bytes(), &saved));
+    session.revert(id).unwrap();
+    assert!(!session.get(id).unwrap().dirty);
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("written"));
+}
+
+#[test]
+fn background_saves_coalesce_one_increment_without_losing_original_bytes() {
+    let (mut session, id) = session_with(2);
+    let original = session.get(id).unwrap().bytes.clone();
+    let original_revisions = pdfcraft_cos::Document::open(original.clone()).unwrap().revisions().len();
+    for title in ["first", "second", "third"] {
+        session.apply(id, Edit::SetInfo { key: "Title".into(), value: title.into() }).unwrap();
+        let snapshot = session.save_snapshot(id).unwrap();
+        let saved = snapshot.bytes().unwrap();
+        assert!(saved.starts_with(&original));
+        let reopened = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+        assert_eq!(reopened.revisions().len(), original_revisions + 1);
+        let written = snapshot.written(saved);
+        assert_eq!(session.acknowledge_save(snapshot, written, None).unwrap(), SaveAck::Saved);
+        assert!(!session.get(id).unwrap().dirty);
+    }
+    session.undo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("second"));
+    assert!(session.get(id).unwrap().dirty);
+}
+
+#[test]
+fn a_full_rewrite_save_continues_editing_from_the_written_file() {
+    let mut bytes = fixture(2);
+    let xref = bytes.windows(5).position(|window| window == b"xref\n").unwrap();
+    bytes.truncate(xref);
+    bytes.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("broken.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(!session.get(id).unwrap().repair_log().is_empty(), "the fixture needs repair");
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "rewritten".into() }).unwrap();
+    let snapshot = session.save_snapshot(id).unwrap();
+    let saved = snapshot.bytes().unwrap();
+    let written = snapshot.written(saved.clone());
+    assert_eq!(session.acknowledge_save(snapshot, written, None).unwrap(), SaveAck::Reopened);
+    let doc = session.get(id).unwrap();
+    assert!(!doc.dirty && doc.repair_log().is_empty(), "editing continues from the clean written file");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("rewritten"));
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "appended".into() }).unwrap();
+    let next = session.save_snapshot(id).unwrap().bytes().unwrap();
+    assert!(next.starts_with(&saved), "later saves append to the written file instead of rewriting it");
+}
+
+#[test]
+fn configured_undo_depth_trims_existing_history_and_allows_zero() {
+    let (mut session, id) = session_with(1);
+    for title in ["first", "second", "third"] {
+        session.apply(id, Edit::SetInfo { key: "Title".into(), value: title.into() }).unwrap();
+    }
+    session.set_undo_limit(id, 1).unwrap();
+    session.undo(id).unwrap();
+    assert!(matches!(session.undo(id), Err(EditError::NothingToUndo)));
+    session.set_undo_limit(id, 0).unwrap();
+    assert!(matches!(session.redo(id), Err(EditError::NothingToRedo)));
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "fourth".into() }).unwrap();
+    assert!(matches!(session.undo(id), Err(EditError::NothingToUndo)));
+}

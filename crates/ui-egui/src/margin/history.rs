@@ -23,6 +23,9 @@ pub(crate) const PILL_LIFT: f32 = 20.0;
 /// The pill's padding around its button, and the shortcut's text size.
 const PILL_PAD: f32 = 4.0;
 const SHORTCUT_TEXT: f32 = 11.0;
+/// Margin's default and PdfCraft's fixed navigation depths.
+const MARGIN_DEPTH: usize = 100;
+const PDFCRAFT_DEPTH: usize = 200;
 
 /// The exact place a history entry returns to: the reading spot, and the zoom and fit it was
 /// read at.
@@ -48,11 +51,30 @@ pub(crate) struct History {
     /// The back stack's length and newest entry last frame, to tell a jump from Back.
     seen_len: usize,
     seen_top: Option<ViewPlace>,
+    depth: Option<usize>,
 }
 
 /// Whether `view` keeps exact places (Margin) rather than PdfCraft's pages.
 pub(crate) fn exact(view: &DocView) -> bool {
     view.margin.history.exact
+}
+
+pub(crate) fn depth(view: &DocView) -> usize {
+    if exact(view) { view.margin.history.depth.unwrap_or(MARGIN_DEPTH) } else { PDFCRAFT_DEPTH }
+}
+
+/// A settings reload can shrink either direction; zero disables navigation history.
+pub(crate) fn set_depth(view: &mut DocView, requested: u32) {
+    view.margin.history.depth = Some(usize::try_from(requested).unwrap_or(MARGIN_DEPTH));
+    let limit = depth(view);
+    cap(&mut view.back, limit);
+    cap(&mut view.forward, limit);
+}
+
+pub(crate) fn cap(stack: &mut Vec<ViewPlace>, limit: usize) {
+    let excess = stack.len().saturating_sub(limit);
+    // `excess` cannot exceed this vector's length.
+    drop(stack.drain(..excess));
 }
 
 /// The exact place the reader is at, in Margin.
@@ -84,7 +106,9 @@ pub(crate) fn search_jump(view: &mut DocView) {
 /// above it.
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) -> Option<f32> {
     let now = ctx.input(|i| i.time);
+    let requested_depth = app.margin_keys.settings().reader.back_stack;
     for view in &mut app.views {
+        set_depth(view, requested_depth);
         if view.find.is_none() {
             view.margin.history.search_origin_kept = false;
         }
@@ -107,17 +131,21 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) -> Option<f32> {
             view.view_history(true);
         }
     }
-    pill(app, ctx, index, now)
+    if app.margin_chrome.focus_mode { None } else { pill(app, ctx, index, now) }
 }
 
 /// "‹ Back to p. N  Alt+←" above the footer, for [`PILL_SECS`] after a jump; it fades in and out.
 /// Returns its top edge while it shows.
 fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> Option<f32> {
     let key = look::shortcut(app, "reader.back");
+    let enabled = app.margin_keys.settings().reader.back_pill;
+    if !enabled {
+        return None;
+    }
     let view = app.views.get_mut(index)?;
     let doc = app.session.get(view.id)?;
     let left = view.margin.history.pill_since.map_or(0.0, |since| PILL_SECS - (now - since));
-    let showing = left > 0.0 && !view.back.is_empty();
+    let showing = enabled && left > 0.0 && !view.back.is_empty();
     if !showing {
         view.margin.history.pill_since = None;
     }
@@ -163,4 +191,20 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> O
         view.view_history(false);
     }
     Some(drawn.response.rect.top())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_depth_keeps_recent_entries_and_zero_disables_it() {
+        let mut stack: Vec<ViewPlace> = (0..5).map(|page| ViewPlace { page, exact: None }).collect();
+        cap(&mut stack, 3);
+        assert_eq!(stack.iter().map(|place| place.page).collect::<Vec<_>>(), [2, 3, 4]);
+        cap(&mut stack, 8);
+        assert_eq!(stack.len(), 3);
+        cap(&mut stack, 0);
+        assert!(stack.is_empty());
+    }
 }

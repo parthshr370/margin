@@ -12,20 +12,26 @@ use pdfcraft_ui_egui::{Dialog, Flavor, PdfCraftApp};
 
 /// One 200×300 page.
 fn fixture() -> Vec<u8> {
-    let objs =
-        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>", "<< /Type /Page /Parent 2 0 R >>"];
+    fixture_pages(1)
+}
+
+fn fixture_pages(pages: usize) -> Vec<u8> {
+    let kids = (0..pages).map(|page| format!("{} 0 R", page + 3)).collect::<Vec<_>>().join(" ");
+    let mut objects =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), format!("<< /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 200 300] >>")];
+    objects.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_owned()));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
+    for (index, object) in objects.iter().enumerate() {
         offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
     }
     let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
     out
 }
 
@@ -114,4 +120,46 @@ fn escape_closes_settings() {
     h.run_steps(2);
     assert_eq!(h.state().dialog, None);
     std::fs::remove_dir_all(&config).ok();
+}
+
+#[test]
+fn reader_settings_apply_to_real_views_and_replace_the_rail() {
+    let config = config_dir("runtime-consumers");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join(margin_config::SETTINGS_FILE),
+        r#"{
+        "perf": { "tile_px": 1024 },
+        "view": { "layout": "single", "page_gap_px": 31 },
+        "reader": { "back_stack": 1, "back_pill": false, "time_left": false,
+                    "find": { "case": true, "whole_word": true } },
+        "ui": { "rail": { "side": "left", "items": ["reader.tool.select", "comment.highlight"] } },
+        "stats": { "enabled": false }
+    }"#,
+    )
+    .unwrap();
+    let mut h = margin_harness(config.clone());
+    h.state_mut().dialog = None;
+    h.state_mut().open_bytes("multiple.pdf", None, fixture_pages(3)).unwrap();
+    h.run_steps(4);
+    let view = h.state_mut().views.last_mut().unwrap();
+    assert_eq!(view.page_gap_px, Some(31), "the effective document setting reaches canvas geometry");
+    view.open_find();
+    assert!(view.find.as_ref().is_some_and(|find| find.case_sensitive && find.whole_words));
+    view.go_to_page(1);
+    view.go_to_page(2);
+    assert_eq!(view.back.iter().map(|place| place.page).collect::<Vec<_>>(), [1]);
+    h.run_steps(4);
+    h.get_by_label("Select");
+    h.get_by_label("Highlight text");
+    assert!(h.query_by_label("Area snapshot: copy a region of the page").is_none(), "configured items replace, not append");
+    assert!(h.query_by_label("Underline text").is_none());
+    assert!(h.query_by_label("Back to p. 2").is_none(), "back_pill false suppresses the offer but not history");
+    assert_eq!(h.state().views.last().unwrap().back.len(), 1);
+    std::fs::write(config.join(margin_config::SETTINGS_FILE), r#"{ "ui": { "rail": { "items": [] } } }"#).unwrap();
+    h.state_mut().margin_keys.set_config_dir(config.clone());
+    h.run_steps(4);
+    assert!(h.query_by_label("Select").is_none(), "an empty rail has no floating toolbar");
+    assert!(h.query_by_label("Highlight text").is_none());
+    std::fs::remove_dir_all(config).unwrap();
 }

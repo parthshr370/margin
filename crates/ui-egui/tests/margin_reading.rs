@@ -133,9 +133,24 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     }
 }
 
-/// Run `secs` of app time.
+/// Run `secs` of app time. Each step lets the save worker land a write it was handed: the
+/// worker runs in real time, which app steps don't advance.
 fn wait(h: &mut Harness<'static, PdfCraftApp>, secs: f32) {
-    h.run_steps((secs / STEP_SECS).ceil() as usize);
+    for _ in 0..(secs / STEP_SECS).ceil() as usize {
+        h.run_steps(1);
+        land_saves(h);
+    }
+}
+
+/// Step until no PDF write of the first document is in flight (or 10 s of real time pass).
+fn land_saves(h: &mut Harness<'static, PdfCraftApp>) {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(2);
+    let id = h.state().views[0].id;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().margin_save_pending(id) && std::time::Instant::now() < deadline {
+        std::thread::sleep(POLL);
+        h.run_steps(1);
+    }
 }
 
 fn sidecar_json(place: &Place) -> serde_json::Value {
@@ -490,6 +505,7 @@ fn autosave_off_leaves_the_pdf_to_ctrl_s() {
     assert!(h.query_by_label_contains("Unsaved · ").is_some(), "the footer names the key that saves");
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::S);
     h.run_steps(3);
+    land_saves(&mut h);
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: false }, "Ctrl+S still saves");
 }
 
@@ -532,6 +548,7 @@ fn the_footer_tells_the_truth_about_saving() {
     std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
     h.get_by_label("Save").click();
     h.run_steps(3);
+    land_saves(&mut h);
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: true }, "Save retried");
     assert!(std::fs::read(place.doc()).unwrap().windows(10).any(|w| w == b"/Highlight"));
     drop(h);
@@ -602,4 +619,31 @@ fn read_only_folders_keep_the_sidecar_in_the_data_folder() {
     drop(h);
     let written = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(app(&place).views[0].current, 1, "found again by fingerprint: {written}");
+}
+
+#[test]
+fn disabling_per_document_memory_keeps_bookmarks_but_ignores_and_preserves_view_state() {
+    let place = Place::new("remember-off", "paper.pdf", &paper(5));
+    let mut original = harness(&place);
+    original.state_mut().set_option("page", "3").unwrap();
+    original.state_mut().set_option("zoom", "150").unwrap();
+    reading::toggle_bookmark(&mut original.state_mut().views[0]);
+    settle(&mut original);
+    reading::flush(original.state_mut());
+    let saved = sidecar_json(&place);
+    drop(original);
+    std::fs::write(place.config().join("settings.jsonc"), r#"{ "reader": { "remember_per_document": false } }"#).unwrap();
+    let mut current = harness(&place);
+    assert_eq!(current.state().views[0].current, 0, "the saved page is ignored");
+    assert!(reading::reads(&current.state().views[0]), "global read-fit wins over the saved zoom");
+    assert_eq!(current.state().views[0].margin.bookmarks.len(), 1);
+    current.state_mut().set_option("page", "5").unwrap();
+    current.state_mut().set_option("zoom", "175").unwrap();
+    settle(&mut current);
+    reading::toggle_bookmark(&mut current.state_mut().views[0]);
+    reading::flush(current.state_mut());
+    let rewritten = sidecar_json(&place);
+    assert_eq!(rewritten["progress"], saved["progress"]);
+    assert_eq!(rewritten["settings"], saved["settings"]);
+    assert_eq!(rewritten["bookmarks"].as_array().unwrap().len(), 2);
 }

@@ -29,6 +29,8 @@ pub mod pagecolor;
 pub mod pages;
 pub mod rail;
 pub mod reading;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod saves;
 pub mod saving;
 pub mod scroll_step;
 pub mod scrubber;
@@ -55,6 +57,8 @@ pub struct ReaderChrome {
     pub tab: SidebarTab,
     /// The annotate rail floats over the page.
     pub rail_open: bool,
+    /// Margin's reader-only layout hides chrome without changing the saved sidebar choice.
+    pub focus_mode: bool,
     /// The right panel the chrome last asked for. When `app.right` differs, a command or option
     /// picked a panel since, and the sidebar follows it.
     synced_right: Option<RightPanel>,
@@ -80,6 +84,7 @@ impl Default for ReaderChrome {
             sidebar_open: true,
             tab: SidebarTab::Contents,
             rail_open: true,
+            focus_mode: false,
             synced_right: None,
             synced_doc: None,
             before_find: None,
@@ -229,13 +234,14 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
     app.comments_panel_closed = true;
 }
 
-/// Run a Margin-only action (the keymap's ids): `view.sidebar.toggle`, `view.sidebar.tab` with
-/// `{"tab": "contents" | "highlights" | "pages" | "bookmarks" | "find" | "tools"}`,
-/// `reader.annotate.toggle` (the rail), `reader.bookmark.toggle` (a page bookmark on the current
-/// page), `view.trim.toggle`, and the library's `library.open`, `library.search` and `app.stats`.
-/// Returns `false` for an unknown id or tab.
+/// Run a Margin-only action (the keymap's ids): `view.focus_mode.toggle` (also `view.read_mode`),
+/// `view.sidebar.toggle`, `view.sidebar.tab` with `{"tab": "contents" | "highlights" | "pages" |
+/// "bookmarks" | "find" | "tools"}`, `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
+/// (a page bookmark on the current page), `view.trim.toggle`, and the library's `library.open`,
+/// `library.search` and `app.stats`. Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
+        "view.read_mode" | "view.focus_mode.toggle" => focus::toggle(app),
         "view.sidebar.toggle" => app.margin_chrome.sidebar_open = !app.margin_chrome.sidebar_open,
         "reader.annotate.toggle" => app.margin_chrome.rail_open = !app.margin_chrome.rail_open,
         "view.sidebar.tab" => match args.get("tab").and_then(serde_json::Value::as_str).and_then(SidebarTab::from_key) {
@@ -339,16 +345,17 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     // A click while a popover or menu is open closes it (`look::popover`) and does nothing else:
     // the page must not also clear its selection, follow a link or place a mark.
     let dismissing = egui::Popup::is_any_open(ctx) && ctx.input(|i| i.pointer.any_click());
+    let focus_mode = focus::active(app);
     // The sidebar slides itself in and out (`margin_chrome.sidebar_open`).
-    if app.active.is_some() {
+    if !focus_mode && app.active.is_some() {
         sidebar::show(app, ui);
     }
     // The Library has its own single toolbar (with the app menu), so no reader header over it.
     let library_shown = cfg!(not(target_arch = "wasm32")) && app.active.is_none() && !app.combine_showing();
-    if !library_shown && header::show(app, ui) {
+    if !focus_mode && !library_shown && header::show(app, ui) {
         find::row(app, ui);
     }
-    if app.active.is_some() {
+    if !focus_mode && app.active.is_some() {
         footer::show(app, ui);
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| match app.active {

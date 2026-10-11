@@ -242,6 +242,7 @@ impl PdfCraftApp {
                     None => self.full_screen = on,
                 }
             }
+            "view.read_mode" if self.flavor == crate::Flavor::Margin => crate::margin::focus::toggle(self),
             "view.read_mode" => self.mode = if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read },
             "view.theme" => {
                 let next = if self.theme == ThemeKind::Light { ThemePreference::Dark } else { ThemePreference::Light };
@@ -369,9 +370,10 @@ impl PdfCraftApp {
             }
             "edit.advanced_search" => {
                 if let Some(i) = self.active {
-                    let f = self.views[i].find.get_or_insert_with(Default::default);
-                    f.in_panel = true;
-                    f.focus = true;
+                    self.views[i].open_find();
+                    if let Some(find) = self.views[i].find.as_mut() {
+                        find.in_panel = true;
+                    }
                     self.choose_right_panel(Some(crate::RightPanel::Search));
                 }
             }

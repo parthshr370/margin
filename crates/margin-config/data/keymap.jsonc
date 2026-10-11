@@ -11,7 +11,7 @@
       "secondary-s": "file.save", "secondary-shift-s": "file.save_as", "secondary-p": "print.dialog",
       "secondary-w": "file.close", "secondary-shift-w": "file.close_all", "secondary-d": "file.properties",
       "secondary-z": "edit.undo", "secondary-shift-z": "edit.redo", "secondary-f": "edit.find",
-      "secondary-shift-f": "edit.advanced_search", "secondary-l": "view.full_screen", "ctrl-secondary-h": "view.read_mode",
+      "secondary-shift-f": "edit.advanced_search", "secondary-l": "view.full_screen",
       "secondary-shift-n": "view.focus_page_input", "secondary-b": "bookmark.add",
       "secondary-j": "tools.js_console", "secondary-shift-k": "app.key_context",
       "secondary-shift-o": "library.open", "secondary-shift-t": "app.stats",
@@ -24,9 +24,10 @@
       "secondary-0": ["view.zoom.set", { "percent": 100 }],
       "secondary-1": ["view.sidebar.tab", { "tab": "contents" }], "secondary-2": ["view.sidebar.tab", { "tab": "highlights" }],
       "secondary-3": ["view.sidebar.tab", { "tab": "pages" }], "secondary-4": ["view.sidebar.tab", { "tab": "bookmarks" }],
+      "ctrl-secondary-h": "view.focus_mode.toggle",
       "[": "view.sidebar.toggle", "a": "reader.annotate.toggle", "b": "reader.bookmark.toggle", "shift-t": "view.trim.toggle",
       "secondary-r": "view.rotate.cw", "secondary-shift-r": "view.rotate.ccw",
-      "w": "view.fit.toggle_width", "f": "view.read_mode", "g": "view.focus_page_input",
+      "w": "view.fit.toggle_width", "f": "view.focus_mode.toggle", "g": "view.focus_page_input",
       "alt-left": "reader.back", "alt-right": "reader.forward", "secondary-[": "reader.back", "secondary-]": "reader.forward",
       "j": "reader.scroll.down", "down": "reader.scroll.down", "k": "reader.scroll.up", "up": "reader.scroll.up",
       "space": "reader.screen.down", "pagedown": "reader.screen.down", "shift-space": "reader.screen.up", "pageup": "reader.screen.up",
@@ -50,5 +51,6 @@
       "1": ["annotation.color", { "color": "yellow" }], "2": ["annotation.color", { "color": "red" }],
       "3": ["annotation.color", { "color": "note" }], "4": ["annotation.color", { "color": "important" }] } },
   { "$pdfcraft_ignored": {
-      "view.fit_visible": "Ctrl+3 shows the Pages sidebar tab in Margin (mockup keys); Fit visible stays in the palette" } }
+      "view.fit_visible": "Ctrl+3 shows the Pages sidebar tab in Margin (mockup keys); Fit visible stays in the palette",
+      "view.read_mode": "Ctrl+Cmd+H (Ctrl+H elsewhere) runs view.focus_mode.toggle, Margin's read mode, so the keysheet names it Focus mode" } }
 ]

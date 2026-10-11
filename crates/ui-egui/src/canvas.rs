@@ -18,6 +18,7 @@ use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).
 pub const PT: f32 = 96.0 / 72.0;
 pub(crate) const GAP: f32 = 14.0;
+const MAX_PAGE_GAP_PX: u32 = 200;
 const MARGIN: f32 = 28.0;
 /// Horizontal gutter that keeps pages clear of the floating quick-action bar.
 pub(crate) const SIDE: f32 = 70.0;
@@ -281,6 +282,10 @@ pub struct DocView {
     pub notice_dismissed: bool,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
+    /// Margin's document-specific page gutter; PdfCraft keeps its fixed gutter.
+    pub page_gap_px: Option<u32>,
+    /// Initial Margin search options; an existing search keeps its own choices.
+    pub find_defaults: Option<margin_config::FindOptions>,
     /// Previous view / Next view: places visited before (and after, once going back).
     pub back: Vec<ViewPlace>,
     pub forward: Vec<ViewPlace>,
@@ -486,6 +491,10 @@ impl DocView {
         self.viewport_screen
     }
 
+    pub(crate) fn page_gap(&self) -> f32 {
+        self.page_gap_px.map_or(GAP, |pixels| pixels.min(MAX_PAGE_GAP_PX) as f32)
+    }
+
     /// Whether a middle-button scrolling gesture is active (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
         self.auto_scroll.active()
@@ -518,6 +527,8 @@ impl DocView {
             page_input: "1".into(),
             notice_dismissed: false,
             cover: false,
+            page_gap_px: None,
+            find_defaults: None,
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
@@ -722,6 +733,18 @@ impl DocView {
         self.screen_xforms.iter().map(|(p, xf)| (*p, xf.rect)).collect()
     }
 
+    /// The visible page nearest an old screen edge; used by Margin's overlap marker.
+    pub(crate) fn page_at_screen_y(&self, y: f32) -> Option<(usize, Rect)> {
+        self.screen_xforms
+            .iter()
+            .filter(|(_, transform)| transform.rect.is_positive() && transform.rect.is_finite())
+            .min_by(|(_, left), (_, right)| {
+                let distance = |rect: Rect| (y - y.clamp(rect.top(), rect.bottom())).abs();
+                distance(left.rect).total_cmp(&distance(right.rect))
+            })
+            .map(|(page, transform)| (*page, transform.rect))
+    }
+
     /// Where `page` is drawn this frame, with its coordinate mapping.
     pub(crate) fn page_xform(&self, page: usize) -> Option<PageXform> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
@@ -771,7 +794,8 @@ impl DocView {
 
     /// Open the find bar (or focus it if already open).
     pub fn open_find(&mut self) {
-        let f = self.find.get_or_insert_with(Find::default);
+        let options = self.find_defaults.unwrap_or_default();
+        let f = self.find.get_or_insert_with(|| Find { case_sensitive: options.case, whole_words: options.whole_word, ..Find::default() });
         f.focus = true;
     }
 
@@ -889,11 +913,10 @@ impl DocView {
 
     /// Put `here` on the view history before a jump; a new jump ends the way forward.
     pub(crate) fn remember(&mut self, here: ViewPlace) {
-        if self.back.last() != Some(&here) {
+        let limit = crate::margin::history::depth(self);
+        if limit > 0 && self.back.last() != Some(&here) {
             self.back.push(here);
-            if self.back.len() > 200 {
-                self.back.remove(0);
-            }
+            crate::margin::history::cap(&mut self.back, limit);
         }
         self.forward.clear();
     }
@@ -1015,9 +1038,11 @@ impl DocView {
     /// View ▸ Page navigation ▸ Previous view (`false`) / Next view (`true`).
     pub fn view_history(&mut self, forward: bool) -> bool {
         let here = self.here();
+        let limit = crate::margin::history::depth(self);
         let (from, to) = if forward { (&mut self.forward, &mut self.back) } else { (&mut self.back, &mut self.forward) };
         let Some(place) = from.pop() else { return false };
         to.push(here);
+        crate::margin::history::cap(to, limit);
         let page = place.page.min(self.page_count.saturating_sub(1));
         self.goto = Some((page, 0.0));
         self.current = page;
@@ -1150,7 +1175,7 @@ impl DocView {
 
     /// Zoom keeping the document point under `screen_pos` still (pinch, ⌘-scroll).
     pub fn zoom_at(&mut self, zoom: f32, screen_pos: Pos2) {
-        let anchor = self.screen_rects.iter().find(|(_, r)| r.expand(GAP).contains(screen_pos)).map(|(p, r)| {
+        let anchor = self.screen_rects.iter().find(|(_, rect)| rect.expand(self.page_gap()).contains(screen_pos)).map(|(p, r)| {
             let f = (screen_pos - r.min) / r.size();
             (*p, f.x.clamp(0.0, 1.0), f.y.clamp(0.0, 1.0), screen_pos - self.viewport_screen.min)
         });
@@ -1481,10 +1506,11 @@ impl DocView {
         };
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
+        let gap = self.page_gap();
         match self.fit {
-            Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row),
+            Fit::Width => self.zoom = (avail_w - gap * (per_row - 1.0)) / (w * PT * per_row),
             Fit::Page => {
-                let zw = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row);
+                let zw = (avail_w - gap * (per_row - 1.0)) / (w * PT * per_row);
                 let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
                 self.zoom = zw.min(zh);
             }
@@ -1507,6 +1533,7 @@ impl DocView {
     /// Page rects in content coordinates (origin at the scroll content's top-left).
     fn layout(&self, info: &DocInfo, content_w: f32) -> Vec<Rect> {
         let s = self.zoom * PT;
+        let gap = self.page_gap();
         let mut rects = Vec::with_capacity(info.pages.len());
         let mut y = MARGIN;
         match self.layout {
@@ -1515,7 +1542,7 @@ impl DocView {
                     let (w, h) = self.display_size(i, p);
                     let size = vec2(w * s, h * s);
                     rects.push(Rect::from_min_size(pos2(((content_w - size.x) / 2.0).max(SIDE), y), size));
-                    y += size.y + GAP;
+                    y += size.y + gap;
                 }
             }
             PageLayout::TwoUp => {
@@ -1526,14 +1553,14 @@ impl DocView {
                 for (ri, row) in rows.into_iter().enumerate() {
                     let sizes: Vec<Vec2> =
                         row.filter_map(|i| info.pages.get(i).map(|p| self.display_size(i, p))).map(|(w, h)| vec2(w * s, h * s)).collect();
-                    let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + GAP * (sizes.len() as f32 - 1.0);
+                    let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + gap * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + GAP / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
                     for size in sizes {
                         rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
-                        x += size.x + GAP;
+                        x += size.x + gap;
                     }
-                    y += row_h + GAP;
+                    y += row_h + gap;
                 }
             }
         }
@@ -2032,7 +2059,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let r = rects[page];
         // `frac` is a share of the whole page; Margin's trim may show only part of it.
         let frac = view.margin.trim.shown_fraction(page, frac);
-        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - GAP + frac * r.height()).max(0.0));
+        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - view.page_gap() + frac * r.height()).max(0.0));
         // Margin's reading spot also says where across the page (R8 QoL 4); never set in PdfCraft.
         if let Some(x) = crate::margin::reading::goto_x_offset(view, page, r, avail.width()) {
             scroll = scroll.horizontal_scroll_offset(x);
@@ -2762,7 +2789,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // below the window's top). Within a point, as for wheel paging, so layout rounding
         // can't hide an edge.
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
-        (page, out.state.offset.y <= MARGIN - GAP + 1.0, out.state.offset.y >= max_y - 1.0)
+        (page, out.state.offset.y <= (MARGIN - view.page_gap()).max(0.0) + 1.0, out.state.offset.y >= max_y - 1.0)
     });
 
     view.auto_scroll.paint(ui, avail);
@@ -2971,6 +2998,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         run_button(app, index, &name, action);
     }
     if app.flavor == crate::Flavor::Margin {
+        crate::margin::scroll_step::show_marker(app, index, ui);
         crate::margin::rail::show(app, avail, ui);
     } else {
         quick_bar(app, avail, ui);
@@ -4314,6 +4342,58 @@ trailer << /Root 1 0 R >>
         h.run_steps(2);
         assert!(h.state().views[0].thumb_demand.is_empty());
         assert!(h.state().views[0].thumbs.is_empty());
+    }
+
+    #[test]
+    fn configurable_navigation_depth_caps_both_directions_and_zero_disables() {
+        let mut reader = view(10, PageLayout::Single);
+        reader.margin.history.exact = true;
+        crate::margin::history::set_depth(&mut reader, 2);
+        for page in 1..5 {
+            reader.go_to_page(page);
+        }
+        assert_eq!(reader.back.iter().map(|place| place.page).collect::<Vec<_>>(), [2, 3]);
+        assert!(reader.view_history(false));
+        assert!(reader.view_history(false));
+        assert!(!reader.view_history(false));
+        assert_eq!(reader.forward.len(), 2);
+        crate::margin::history::set_depth(&mut reader, 0);
+        reader.go_to_page(8);
+        assert!(reader.back.is_empty() && reader.forward.is_empty());
+    }
+
+    #[test]
+    fn margin_find_defaults_initialize_only_new_searches() {
+        let mut reader = view(1, PageLayout::Single);
+        reader.find_defaults = Some(margin_config::FindOptions { case: true, whole_word: true });
+        reader.open_find();
+        assert!(reader.find.as_ref().is_some_and(|find| find.case_sensitive && find.whole_words));
+        reader.find.as_mut().unwrap().case_sensitive = false;
+        reader.open_find();
+        assert!(!reader.find.as_ref().unwrap().case_sensitive, "refocusing preserves a user choice");
+    }
+
+    #[test]
+    fn page_gap_changes_continuous_rows_and_two_up_fit_and_columns() {
+        let info = pdfcraft_render::DocInfo {
+            pages: (0..2)
+                .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+                .collect(),
+            ..Default::default()
+        };
+        let mut reader = view(2, PageLayout::Continuous);
+        reader.page_gap_px = Some(37);
+        let rects = reader.layout(&info, 1000.0);
+        assert!((rects[1].top() - rects[0].bottom() - 37.0).abs() < 0.001);
+        reader.layout = PageLayout::TwoUp;
+        reader.fit = Fit::Width;
+        reader.fit_zoom(&info);
+        let rects = reader.layout(&info, 1000.0);
+        assert!((rects[1].left() - rects[0].right() - 37.0).abs() < 0.001);
+        assert!((rects[0].width() * 2.0 + 37.0 - (reader.viewport_w - 2.0 * SIDE)).abs() < 0.001);
+        reader.page_gap_px = Some(0);
+        let rects = reader.layout(&info, 1000.0);
+        assert_eq!(rects[1].left(), rects[0].right());
     }
 
     /// One mouse-wheel notch (a line) at `at` seconds.

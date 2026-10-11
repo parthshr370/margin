@@ -17,6 +17,8 @@ const ZOOM_MATCH: f32 = 0.005;
 /// The id of the page box, shared with PdfCraft's `view.focus_page_input` (⇧⌘N).
 const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
+const DETAIL_MIN_WIDTH: f32 = 180.0;
+const DETAIL_MAX_WIDTH: f32 = 300.0;
 const ZOOM_BUTTON: f32 = 22.0;
 const FIT_BUTTON: f32 = 24.0;
 /// The page field's text size.
@@ -34,6 +36,7 @@ const HINT_TEXT_CHARS: usize = 16;
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
+    let detail = reading_detail(app, index);
     let Some(doc) = app.session.get(id) else { return };
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
     let marks = super::scrubber::Marks {
@@ -82,6 +85,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                         save_command = super::saving::show(ui, &t, &save_line);
                     });
+                    if let Some(detail) = &detail
+                        && ui.available_width() >= DETAIL_MIN_WIDTH + super::scrubber::DETAIL_MIN_WIDTH + GAP_LARGE
+                    {
+                        let width = (ui.available_width() - super::scrubber::DETAIL_MIN_WIDTH - GAP_LARGE).min(DETAIL_MAX_WIDTH);
+                        ui.allocate_ui(vec2(width, HEIGHT), |ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(detail).font(theme::regular(PAGE_TEXT)).color(t.text_muted)).truncate())
+                                .on_hover_text(detail);
+                        });
+                    }
                     ui.add_space(GAP_LARGE);
                     preview = super::scrubber::show(ui, &t, view, &marks);
                 });
@@ -99,6 +111,32 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(id) = save_command {
         super::keys::run(app, ui.ctx(), id, &Value::Null);
     }
+}
+
+/// `reader.time_left`: the time the rest of the document takes at the reader's recorded pace.
+/// Nothing until reading statistics have a pace (the header already names the section).
+#[cfg(not(target_arch = "wasm32"))]
+fn reading_detail(app: &mut PdfCraftApp, index: usize) -> Option<String> {
+    if !app.margin_keys.settings().reader.time_left {
+        return None;
+    }
+    let view = app.views.get(index)?;
+    let (id, current) = (view.id, view.current);
+    let pages = app.session.get(id)?.info.pages.len();
+    let left = u32::try_from(pages.saturating_sub(current.saturating_add(1))).ok()?;
+    let book = app.margin_stats.book(id)?.to_owned();
+    time_left_text(super::stats::summary(app, &book)?.seconds_left(left)?)
+}
+
+/// Statistics are desktop-only, so a browser never has a pace.
+#[cfg(target_arch = "wasm32")]
+fn reading_detail(_app: &mut PdfCraftApp, _index: usize) -> Option<String> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn time_left_text(seconds: f64) -> Option<String> {
+    (seconds.is_finite() && seconds >= 0.0).then(|| format!("~{} left", margin_config::stats::format_duration(seconds)))
 }
 
 /// The page field and what follows it: the current page's label (a page label such as `iv`, or

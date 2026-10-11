@@ -69,6 +69,9 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - Back returns to the exact place before a jump (a link, the outline, a search, the scrubber), with
   a short "Back to p. N" pill after each jump.
 - Smooth screen steps with Space and Page Down that leave part of the previous screen visible.
+- Focus mode (<kbd>F</kbd> or <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>H</kbd>; <kbd>Ctrl</kbd>+<kbd>H</kbd>
+  on Linux; also in the command palette) hides the header, sidebar, footer and annotate rail
+  without changing the sidebar choice; press the same key or <kbd>Esc</kbd> to leave.
 - Full screen with a hidden top bar that shows the title and a way out.
 - Find lives in one place: a field in the header and its results in the sidebar's Find tab, with
   match case and whole-word options.
@@ -92,11 +95,19 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 **Saving**
 
 - Annotations in a writable PDF autosave about a second after your last change (`reader.autosave`;
-  <kbd>Ctrl</kbd>+<kbd>S</kbd> still works). The footer says truthfully whether the file is saved,
-  saving, failed, read-only or signed.
+  <kbd>Ctrl</kbd>+<kbd>S</kbd> still works). Serialization and atomic replacement run on a
+  background worker; edits made during a save remain dirty until the next write completes.
+  The footer says truthfully whether the file is saved, saving, failed, read-only or signed.
+  Within an unsigned document's session, incremental saves coalesce into one revision while
+  preserving the original PDF bytes. Saves that must rewrite the whole file (a repaired file,
+  applied redactions, changed encryption) do so once and later saves append to it. Save As and
+  Save asked for during a write all happen, in order. A file made read-only after opening is
+  never replaced. Quitting waits for pending writes.
 - Your place, layout, page colour, trim and page bookmarks live in a small sidecar file next to
   the PDF (`paper.pdf.margin.json`), or in Margin's data folder when that folder is not writable.
   Sidecars are never written just because you opened a file.
+  Set `reader.remember_per_document` to false to use your global view defaults and stop restoring
+  or updating per-document positions and view settings; bookmarks and annotations still persist.
 
 **Customisation**
 
@@ -193,9 +204,10 @@ On Linux, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` move these as usual. `MARGIN_CON
 `MARGIN_DATA_DIR` override them, which is handy for a portable setup or for testing.
 
 Both files are written on first start with every option documented in comments and nothing set,
-so later default changes still reach you. Uncomment what you want to change. Unknown keys or bad
-values are reported and fall back to their defaults; a broken file never stops Margin from starting.
-A JSON schema for editor completion is written to `schemas/` in the same folder.
+so later default changes still reach you. Uncomment what you want to change. Unknown or removed
+keys are reported and ignored; bad values fall back to the setting below them, while valid keys
+still apply. A broken file never stops Margin from starting. A JSON schema for editor completion
+is written to `schemas/` in the same folder.
 
 An example `settings.jsonc`:
 
@@ -206,10 +218,24 @@ An example `settings.jsonc`:
     "cover_alone": true,     // two-up: page 1 alone, like a book
     "fit": "read",           // "width" | "page" | "read" | "content" | "zoom"
     "page_color": "night",   // "paper" | "sepia" | "night" | "ink" | "mono"
-    "trim": true
+    "trim": true,
+    "page_gap_px": 10,       // page and two-up column gutter
+    "overlap_marker": true  // mark the previous screen edge after Space/PgDn
   },
-  "reader": { "autosave": true },
-  "ui": { "reduce_motion": false },
+  "reader": {
+    "autosave": true,
+    "remember_per_document": true,
+    "back_stack": 100,      // 0 disables back/forward history
+    "back_pill": true,
+    "selection_popover": true,
+    "time_left": true,
+    "undo_steps": 100,      // 0 disables undo/redo history
+    "find": { "case": false, "whole_word": false }
+  },
+  "ui": {
+    "reduce_motion": false,
+    "rail": { "side": "right", "items": ["reader.tool.select", "comment.highlight", "|", "edit.undo", "edit.redo"] }
+  },
   "library": { "folders": ["/home/you/Papers"], "view": "grid", "sort": "recent" },
   "stats": { "enabled": true }
 }
@@ -217,6 +243,19 @@ An example `settings.jsonc`:
 
 The `view` block is the default for every document. Changes you make in the Display popover are
 saved for that document only, unless you press **Set as default** there.
+
+`reader.remember_per_document: false` opens with your global view settings and does not update
+the document's saved reading position or view choices; bookmarks and annotations still persist.
+The footer's `time_left` detail estimates the time left in the document once reading statistics
+have a pace (the header already names the section). Rail items replace the default list in the
+specified order; `|` adds a divider, an empty list hides the buttons, and unknown command ids are
+skipped.
+
+Only implemented settings appear in the generated defaults and schema. Legacy `perf.*`,
+`reader.start`, `reader.find.regex`, `ui.rail.tool_options`, `view.gamma`, `view.saturation`,
+`view.mono_threshold`, `view.white_threshold` and `view.dewatermark` are no longer supported;
+these keys are reported and ignored without discarding other settings. `keys.base` supports
+`margin` and `none`; the unshipped `okular` and `sioyek` values now warn and fall back to `margin`.
 
 An example `keymap.jsonc`. Your bindings are applied over Margin's built-in keymap
 ([crates/margin-config/data/keymap.jsonc](crates/margin-config/data/keymap.jsonc)); `null`

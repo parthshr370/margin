@@ -190,6 +190,12 @@ fn reading_logs_page_times_a_session_and_the_calendar_shows_today() {
     assert_eq!(db.summary(&book).unwrap().seconds, 30);
     h.run_steps(2);
     assert!(h.query_by_label_contains("min/page").is_some(), "the document card shows the book's stats");
+    // reader.time_left: 3 pages in 30 s is 10 s a page, and pages 5 and 6 are still to read.
+    h.get_by_label("~20s left");
+    std::fs::write(place.0.join("config").join(margin_config::SETTINGS_FILE), r#"{ "reader": { "time_left": false } }"#).unwrap();
+    h.state_mut().margin_keys.set_config_dir(place.0.join("config"));
+    h.run_steps(3);
+    assert!(h.query_by_label("~20s left").is_none(), "time_left false hides the estimate");
 
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::T);
     h.run_steps(3);

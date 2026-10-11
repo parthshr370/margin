@@ -203,6 +203,63 @@ fn margin_actions_run_by_id() {
     assert!(h.query_by_label("Select").is_none(), "the rail hides when annotating is off");
 }
 
+#[test]
+fn focus_mode_hides_reader_chrome_and_esc_restores_it() {
+    let mut h = harness(Flavor::Margin);
+    h.state_mut().margin_chrome.tab = SidebarTab::Pages;
+    h.state_mut().margin_chrome.sidebar_open = true;
+    h.state_mut().margin_chrome.rail_open = true;
+    h.state_mut().right = Some(RightPanel::Pages);
+    h.state_mut().margin_chrome.focus_mode = true;
+    h.run_steps(3);
+    assert!(h.query_by_label("Sidebar").is_none());
+    assert!(h.query_by_label("Page colour and layout").is_none());
+    assert!(h.query_by_label("Document: save, export, print, settings").is_none());
+    assert!(h.query_by_label("Select").is_none());
+    assert!(h.state().margin_chrome.sidebar_open);
+
+    h.state_mut().palette_open = true;
+    h.state_mut().palette_query = "Focus mode".to_owned();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().margin_chrome.focus_mode, "Escape first dismisses the palette");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().margin_chrome.focus_mode, "Escape exits focus mode after overlays");
+    assert!(h.state().margin_chrome.sidebar_open);
+    assert_eq!(h.state().margin_chrome.tab, SidebarTab::Pages);
+    assert_eq!(h.state().right, Some(RightPanel::Pages));
+    h.get_by_label("Sidebar");
+    h.get_by_label("Page colour and layout");
+}
+
+#[test]
+fn focus_mode_command_and_key_are_margin_only() {
+    let mut margin = harness(Flavor::Margin);
+    margin.state_mut().palette_open = true;
+    margin.state_mut().palette_query = "Focus mode".to_owned();
+    margin.run_steps(2);
+    margin.key_press(egui::Key::Enter);
+    margin.run_steps(2);
+    assert!(margin.state().margin_chrome.focus_mode, "the command palette runs Focus mode");
+    margin.key_press(egui::Key::F);
+    margin.run_steps(2);
+    assert!(!margin.state().margin_chrome.focus_mode, "F toggles Margin focus mode");
+    assert!(margin.state_mut().execute("view.read_mode"));
+    assert!(margin.state().margin_chrome.focus_mode, "the legacy read-mode command is a Margin focus toggle");
+    margin.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::CTRL, egui::Key::H);
+    margin.run_steps(2);
+    assert!(!margin.state().margin_chrome.focus_mode, "ctrl-secondary-h toggles focus mode in Reader");
+
+    let mut pdfcraft = harness(Flavor::PdfCraft);
+    let mode = pdfcraft.state().mode;
+    assert!(pdfcraft.state_mut().execute("view.read_mode"));
+    assert_ne!(pdfcraft.state().mode, mode, "PdfCraft keeps its existing read-mode behavior");
+    assert!(!pdfcraft.state().margin_chrome.focus_mode);
+}
+
 /// `pages` letter-size pages of text, each with its own outline entry (so Bookmarks has rows and
 /// its search field). No xref: the parser rebuilds it, as for [`FIXTURE`].
 fn long_fixture(pages: usize) -> Vec<u8> {

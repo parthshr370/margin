@@ -9,13 +9,16 @@
 //! reader's own scrolling never fights an animation. In Single a step pans an enlarged page to
 //! its edge before the page turns ([`single_pan`]). Continuous scrolling never snaps to pages.
 
-use egui::{Context, Event};
+use egui::{Context, Event, Stroke};
 
 use super::motion;
 use crate::{DocView, PdfCraftApp};
 
 /// A page edge closer than this to the window's edge is in view.
 const EDGE: f32 = 1.0;
+/// The old screen edge stays visible long enough to find the next line.
+const MARKER_SECS: f64 = 3.0;
+const MARKER_INSET: f32 = 12.0;
 
 /// One document view's screen step.
 #[derive(Default)]
@@ -23,6 +26,7 @@ pub(crate) struct ScreenStep {
     /// Points asked for since the last frame (down; negative is up).
     requested: f32,
     gliding: Option<Glide>,
+    marker: Option<Marker>,
 }
 
 /// A step under way.
@@ -32,6 +36,13 @@ struct Glide {
     distance: f32,
     /// How much of `distance` the canvas has been given.
     given: f32,
+}
+
+#[derive(Clone, Copy)]
+struct Marker {
+    page: usize,
+    fraction: f32,
+    since: f64,
 }
 
 impl ScreenStep {
@@ -84,12 +95,29 @@ impl ScreenStep {
 /// screen step, into `key_scroll`. Asks for the next frame only while a step is moving.
 pub(crate) fn drive(app: &mut PdfCraftApp, ctx: &Context) {
     let animate = app.margin_keys.settings().view.smooth_scroll && !motion::reduced(ctx);
+    let mark_overlap = app.margin_keys.settings().view.overlap_marker;
     let (now, interrupted) = ctx.input(|i| {
         let scrolled = i.events.iter().any(|event| matches!(event, Event::MouseWheel { .. } | Event::Touch { .. }));
         (i.time, scrolled || i.pointer.any_pressed())
     });
     for view in &mut app.views {
+        let mark = if mark_overlap && view.margin.screen_step.requested != 0.0 {
+            let edge = if view.margin.screen_step.requested > 0.0 { view.viewport_rect().bottom() } else { view.viewport_rect().top() };
+            view.page_at_screen_y(edge).map(|(page, rect)| Marker {
+                page,
+                fraction: ((edge - rect.top()) / rect.height()).clamp(0.0, 1.0),
+                since: now,
+            })
+        } else {
+            None
+        };
         let step = &mut view.margin.screen_step;
+        if interrupted || !mark_overlap {
+            step.marker = None;
+        }
+        if mark.is_some() {
+            step.marker = mark;
+        }
         if !step.is_moving() {
             continue;
         }
@@ -98,6 +126,31 @@ pub(crate) fn drive(app: &mut PdfCraftApp, ctx: &Context) {
             ctx.request_repaint();
         }
     }
+}
+
+/// The previous screen edge follows the page, rather than staying fixed over new text.
+pub(crate) fn show_marker(app: &PdfCraftApp, index: usize, ui: &egui::Ui) {
+    if !app.margin_keys.settings().view.overlap_marker {
+        return;
+    }
+    let Some(view) = app.views.get(index) else { return };
+    let Some(marker) = view.margin.screen_step.marker else { return };
+    let remaining = MARKER_SECS - (ui.input(|input| input.time) - marker.since);
+    if !remaining.is_finite() || remaining <= 0.0 {
+        return;
+    }
+    let Some(page) = view.page_screen_rect(marker.page) else { return };
+    let viewport = view.viewport_rect();
+    let y = marker_y(page, marker.fraction);
+    if y >= viewport.top() && y <= viewport.bottom() {
+        let accent = crate::theme::Tokens::get(ui.ctx()).accent.gamma_multiply(0.5);
+        ui.painter().with_clip_rect(viewport).hline(page.x_range().shrink(MARKER_INSET), y, Stroke::new(1.0, accent));
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+}
+
+fn marker_y(page: egui::Rect, fraction: f32) -> f32 {
+    page.top() + fraction * page.height()
 }
 
 /// In Single, the pan a screen step of `by` points makes on an enlarged page: the step, cut at
@@ -174,5 +227,14 @@ mod tests {
         moved += step.advance(2.0 * FRAME, true, true);
         assert!(!step.is_moving());
         assert!(moved > 0.0 && moved < SCREEN, "{moved}");
+    }
+
+    #[test]
+    fn overlap_marker_follows_the_old_page_edge_after_scrolling() {
+        let before = egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(400.0, 800.0));
+        let old_edge = 600.0;
+        let fraction = (old_edge - before.top()) / before.height();
+        let after = before.translate(egui::vec2(0.0, -510.0));
+        assert!((marker_y(after, fraction) - 90.0).abs() < 0.001);
     }
 }
