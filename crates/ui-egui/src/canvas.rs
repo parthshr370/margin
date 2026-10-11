@@ -1776,18 +1776,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             } else {
                 tool == QuickTool::Select && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
             };
-            let scan_prompt = flavor == crate::Flavor::Margin
-                && matches!(tool, QuickTool::Select | QuickTool::Comment(comments::CommentTool::Highlight))
-                && (resp.drag_started() || resp.double_clicked())
-                && crate::margin::scan_prompt::request(view, doc, i);
+            let scan_prompt = crate::margin::scan_prompt::intercepts(flavor, tool, &resp, view, doc, i);
             // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat),
             // except in Margin, where a highlight follows the text wherever the drag starts.
             let highlight_boxes = tool == QuickTool::Comment(comments::CommentTool::Highlight)
                 && allowed
                 && (flavor != crate::Flavor::Margin || crate::margin::rail::highlight_boxes(view.page_text(i).as_deref()));
-            let area_tool = !scan_prompt
-                && (flavor != crate::Flavor::Margin || !view.scan_prompt.is_open())
-                && (tool == QuickTool::Redact && can_modify || highlight_boxes);
+            let area_tool = !scan_prompt && (tool == QuickTool::Redact && can_modify || highlight_boxes);
             let boxing = area_tool && {
                 let text = view.page_text(i);
                 let over_text = |p: Pos2| {

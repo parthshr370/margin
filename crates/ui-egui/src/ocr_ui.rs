@@ -373,18 +373,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cancellation_is_visible_to_the_worker() {
-        let mut app = PdfCraftApp::new();
-        let bytes = app.session.create_from_text("cancel", "a page").unwrap();
-        app.open_bytes("cancel.pdf", None, bytes.to_vec()).unwrap();
-        let id = app.active_ids().unwrap().1;
-        let progress = Arc::new(Mutex::new(OcrProgress::default()));
-        app.ocr_run = Some(OcrRun { doc: id, generation: 0, progress: progress.clone() });
-        app.cancel_ocr();
-        assert!(progress.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).cancel);
-    }
-
-    #[test]
     fn recognition_does_not_apply_to_changed_content() {
         let mut app = PdfCraftApp::new();
         let bytes = app.session.create_from_text("stale", "a page").unwrap();

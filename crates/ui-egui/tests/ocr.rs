@@ -8,11 +8,17 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 /// A one-page PDF that is only a picture of a sentence.
 fn scan() -> Vec<u8> {
+    scan_pages(1)
+}
+
+/// A PDF of `pages` pages, each only a picture of a sentence.
+fn scan_pages(pages: usize) -> Vec<u8> {
     let mut s = Session::new();
     let text = s.create_from_text("t", "Recognize these scanned words").unwrap();
     let id = s.open("text.pdf", None, text, None).unwrap();
     let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
-    s.create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec()
+    let images: Vec<(String, Vec<u8>)> = (0..pages).map(|page| (format!("scan-{page}.png"), png.clone())).collect();
+    s.create_from_images(&images).unwrap().to_vec()
 }
 
 #[test]
@@ -163,20 +169,22 @@ fn margin_read_only_scan_offers_save_as_before_ocr() {
     std::fs::create_dir_all(&directory).unwrap();
     let original = directory.join("original.pdf");
     let writable = directory.join("copy.pdf");
-    std::fs::write(&original, scan()).unwrap();
+    // One copy: two `scan()` calls are not byte-for-byte identical.
+    let scan_bytes = scan();
+    std::fs::write(&original, &scan_bytes).unwrap();
     let mut permissions = std::fs::metadata(&original).unwrap().permissions();
     permissions.set_readonly(true);
     std::fs::set_permissions(&original, permissions).unwrap();
     let mut harness = margin_scan();
     harness.state_mut().close_tab(0);
-    harness.state_mut().open_bytes("original.pdf", Some(original.to_string_lossy().into_owned()), scan()).unwrap();
+    harness.state_mut().open_bytes("original.pdf", Some(original.to_string_lossy().into_owned()), scan_bytes.clone()).unwrap();
     harness.state_mut().save_override = Some(writable.to_string_lossy().into_owned());
     harness.state_mut().set_option("find", "scanned").unwrap();
     settle_scan(&mut harness);
     harness.get_by_label("Save as…").click();
     settle_scan(&mut harness);
     let app = harness.state();
-    assert_eq!(std::fs::read(&original).unwrap(), scan(), "the source scan was not touched");
+    assert_eq!(std::fs::read(&original).unwrap(), scan_bytes, "the source scan was not touched");
     assert!(writable.is_file());
     assert_eq!(app.session.get(app.active_ids().unwrap().1).unwrap().path.as_deref(), writable.to_str());
     std::fs::remove_dir_all(directory).unwrap();
@@ -233,4 +241,42 @@ fn margin_signed_scan_is_not_changed_by_recognition() {
     assert!(harness.state().ocr_run.is_none());
     assert!(!harness.state().session.get(id).unwrap().dirty);
     assert_eq!(*harness.state().session.get(id).unwrap().bytes, *signed);
+}
+
+/// Six scanned pages take seconds to read, so Cancel lands while recognition is running.
+const LONG_SCAN_PAGES: usize = 6;
+
+#[test]
+fn margin_recognition_shows_progress_and_cancels_between_pages() {
+    if !pdfcraft_engine::ocr::available() {
+        return;
+    }
+    let mut harness = margin_scan();
+    harness.state_mut().close_tab(0);
+    harness.state_mut().open_bytes("long-scan.pdf", None, scan_pages(LONG_SCAN_PAGES)).unwrap();
+    harness.state_mut().run_inline = false;
+    settle_scan(&mut harness);
+    harness.state_mut().set_option("find", "scanned").unwrap();
+    settle_scan(&mut harness);
+    harness.get_by_label("Whole document").click();
+    harness.run_steps(2);
+    // The prompt counts finished pages ("… 0 of 6 pages"); the toast names the current one.
+    harness.get_by_label_contains(&format!("of {LONG_SCAN_PAGES} pages"));
+    scan_shot(&mut harness, "recognition-progress.png");
+    harness.get_by_label("Cancel recognition").click();
+    harness.run_steps(2);
+    let stopping_shown = harness.query_by_label("Stopping after this page…").is_some();
+    assert!(stopping_shown || harness.state().ocr_run.is_none(), "Cancel is acknowledged while the page finishes");
+    let start = std::time::Instant::now();
+    while harness.state().ocr_run.is_some() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(120), "recognition stopped after Cancel");
+        harness.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    settle_scan(&mut harness);
+    let app = harness.state();
+    let find = app.views[0].find.as_ref().unwrap();
+    let recognized: std::collections::BTreeSet<usize> = find.matches.iter().map(|(page, _)| *page).collect();
+    assert!(recognized.len() < LONG_SCAN_PAGES, "Cancel stopped before the last page: {recognized:?}");
+    assert!(harness.query_by_label("Cancel recognition").is_none(), "the progress prompt closes with the run");
 }

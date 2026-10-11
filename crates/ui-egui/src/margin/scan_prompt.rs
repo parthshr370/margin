@@ -3,14 +3,18 @@
 
 use std::collections::HashMap;
 
-use super::look::{Button, ButtonSize};
+use super::look::{Button, ButtonSize, GAP, ROW_PAD};
 use crate::canvas::DocView;
 use crate::ocr_ui::OcrPages;
+use crate::theme::{self, Tokens};
 use crate::{Flavor, PdfCraftApp};
 
 const SCAN_MIN_AREA: f64 = 0.5;
 const PROMPT_WIDTH: f32 = 380.0;
 const PROMPT_INSET: f32 = 12.0;
+const TITLE_TEXT: f32 = 13.0;
+/// The size of Find's status lines, so the offer reads as part of that panel.
+const NOTE_TEXT: f32 = 12.0;
 
 pub const MISSING_MODELS: &str = "This build of Margin lacks text recognition: the recognition models are missing. Install a complete Margin release from github.com/parthshr370/margin/releases to make scanned text selectable.";
 
@@ -54,13 +58,25 @@ fn scan_area(image_area: f64, page_area: f64) -> bool {
     image_area.is_finite() && page_area.is_finite() && page_area > 0.0 && image_area / page_area >= SCAN_MIN_AREA
 }
 
-/// Intercept the first selection/highlight gesture; after dismissal area highlights still work.
-pub(crate) fn request(view: &mut DocView, doc: &pdfcraft_engine::Document, page: usize) -> bool {
-    if view.scan_prompt.dismissed || !is_scan(view, doc, page) {
+/// The canvas hook: in Margin, the first select or highlight gesture on a scan opens the
+/// prompt, and area marks wait while the prompt is open. After dismissal area highlights work.
+pub(crate) fn intercepts(
+    flavor: Flavor,
+    tool: crate::QuickTool,
+    response: &egui::Response,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    page: usize,
+) -> bool {
+    if flavor != Flavor::Margin {
         return false;
     }
-    view.scan_prompt.pending = Some(page);
-    true
+    let is_gesture = matches!(tool, crate::QuickTool::Select | crate::QuickTool::Comment(crate::comments::CommentTool::Highlight))
+        && (response.drag_started() || response.double_clicked());
+    if is_gesture && !view.scan_prompt.dismissed && is_scan(view, doc, page) {
+        view.scan_prompt.pending = Some(page);
+    }
+    view.scan_prompt.is_open()
 }
 
 /// The Find tab supplies the page that could not be searched, not merely a failed extraction.
@@ -72,7 +88,11 @@ pub(crate) fn find(ui: &mut egui::Ui, app: &mut PdfCraftApp, index: usize) {
     let Some(doc) = app.session.get(view.id) else { return };
     let page = (0..doc.info.pages.len()).find(|&page| is_scan(view, doc, page));
     if let Some(page) = page {
-        body(ui, app, index, page);
+        // Indented like the Find status lines above it.
+        ui.horizontal(|ui| {
+            ui.add_space(ROW_PAD);
+            ui.vertical(|ui| body(ui, app, index, page));
+        });
     }
 }
 
@@ -104,16 +124,28 @@ fn progress(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
     let Some(run) = app.ocr_run.as_ref() else { return };
     let status = run.progress.lock().ok().map(|status| (status.done, status.total, status.cancel));
     if let Some((done, total, cancelled)) = status {
-        ui.label(format!("Recognizing text… {done} of {total} pages"));
-        ui.label("Recognition changes the PDF. You can undo it in one step.");
+        title(ui, &format!("Recognizing text… {done} of {total} pages"));
+        note(ui, "Recognition changes the PDF. You can undo it in one step.");
         if cancelled {
-            ui.label("Stopping after this page…");
+            note(ui, "Stopping after this page…");
         } else if Button::secondary(ButtonSize::Compact, "Cancel recognition").show(ui).clicked() {
             app.cancel_ocr();
         }
     } else {
-        ui.label("Text recognition could not report progress.");
+        note(ui, "Text recognition could not report progress.");
     }
+}
+
+/// The prompt's question or progress line.
+fn title(ui: &mut egui::Ui, text: &str) {
+    let tokens = Tokens::get(ui.ctx());
+    ui.add(egui::Label::new(egui::RichText::new(text).font(theme::medium(TITLE_TEXT)).color(tokens.text)).wrap());
+}
+
+/// The prompt's explanations, in the muted style of Find's status lines.
+fn note(ui: &mut egui::Ui, text: &str) {
+    let tokens = Tokens::get(ui.ctx());
+    ui.add(egui::Label::new(egui::RichText::new(text).font(theme::regular(NOTE_TEXT)).color(tokens.text_muted)).wrap());
 }
 
 fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, index: usize, page: usize) {
@@ -125,17 +157,18 @@ fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, index: usize, page: usize) {
     let file_read_only = doc.path.as_ref().is_some_and(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.permissions().readonly()));
     #[cfg(target_arch = "wasm32")]
     let file_read_only = false;
-    ui.label("This page is scanned. Make text selectable?");
-    ui.label("Recognition adds invisible text to the PDF, without changing the image. It is one undoable edit.");
+    title(ui, "This page is scanned. Make text selectable?");
+    note(ui, "Recognition adds invisible text to the PDF, without changing the image. It is one undoable edit.");
     let available = pdfcraft_engine::ocr::available();
     if !available {
-        ui.label(MISSING_MODELS);
+        note(ui, MISSING_MODELS);
     }
     if let Some(reason) = &blocked {
-        ui.label(reason);
+        note(ui, reason);
     } else if file_read_only {
-        ui.label("This file is read-only. Save a writable copy before recognizing text.");
+        note(ui, "This file is read-only. Save a writable copy before recognizing text.");
     }
+    ui.add_space(GAP);
     let mut pages = None;
     let mut save_as = false;
     let mut dismiss = false;
