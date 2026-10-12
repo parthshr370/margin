@@ -145,7 +145,7 @@ fn popover_picks_modes_and_resets_sliders() {
     h.run_steps(2);
     assert_eq!(state(&h).color.contrast, 100);
 
-    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").click();
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, display::FOLLOW_THEME_LABEL).click();
     h.run_steps(2);
     assert!(state(&h).follow_system);
 }
@@ -227,7 +227,7 @@ fn display_rows_line_up_and_scroll_in_a_short_window() {
     assert!(sliders.iter().all(|r| (r.left() - sliders[0].left()).abs() < SAME_COLUMN), "slider starts {sliders:?}");
     assert!(sliders[0].left() <= starts[0] && starts[0] - sliders[0].left() < SEGMENT_SLACK, "sliders {sliders:?}, choices {starts:?}");
 
-    let follow = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").rect();
+    let follow = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(egui::accesskit::Role::CheckBox, display::FOLLOW_THEME_LABEL).rect();
     assert!(follow(&h).bottom() > SHORT_WINDOW.y, "the expanded popover is taller than the window: {:?}", follow(&h));
     h.hover_at(h.get_by_label("Width").rect().center());
     for _ in 0..20 {
@@ -242,10 +242,10 @@ fn display_rows_line_up_and_scroll_in_a_short_window() {
     h.run_steps(10);
     assert!(follow(&h).bottom() < SHORT_WINDOW.y, "the body scrolled its last switch into the window: {:?}", follow(&h));
     let following = h.state().views[0].margin.display.follow_system;
-    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode").click();
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, display::FOLLOW_THEME_LABEL).click();
     h.run_steps(3);
     assert_ne!(h.state().views[0].margin.display.follow_system, following, "the switch works");
-    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Follow system dark mode");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, display::FOLLOW_THEME_LABEL);
 }
 
 /// How far a segmented control's first choice sits inside its well (`look::segmented`), plus

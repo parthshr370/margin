@@ -104,7 +104,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
     egui::Panel::top("margin_header")
         .exact_size(HEIGHT)
         .show_separator_line(look::has_edges(&t))
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
+        .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             let full = ui.max_rect();
             // The whole bar, its padding too, moves the window where nothing else takes the press.

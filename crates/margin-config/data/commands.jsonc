@@ -1,6 +1,7 @@
 // Margin's own command ids, checked against the commands schema (schema::commands_schema).
 // PdfCraft's ids come from pdfcraft_engine::commands::COMMANDS and catalog::TOOL_GROUPS and are
-// never repeated here. Margin adds ids only under app.*, view.*, reader.*, library.*, note.* and annotation.*,
+// never repeated here. Margin adds ids only under app.*, view.*, reader.*, library.*, note.*, annotation.*,
+// and settings.*, themes.* and keymap.* (its config files, as Zed's "open settings" commands),
 // and only ids the egui app runs (crates/ui-egui/src/margin/keys.rs `run`, which hands the reader
 // chrome's ids to margin::run): a keymap binding to an id that is not listed here is dropped with a
 // message.
@@ -9,6 +10,10 @@
   { "id": "app.close_layer", "title": "Close", "group": "App", "in_text": true },
   { "id": "app.key_context", "title": "Show key context", "icon": "keyboard", "group": "Help", "in_text": true },
   { "id": "app.stats", "title": "Reading stats", "icon": "clock", "group": "View", "aliases": ["statistics", "calendar", "time read"] },
+  { "id": "settings.open", "title": "Open settings file", "icon": "settings", "group": "App", "aliases": ["settings.jsonc", "preferences", "config"] },
+  { "id": "settings.open_default", "title": "Open default settings", "icon": "file-code", "group": "App", "aliases": ["default-settings.jsonc", "defaults"] },
+  { "id": "themes.open", "title": "Open themes file", "icon": "palette", "group": "App", "aliases": ["themes.json", "theme", "colours", "colors"] },
+  { "id": "keymap.open", "title": "Open keymap file", "icon": "file-code", "group": "App", "aliases": ["keymap.jsonc", "key bindings", "shortcuts"] },
   { "id": "library.open", "title": "Library", "icon": "book-open", "group": "Go", "aliases": ["home", "books", "shelf"] },
   { "id": "library.search", "title": "Search library", "icon": "search", "group": "Find", "when": "Library" },
   { "id": "view.tab.next", "title": "Next document", "icon": "arrow-right", "group": "Go", "in_text": true, "aliases": ["tab", "switch document", "open documents"] },

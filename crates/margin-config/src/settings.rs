@@ -5,10 +5,14 @@
 //! `x-margin-scope` tags each top-level block `[doc]` or `[app]` (CU-SET-3); a key inherits its
 //! block's scope unless it carries its own tag.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+use crate::theme::{Appearance, DEFAULT_THEME, LIGHT_THEME};
 
 /// The settings format version written by this build (CU-VAL-4).
 pub const SETTINGS_VERSION: u32 = 1;
@@ -26,6 +30,12 @@ pub struct Settings {
     /// settings format version supported by this build
     #[schemars(range(min = 1, max = 1))]
     pub version: u32,
+    /// the theme: a theme name, used always, or { "mode": "system" | "light" | "dark", "light": name, "dark": name }; built-ins "Margin Dark" and "Margin Light", yours in themes.json and themes/*.json
+    #[schemars(extend("x-margin-scope" = "app"))]
+    pub theme: ThemeSetting,
+    /// style keys over a theme, by theme name: { "Margin Dark": { "text.accent": "#4b8bf5" } }; schemas/theme.schema.json lists the keys
+    #[schemars(extend("x-margin-scope" = "app"))]
+    pub theme_overrides: BTreeMap<String, ThemeStyle>,
     /// how a document is shown
     #[schemars(extend("x-margin-scope" = "doc"))]
     pub view: View,
@@ -54,6 +64,8 @@ impl Default for Settings {
         Self {
             schema: SETTINGS_SCHEMA_URL.to_owned(),
             version: SETTINGS_VERSION,
+            theme: ThemeSetting::default(),
+            theme_overrides: BTreeMap::new(),
             view: View::default(),
             reader: Reader::default(),
             ui: Ui::default(),
@@ -62,6 +74,95 @@ impl Default for Settings {
             stats: Stats::default(),
             notes: Notes::default(),
         }
+    }
+}
+
+/// The `theme` setting, as in Zed: one theme always, or one per appearance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ThemeSetting {
+    /// One theme, whatever the system's appearance.
+    Named(String),
+    /// A light and a dark theme, and which one shows.
+    ByMode(ThemeModes),
+}
+
+impl Default for ThemeSetting {
+    fn default() -> Self {
+        Self::ByMode(ThemeModes::default())
+    }
+}
+
+impl ThemeSetting {
+    /// The theme to show when the system is dark (`system_dark` true), light (false) or says
+    /// nothing (`None`, which shows the dark theme), and the slot it fills (dark for a lone name).
+    pub fn pick(&self, system_dark: Option<bool>) -> (&str, Appearance) {
+        match self {
+            Self::Named(name) => (name, Appearance::Dark),
+            Self::ByMode(modes) => match (modes.mode, system_dark) {
+                (ThemeMode::Light, _) | (ThemeMode::System, Some(false)) => (&modes.light, Appearance::Light),
+                (ThemeMode::Dark, _) | (ThemeMode::System, Some(true) | None) => (&modes.dark, Appearance::Dark),
+            },
+        }
+    }
+}
+
+/// Which theme of [`ThemeModes`] shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    /// Follow the system's light or dark appearance.
+    System,
+    /// Always the light theme.
+    Light,
+    /// Always the dark theme.
+    #[default]
+    Dark,
+}
+
+impl ThemeMode {
+    /// The value as written in settings.jsonc.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
+/// `theme` as `{ "mode", "light", "dark" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeModes {
+    /// "system" | "light" | "dark"
+    pub mode: ThemeMode,
+    /// the theme shown in light mode
+    pub light: String,
+    /// the theme shown in dark mode
+    pub dark: String,
+}
+
+impl Default for ThemeModes {
+    fn default() -> Self {
+        Self { mode: ThemeMode::Dark, light: LIGHT_THEME.to_owned(), dark: DEFAULT_THEME.to_owned() }
+    }
+}
+
+/// One theme's style keys in `theme_overrides`, as in a theme file's `style`. Loading checks every
+/// value; what reaches [`Settings`] is valid.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ThemeStyle(pub Map<String, Value>);
+
+impl JsonSchema for ThemeStyle {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ThemeStyle".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        // `style_schema` is always an object, so the conversion cannot fail.
+        Schema::try_from(crate::theme::style_schema()).unwrap_or_default()
     }
 }
 
@@ -135,7 +236,7 @@ pub struct View {
     pub trim: bool,
     /// "paper" | "sepia" | "night" | "ink" | "mono"
     pub page_color: PageColor,
-    /// night when the OS is dark, paper when light; a manual pick sets false for that document
+    /// night when the theme in use is dark, paper when it is light; a manual pick sets false for that document
     pub follow_system: bool,
     /// ink and mono: photos the page embeds (and photo-like areas of scans) keep their colours as in night instead of two-tone; vector drawings stay two-tone
     pub keep_figures: bool,

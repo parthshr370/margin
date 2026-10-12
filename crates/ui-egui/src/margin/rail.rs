@@ -142,7 +142,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     };
                     let (label, shortcut) = item.tooltip(app);
                     let on = item.active(app.quick_tool);
-                    let r = ui.add_enabled_ui(enabled, |ui| look::rail_button(ui, item.icon(app), BUTTON, on, &label, shortcut.as_deref())).inner;
+                    let r = ui.add_enabled_ui(enabled, |ui| look::icon_button(ui, item.icon(app), BUTTON, on, &label, shortcut.as_deref())).inner;
                     if item == RailItem::Command("edit.snapshot") {
                         let vault = app.notes.vault.is_some();
                         r.context_menu(|ui| {
@@ -219,10 +219,10 @@ const SAME_COLOR: f64 = 0.02;
 fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut CommentPrefs, side: margin_config::RailSide) {
     let style = prefs.style(tool);
     let pin = if prefs.pinned { "Keep tool selected: on" } else { "Keep tool selected" };
-    if look::rail_button(ui, "pin", BUTTON, prefs.pinned, pin, None).clicked() {
+    if look::icon_button(ui, "pin", BUTTON, prefs.pinned, pin, None).clicked() {
         prefs.pinned = !prefs.pinned;
     }
-    let colour = look::color_button(ui, BUTTON, color32(style.color), true, "Colour", None);
+    let colour = look::color_button(ui, BUTTON, color32(style.color), "Colour", None);
     popover(&colour, "colour", side, |ui| {
         let palette = crate::margin::obsidian::swatches(ui.ctx()).unwrap_or_else(|| SWATCHES.iter().map(|(n, c)| ((*n).to_string(), *c)).collect());
         let dots: Vec<ColorDot<'_>> = palette
@@ -238,7 +238,7 @@ fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut C
             prefs.set_color(tool, *c);
         }
     });
-    let opacity = look::rail_button(ui, "blend", BUTTON, false, "Opacity", None);
+    let opacity = look::icon_button(ui, "blend", BUTTON, false, "Opacity", None);
     popover(&opacity, "opacity", side, |ui| {
         let mut percent = (style.opacity * PERCENT).round();
         if value_slider(ui, t, "Opacity", &mut percent, OPACITY_PERCENT, OPACITY_STEP, |v| format!("{v:.0} %")) {
@@ -246,7 +246,7 @@ fn tool_controls(ui: &mut egui::Ui, t: &Tokens, tool: CommentTool, prefs: &mut C
         }
     });
     if tool.has_width() {
-        let thickness = look::rail_button(ui, "sliders-horizontal", BUTTON, false, "Line thickness", None);
+        let thickness = look::icon_button(ui, "sliders-horizontal", BUTTON, false, "Line thickness", None);
         popover(&thickness, "thickness", side, |ui| {
             let mut width = style.width;
             if value_slider(ui, t, "Line thickness", &mut width, THICKNESS_PT, THICKNESS_STEP, |v| format!("{v:.1} pt")) {

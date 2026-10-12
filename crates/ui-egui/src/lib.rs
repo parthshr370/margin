@@ -1364,12 +1364,24 @@ impl PdfCraftApp {
         self.notify(i18n::fmt(tl!(template), args));
     }
 
+    /// Sets PdfCraft's light/dark preference (saved with the app's state). Margin keeps it but
+    /// draws the theme settings.jsonc picks (`margin::themes`).
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
         // Before the first frame there is no context to ask, so the last choice stands.
         let system = self.ctx.as_ref().and_then(|ctx| system_theme(ctx, self.desktop_dark));
         self.theme = preference.resolve(system, self.theme).for_flavor(self.flavor);
-        if let Some(ctx) = &self.ctx {
+        if let Some(ctx) = self.ctx.clone() {
+            self.apply_theme(&ctx);
+        }
+    }
+
+    /// Installs the colours to draw: PdfCraft's light or dark, or the theme Margin's settings pick.
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        if self.flavor == Flavor::Margin {
+            self.margin_keys.applied_theme = None;
+            margin::themes::sync(self, ctx);
+        } else {
             theme::apply(ctx, self.theme);
         }
     }
@@ -1384,6 +1396,10 @@ impl PdfCraftApp {
     fn sync_theme(&mut self, ctx: &egui::Context) {
         if let Some(dark) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(dark);
+        }
+        if self.flavor == Flavor::Margin {
+            margin::themes::sync(self, ctx);
+            return;
         }
         let kind = self.theme_preference.resolve(system_theme(ctx, self.desktop_dark), self.theme).for_flavor(self.flavor);
         if kind != self.theme {
@@ -1663,7 +1679,12 @@ impl PdfCraftApp {
                     "dark" => ThemePreference::Dark,
                     _ => return Err("theme must be light, dark, or system".into()),
                 };
-                self.set_theme_preference(preference);
+                if self.flavor == Flavor::Margin {
+                    // Margin's theme mode lives in settings.jsonc, as the Settings window sets it.
+                    margin::themes::run_command(self, &format!("view.theme.{value}"));
+                } else {
+                    self.set_theme_preference(preference);
+                }
             }
             ("page_color", Some(v)) if self.flavor == Flavor::Margin => v.margin.display.set_option(value)?,
             ("trim", Some(v)) if self.flavor == Flavor::Margin => margin::reading::set_trim_option(v, value)?,
@@ -2025,7 +2046,7 @@ impl eframe::App for PdfCraftApp {
             egui_extras::install_image_loaders(ctx);
             theme::install_fonts_for(ctx, hans);
             self.fonts_hans = hans;
-            theme::apply(ctx, self.theme);
+            self.apply_theme(ctx);
             self.styled = true;
         } else {
             self.fonts_ready = true;
@@ -2121,6 +2142,8 @@ impl eframe::App for PdfCraftApp {
         let deferred = std::mem::take(&mut self.deferred_commands);
         if self.flavor == Flavor::Margin {
             margin::keys::load(self, ctx);
+            // A reload this frame applies before anything is drawn.
+            margin::themes::sync(self, ctx);
         }
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,

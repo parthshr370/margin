@@ -80,7 +80,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     egui::Panel::bottom("margin_footer")
         .exact_size(HEIGHT)
         .show_separator_line(look::has_edges(&t))
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
+        .frame(egui::Frame::NONE.fill(t.surfaces.status_bar).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = GAP;
@@ -333,7 +333,7 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32
         }
     });
     // Painted over the group rather than a frame around it, so the outline adds no size.
-    let outline = Stroke::new(look::EDGE, look::Surfaces::of(t).control_edge);
+    let outline = Stroke::new(look::EDGE, t.surfaces.control_edge);
     ui.painter().rect_stroke(group.response.rect, CornerRadius::same(t.radius), outline, egui::StrokeKind::Inside);
     // `W`: fit width, or back to the reading width.
     let (icon, tip) = if view.fit == Fit::Width { ("maximize-2", "Fit reading width") } else { ("maximize", "Fit width") };

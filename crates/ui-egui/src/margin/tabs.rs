@@ -130,7 +130,7 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     egui::Panel::top("margin_tabs")
         .exact_size(STRIP_HEIGHT)
         .show_separator_line(look::has_edges(&t))
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
+        .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             let frozen_id = egui::Id::new("margin-tabs-frozen-width");
             let pointer_in = ui.rect_contains_pointer(ui.max_rect());

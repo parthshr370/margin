@@ -194,8 +194,11 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 
 **Customisation**
 
-- `settings.jsonc` and `keymap.jsonc` are plain JSON with comments. Margin writes commented
-  copies on first start and reloads them as soon as you save.
+- `settings.jsonc`, `keymap.jsonc` and `themes.json` are plain JSON with comments. Margin writes
+  commented copies on first start and reloads them as soon as you save.
+- Themes work as in Zed: pick one with `"theme"`, write your own in `themes.json`, drop Zed theme
+  files into `themes/`, or change a few colours with `"theme_overrides"`
+  ([docs/margin/themes.md](docs/margin/themes.md)). Margin Dark and Margin Light are built in.
 - The keymap uses Zed's format with contexts (Reader, Library, Selection, annotate mode and more).
   Press <kbd>?</kbd> for a keyboard sheet generated from your current keymap, and
   <kbd>Ctrl</kbd>+<kbd>K</kbd> for the command palette.
@@ -285,7 +288,7 @@ Margin keeps its files in two folders:
 
 | What | Linux | macOS |
 |---|---|---|
-| `settings.jsonc`, `keymap.jsonc` | `~/.config/margin/` | `~/Library/Application Support/margin/` |
+| `settings.jsonc`, `keymap.jsonc`, `themes.json`, `themes/` | `~/.config/margin/` | `~/Library/Application Support/margin/` |
 | Library, reading stats, covers, fallback sidecars | `~/.local/share/margin/` | `~/Library/Application Support/margin/` |
 
 On Linux, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` move these as usual. `MARGIN_CONFIG_DIR` and
@@ -294,8 +297,9 @@ On Linux, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` move these as usual. `MARGIN_CON
 Both files are written on first start with every option documented in comments and nothing set,
 so later default changes still reach you. Uncomment what you want to change. Unknown or removed
 keys are reported and ignored; bad values fall back to the setting below them, while valid keys
-still apply. A broken file never stops Margin from starting. A JSON schema for editor completion
-is written to `schemas/` in the same folder.
+still apply. A broken file never stops Margin from starting. JSON schemas for editor completion
+are written to `schemas/` in the same folder, and `default-settings.jsonc` lists every setting
+with its default; Margin rewrites both on every start.
 
 An example `settings.jsonc`:
 
@@ -357,6 +361,12 @@ removes a binding, and `secondary` means <kbd>Cmd</kbd> on macOS and <kbd>Ctrl</
   { "context": "Reader", "bindings": { "n": "reader.page.next", "p": "reader.page.prev", "shift-t": null } }
 ]
 ```
+
+**Themes.** `"theme": "Margin Light"` picks one theme; `"theme": { "mode": "system", "light":
+"Margin Light", "dark": "Margin Dark" }` follows your computer's appearance. Your own themes go in
+`themes.json`, a theme family in Zed's format whose themes extend a built-in or each other; Zed
+theme files work as they are in `themes/`. [docs/margin/themes.md](docs/margin/themes.md) lists
+every style key and what it colours.
 
 **Obsidian.** Point Margin at your vault once from the command line; it remembers the choice:
 

@@ -71,7 +71,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     egui::Area::new(id.with("bar")).order(egui::Order::Foreground).fixed_pos(top).interactable(shown).fade_in(false).show(ctx, |ui| {
         ui.multiply_opacity(how_shown);
         let (rect, _) = ui.allocate_exact_size(bar.size(), Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, t.chrome);
+        ui.painter().rect_filled(rect, 0.0, t.titlebar);
         // A divider only where the theme draws frame edges, as the header and footer do.
         if look::has_edges(&t) {
             ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, t.divider));

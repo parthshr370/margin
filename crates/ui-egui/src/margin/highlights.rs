@@ -968,7 +968,7 @@ fn card(ui: &mut egui::Ui, input: &CardInput<'_>, view: &mut DocView, out: &mut 
         let resp = ui.response();
         let shown = motion::hover(ui.ctx(), resp.id, resp.contains_pointer());
         let actions_shown = motion::hover(ui.ctx(), resp.id.with("actions"), resp.contains_pointer() || selected);
-        let surfaces = look::Surfaces::of(t);
+        let surfaces = t.surfaces;
         let (fill, edge) = if selected {
             (t.selected, surfaces.selected_edge)
         } else {
@@ -1163,7 +1163,7 @@ fn actions(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
         if row.subtype == NOTE_SUBTYPE {
             ui.add_space(ACTION);
         } else {
-            let colour = look::color_button(ui, ACTION, shown_color(input.shared.notes, row.color), false, "Change colour", None);
+            let colour = look::color_button(ui, ACTION, shown_color(input.shared.notes, row.color), "Change colour", None);
             look::popover(&colour, egui::Id::new(("margin-highlight-colour", &row.entry))).show(|ui| {
                 if let Some(i) = color_row(ui, input) {
                     action = Some(Action::Color(i));
