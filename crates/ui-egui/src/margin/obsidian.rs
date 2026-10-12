@@ -55,6 +55,12 @@ const COLOR_MATCH_STEPS: u8 = 3;
 const MARKUP_SUBTYPES: [&str; 4] = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
 /// The app-state key that remembers "Not now" on the library's setup card.
 const SETUP_DISMISSED_KEY: &str = "margin_setup_dismissed";
+/// The file in `<data>` that keeps the dismissed setup prompts, written the moment one is
+/// dismissed (eframe saves its app state only now and then, and a crash would lose it), and its
+/// keys.
+const UI_STATE_FILE: &str = "ui-state.json";
+const UI_STATE_SETUP_KEY: &str = "setup_dismissed";
+const UI_STATE_NOTES_BOX_KEY: &str = "notes_box_dismissed";
 
 /// A named highlight colour (`notes.colors`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,8 +106,13 @@ pub struct Notes {
     /// The notes block of an older app state, kept (and saved with the app state) until
     /// [`settings_loaded`] has copied it into `settings.jsonc`.
     legacy: Option<serde_json::Value>,
-    /// "Not now" on the library's setup card (`margin::welcome`); saved with the app state.
+    /// "Not now" on the library's setup card (`margin::welcome`); saved with the app state and
+    /// in `<data>/ui-state.json`.
     pub setup_dismissed: bool,
+    /// The close button on the Highlights pane's "connect a vault" card; in `ui-state.json`.
+    pub notes_box_dismissed: bool,
+    /// Whether `ui-state.json` was read this run ([`ensure_ui_state`]).
+    ui_state_loaded: bool,
 }
 
 impl Default for Notes {
@@ -120,6 +131,8 @@ impl Default for Notes {
             watched: HashMap::new(),
             legacy: None,
             setup_dismissed: false,
+            notes_box_dismissed: false,
+            ui_state_loaded: false,
         }
     }
 }
@@ -188,7 +201,8 @@ impl Notes {
     /// Restore what [`Self::save_state`] wrote.
     pub(crate) fn restore_state(&mut self, state: &serde_json::Value) {
         self.restore(&state["notes"]);
-        self.setup_dismissed = state[SETUP_DISMISSED_KEY].as_bool().unwrap_or(false);
+        // `ui-state.json` may already have said dismissed ([`ensure_ui_state`]); either wins.
+        self.setup_dismissed |= state[SETUP_DISMISSED_KEY].as_bool().unwrap_or(false);
     }
 
     /// The settings alone, for a worker thread: no caches, jobs or per-document state.
@@ -220,6 +234,55 @@ impl Notes {
     pub fn color_named(&self, rgb: [f32; 3]) -> Option<&NoteColor> {
         let bytes = rgb_bytes(rgb);
         self.colors.iter().find(|c| c.rgb.iter().zip(bytes).all(|(a, b)| a.abs_diff(b) <= COLOR_MATCH_STEPS))
+    }
+}
+
+/// Reads `<data>/ui-state.json` once per run and adds what it says to the dismissed flags (the app
+/// state may have said so too). A missing or unreadable file dismisses nothing.
+pub(crate) fn ensure_ui_state(app: &mut PdfCraftApp) {
+    if app.notes.ui_state_loaded {
+        return;
+    }
+    app.notes.ui_state_loaded = true;
+    let Some(path) = ui_state_path(app) else { return };
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(&text) else {
+        log::warn!("ignoring unreadable {}", path.display());
+        return;
+    };
+    app.notes.setup_dismissed |= state[UI_STATE_SETUP_KEY].as_bool().unwrap_or(false);
+    app.notes.notes_box_dismissed |= state[UI_STATE_NOTES_BOX_KEY].as_bool().unwrap_or(false);
+}
+
+/// Hides the library's setup card for good and writes that down at once.
+pub(crate) fn dismiss_setup(app: &mut PdfCraftApp) {
+    ensure_ui_state(app);
+    app.notes.setup_dismissed = true;
+    write_ui_state(app);
+}
+
+/// Hides the Highlights pane's "connect a vault" card for good and writes that down at once.
+pub(crate) fn dismiss_notes_box(app: &mut PdfCraftApp) {
+    ensure_ui_state(app);
+    app.notes.notes_box_dismissed = true;
+    write_ui_state(app);
+}
+
+fn ui_state_path(app: &PdfCraftApp) -> Option<PathBuf> {
+    app.margin_keys.data_dir().map(|dir| dir.join(UI_STATE_FILE))
+}
+
+/// Writes both flags to `ui-state.json`, replacing the file in one step. A failure is told in a
+/// notice; the flag still holds for this run and the app state keeps the setup card's.
+fn write_ui_state(app: &mut PdfCraftApp) {
+    let Some(path) = ui_state_path(app) else { return };
+    let mut state = serde_json::Map::new();
+    state.insert(UI_STATE_SETUP_KEY.to_owned(), serde_json::Value::Bool(app.notes.setup_dismissed));
+    state.insert(UI_STATE_NOTES_BOX_KEY.to_owned(), serde_json::Value::Bool(app.notes.notes_box_dismissed));
+    let state = serde_json::Value::Object(state);
+    let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| write_atomically(&path, &state.to_string()));
+    if let Err(err) = written {
+        app.notify(format!("Couldn't remember that choice in {}: {err}", path.display()));
     }
 }
 
@@ -664,7 +727,7 @@ fn note_for(notes: &Notes, variables: &BTreeMap<String, String>) -> Result<Strin
     if notes.vault.is_none() {
         return Err(match &notes.config.vault {
             Some(relative) => format!("notes.vault must be a full folder path, not {}", relative.display()),
-            None => "Set notes.vault to your Obsidian vault folder first.".into(),
+            None => NO_VAULT_WHY.into(),
         });
     }
     format::render(&notes.note_template, variables, TemplateContext::Path).and_then(|path| note_path(&path, ""))
@@ -829,6 +892,10 @@ pub enum Request {
     SetTarget(ExportTarget),
     ExportHighlights,
     ExportPaper(bool),
+    /// Ask for the vault folder (the "connect a vault" card's button).
+    ChooseVault,
+    /// Hide the "connect a vault" card for good.
+    HideVaultPrompt,
 }
 
 /// Per-view state the notes buttons read and write (lives in `CommentView`). `enabled` is only
@@ -845,6 +912,8 @@ pub struct NotesUi {
     pub target: ExportTarget,
     pub progress: Option<(usize, usize)>,
     pub(crate) markup_indices: Arc<Vec<usize>>,
+    /// The "connect a vault" card was closed (`Notes::notes_box_dismissed`).
+    pub vault_prompt_hidden: bool,
 }
 
 impl NotesUi {
@@ -865,6 +934,7 @@ impl Default for NotesUi {
             target: ExportTarget::Obsidian,
             progress: None,
             markup_indices: Arc::new(Vec::new()),
+            vault_prompt_hidden: false,
         }
     }
 }
@@ -877,13 +947,17 @@ pub(crate) fn menu_items(ui: &mut egui::Ui, notes: &mut NotesUi, a: &Annotation)
     if !notes.enabled || !is_markup(a) {
         return;
     }
-    let copy = ui.button("Copy callout");
-    if look::tooltip(copy, if notes.external { EXTERNAL_TIP } else { "Copy as a PDF++ callout" }, None).clicked() {
+    if look::menu_row(ui, Some("copy"), "Copy callout", None, false)
+        .on_hover_text(if notes.external { EXTERNAL_TIP } else { "Copy as a PDF++ callout" })
+        .clicked()
+    {
         notes.ask(ui.ctx(), Request::CopyCallout(a.page, a.index));
         ui.close();
     }
-    let open = ui.button("Open in Obsidian");
-    if look::tooltip(open, "Add this highlight to the reading note and open it in Obsidian", None).clicked() {
+    if look::menu_row(ui, Some("external-link"), "Open in Obsidian", None, false)
+        .on_hover_text("Add this highlight to the reading note and open it in Obsidian")
+        .clicked()
+    {
         notes.ask(ui.ctx(), Request::Open(Some((a.page, a.index))));
         ui.close();
     }
@@ -896,44 +970,72 @@ pub(crate) fn card_buttons(ui: &mut egui::Ui, notes: &mut NotesUi, a: &Annotatio
     if !notes.enabled || !is_markup(a) || has_menu {
         return;
     }
-    if icons::button(ui, "external-link", CARD_BUTTON, false, "Open this callout in Obsidian").clicked() {
+    if look::icon_button(ui, "external-link", look::SMALL_BUTTON, false, "Open this callout in Obsidian", None).clicked() {
         notes.ask(ui.ctx(), Request::Open(Some((a.page, a.index))));
     }
     let tip = if notes.external { EXTERNAL_TIP } else { "Copy callout" };
-    if icons::button(ui, "copy", CARD_BUTTON, false, tip).clicked() {
+    if look::icon_button(ui, "copy", look::SMALL_BUTTON, false, tip, None).clicked() {
         notes.ask(ui.ctx(), Request::CopyCallout(a.page, a.index));
     }
 }
 
-/// Side of a card's icon buttons (the comment card's own buttons are this size).
-const CARD_BUTTON: f32 = 22.0;
-
-/// The reading-note box at the top of the highlights list (the mockup's `.note-link`), on the
-/// spacing scale: padded by the large step, rows the small step apart. The note's path with an
-/// "Open note" button, the "Add highlights to this note" switch, then "Copy all" and "Write to
-/// note" sharing one row equally. Without a reading note (no vault) the path row says why and
-/// the switch and "Write to note" are off.
+/// The notes area at the top of the highlights list. Without a reading note (no vault) it starts
+/// with the "connect a vault" card: one line, "Choose vault…" and a close button that hides it
+/// for good. Then the reading-note box (the mockup's `.note-link`), padded by the large step,
+/// rows the small step apart: the note's path with "Open note" and a fold button on one fixed
+/// row, the "Add highlights to this note" switch, the export format and Export, then "Copy all"
+/// and "Write to note" sharing one row equally. Folded, only the first row shows.
 pub(crate) fn panel_block(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
     if !notes.enabled {
         return;
     }
+    if notes.note.is_err() && !notes.vault_prompt_hidden {
+        vault_prompt(ui, t, notes);
+        ui.add_space(look::GAP);
+    }
+    let folded_id = egui::Id::new("margin-notes-box-folded");
+    let folded = ui.data(|d| d.get_temp::<bool>(folded_id)).unwrap_or(false);
     look::card_frame(t).inner_margin(look::GAP_LARGE).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = egui::vec2(look::GAP, look::GAP);
-        note_row(ui, t, notes);
-        autoadd_row(ui, t, notes);
-        export_row(ui, notes);
-        if let Some((done, total)) = notes.progress {
-            ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).text(format!("Exporting {done} / {total}")));
+        if note_row(ui, t, notes, folded) {
+            ui.data_mut(|d| d.insert_temp(folded_id, !folded));
         }
-        action_row(ui, notes);
+        if !folded {
+            autoadd_row(ui, t, notes);
+            export_row(ui, notes);
+            action_row(ui, notes);
+        }
     });
     ui.add_space(look::GAP);
 }
 
-/// Icon and button sizes and text sizes of the notes box.
+/// The text sizes of the "connect a vault" card.
+const PROMPT_TITLE_TEXT: f32 = 12.5;
+
+/// The "connect a vault" card: what a vault is for, why there is none when the setting is wrong,
+/// "Choose vault…", and the close button.
+fn vault_prompt(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
+    let why = notes.note.as_ref().err().filter(|why| why.as_str() != NO_VAULT_WHY).cloned();
+    let (choose, closed) = look::banner_card(ui, "Hide vault prompt", |ui| {
+        ui.spacing_mut().item_spacing.y = look::GAP;
+        let title = egui::RichText::new("Connect an Obsidian vault to keep notes").font(theme::medium(PROMPT_TITLE_TEXT)).color(t.text);
+        ui.add(egui::Label::new(title).wrap().selectable(false));
+        if let Some(why) = &why {
+            ui.add(egui::Label::new(egui::RichText::new(why).font(theme::regular(NOTE_SUB_TEXT)).color(t.text_faint)).wrap().selectable(false));
+        }
+        look::Button::primary(look::ButtonSize::Compact, "Choose vault…").icon("folder-open").show(ui).clicked()
+    });
+    if choose {
+        notes.ask(ui.ctx(), Request::ChooseVault);
+    }
+    if closed {
+        notes.ask(ui.ctx(), Request::HideVaultPrompt);
+    }
+}
+
+/// Icon and text sizes of the notes box.
 const NOTE_ICON: f32 = 14.0;
-const NOTE_BUTTON: f32 = 24.0;
 const NOTE_PATH_TEXT: f32 = 12.0;
 const NOTE_TITLE_TEXT: f32 = 12.5;
 const NOTE_SUB_TEXT: f32 = 11.5;
@@ -941,33 +1043,37 @@ const NOTE_SUB_TEXT: f32 = 11.5;
 const NOTE_SUB_GAP: f32 = 2.0;
 const AUTOADD_TITLE: &str = "Add highlights to this note";
 const AUTOADD_SUB: &str = "Each new highlight becomes a PDF++ callout";
+/// Why there is no reading note when no vault is set (the "connect a vault" card says it better).
+const NO_VAULT_WHY: &str = "Set notes.vault to your Obsidian vault folder first.";
 
-/// The reading note's path, truncated, and "Open note"; or why there is no note, wrapped.
-fn note_row(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
+/// The box's first row, one compact control tall whatever it says: the reading note's path,
+/// truncated, with "Open note"; or why there is none, faint and truncated (the whole reason in
+/// its tooltip); then the fold button. True when the fold button was clicked.
+fn note_row(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi, folded: bool) -> bool {
     let width = ui.available_width();
-    let path = match &notes.note {
-        Ok(path) => path.clone(),
-        Err(why) => {
-            ui.horizontal_top(|ui| {
-                ui.add(icons::image("file-text", NOTE_ICON, t.icon));
-                let text = egui::RichText::new(why).font(theme::regular(NOTE_PATH_TEXT)).color(t.text_faint);
-                ui.add(egui::Label::new(text).wrap().selectable(false));
-            });
-            return;
-        }
+    let (text, color, has_note) = match &notes.note {
+        Ok(path) => (path.clone(), t.text_muted, true),
+        Err(why) => (why.clone(), t.text_faint, false),
     };
-    ui.allocate_ui_with_layout(egui::vec2(width, NOTE_BUTTON), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+    let row = ui.allocate_ui_with_layout(egui::vec2(width, look::BUTTON_HEIGHT), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.add(icons::image("file-text", NOTE_ICON, t.icon));
-        let label_width = (ui.available_width() - NOTE_BUTTON - look::GAP).max(0.0);
-        ui.allocate_ui_with_layout(egui::vec2(label_width, NOTE_BUTTON), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        let buttons = if has_note { 2.0 } else { 1.0 };
+        let label_width = (ui.available_width() - buttons * (look::BUTTON_HEIGHT + look::GAP)).max(0.0);
+        ui.allocate_ui_with_layout(egui::vec2(label_width, look::BUTTON_HEIGHT), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_width(label_width);
-            let text = egui::RichText::new(&path).font(theme::regular(NOTE_PATH_TEXT)).color(t.text_muted);
-            ui.add(egui::Label::new(text).truncate().selectable(false));
+            let label =
+                ui.add(egui::Label::new(egui::RichText::new(&text).font(theme::regular(NOTE_PATH_TEXT)).color(color)).truncate().selectable(false));
+            if !has_note {
+                label.on_hover_text(&text);
+            }
         });
-        if look::icon_button(ui, "external-link", NOTE_BUTTON, false, "Open note in Obsidian", None).clicked() {
+        if has_note && look::icon_button(ui, "external-link", look::BUTTON_HEIGHT, false, "Open note in Obsidian", None).clicked() {
             notes.ask(ui.ctx(), Request::Open(None));
         }
+        let (icon, name) = if folded { ("chevron-down", "Show the notes box") } else { ("chevron-up", "Fold the notes box") };
+        look::icon_button(ui, icon, look::BUTTON_HEIGHT, false, name, None).clicked()
     });
+    row.inner
 }
 
 /// "Add highlights to this note" and its explanation, with the switch against the right edge,
@@ -1029,38 +1135,56 @@ fn target_label(target: ExportTarget) -> &'static str {
     }
 }
 
-/// The export target picker's width, and the name screen readers (and tests) find it by.
-const TARGET_PICKER_WIDTH: f32 = 145.0;
+/// Every export target, in the picker's order.
+const TARGETS: [ExportTarget; 5] =
+    [ExportTarget::Obsidian, ExportTarget::Markdown, ExportTarget::Logseq, ExportTarget::ReadwiseCsv, ExportTarget::Json];
+/// The name screen readers (and tests) find the export target picker by.
 pub const TARGET_PICKER_NAME: &str = "Highlight export format";
+/// The Export button's label while an export runs, at its widest, so the button keeps one width.
+const EXPORTING_TEMPLATE: &str = "Exporting 000 / 000";
 
-/// The highlight export format (also what Copy all copies) and the Export menu.
+/// The highlight export format (also what Copy all copies) and the Export menu, both compact
+/// dropdown buttons of a fixed width. A running export shows its progress in the Export button
+/// itself, so no row comes and goes in the box.
 fn export_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = look::GAP;
+        let picker = look::Button::secondary(look::ButtonSize::Compact, target_label(notes.target)).trailing("chevron-down").name(TARGET_PICKER_NAME);
+        let labels = TARGETS.map(target_label);
+        let picker_width = picker.widest(ui, &labels);
+        let picker = picker.fixed_width(picker_width).show(ui);
         let mut selected = notes.target;
-        let picker = egui::ComboBox::from_id_salt("highlight-export-target")
-            .selected_text(target_label(selected))
-            .width(TARGET_PICKER_WIDTH)
-            .show_ui(ui, |ui| {
-                for target in [ExportTarget::Obsidian, ExportTarget::Markdown, ExportTarget::Logseq, ExportTarget::ReadwiseCsv, ExportTarget::Json] {
-                    ui.selectable_value(&mut selected, target, target_label(target));
+        look::popover(&picker, egui::Id::new("margin-export-target")).show(|ui| {
+            look::menu_body(ui);
+            for target in TARGETS {
+                if look::menu_row(ui, None, target_label(target), None, target == selected).clicked() {
+                    selected = target;
+                    ui.close();
                 }
-            });
-        picker.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, TARGET_PICKER_NAME));
+            }
+        });
         if selected != notes.target {
             notes.ask(ui.ctx(), Request::SetTarget(selected));
         }
-        ui.menu_button("Export", |ui| {
-            if ui.button("Export highlights…").clicked() {
+        let label = match notes.progress {
+            Some((done, total)) => format!("Exporting {done} / {total}"),
+            None => "Export".to_owned(),
+        };
+        let export = look::Button::secondary(look::ButtonSize::Compact, &label).trailing("chevron-down").name("Export");
+        let export_width = export.widest(ui, &["Export", EXPORTING_TEMPLATE]);
+        let export = export.fixed_width(export_width).show(ui);
+        egui::Popup::menu(&export).show(|ui| {
+            look::menu_body(ui);
+            if look::menu_row(ui, Some("file-output"), "Export highlights…", None, false).clicked() {
                 notes.ask(ui.ctx(), Request::ExportHighlights);
-                ui.close();
             }
-            if ui.button("Export paper as Markdown…").clicked() {
+            if look::menu_row(ui, Some("file-text"), "Export paper as Markdown…", None, false).clicked() {
                 notes.ask(ui.ctx(), Request::ExportPaper(false));
-                ui.close();
             }
-            if ui.add_enabled(notes.note.is_ok(), egui::Button::new("Export paper to vault")).clicked() {
+            let to_vault =
+                ui.add_enabled_ui(notes.note.is_ok(), |ui| look::menu_row(ui, Some("folder-open"), "Export paper to vault", None, false)).inner;
+            if to_vault.clicked() {
                 notes.ask(ui.ctx(), Request::ExportPaper(true));
-                ui.close();
             }
         });
     });
@@ -1084,6 +1208,7 @@ pub fn tick(app: &mut PdfCraftApp) {
     if !app.notes.palette_published {
         publish_palette(app);
     }
+    ensure_ui_state(app);
     poll_jobs(app);
     for i in 0..app.views.len() {
         refresh_view(app, i);
@@ -1145,6 +1270,7 @@ fn refresh_view(app: &mut PdfCraftApp, i: usize) {
     }
     notes_ui.target = app.notes.config.export_target;
     notes_ui.markup_indices = cached.indices.clone();
+    notes_ui.vault_prompt_hidden = app.notes.notes_box_dismissed;
     notes_ui.progress = app.notes.jobs.get(&id).and_then(|job| job.lock().ok().map(|state| (state.done, state.total)));
 }
 
@@ -1201,6 +1327,17 @@ pub fn save_snapshot_to_note(app: &mut PdfCraftApp, index: usize, page: usize, r
 
 fn run(app: &mut PdfCraftApp, i: usize, request: Request) {
     let result = match request {
+        // Neither says anything when done: the picker and the card going away are the answer.
+        Request::ChooseVault => {
+            // The web build has no folders to pick; its card's button does nothing there.
+            #[cfg(not(target_arch = "wasm32"))]
+            super::welcome::pick_vault(app);
+            return;
+        }
+        Request::HideVaultPrompt => {
+            dismiss_notes_box(app);
+            return;
+        }
         Request::CopyCallout(page, index) => copy_callout(app, i, page, index),
         Request::Open(which) => {
             let only = which

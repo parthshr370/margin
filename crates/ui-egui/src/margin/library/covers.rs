@@ -85,6 +85,9 @@ pub(super) struct Covers {
     remade: HashSet<String>,
     /// Files of books whose cover couldn't be read, not yet handed to a scan.
     to_rescan: Vec<String>,
+    /// Covers a scan may have rewritten since they were decoded: still drawn, and decoded again
+    /// the next time they are drawn, the new texture replacing the old when it lands.
+    stale: HashSet<String>,
     /// The frame counter, and the egui pass it counts (the library and the Stats sheet share it).
     frame: u64,
     pass: u64,
@@ -98,9 +101,11 @@ impl Covers {
         self.textures.len()
     }
 
-    /// A scan ended: covers may have been rewritten, and failed ones made again.
+    /// A scan ended: covers may have been rewritten, and failed ones made again. The covers on
+    /// hand stay on screen until their fresh decode replaces them, so nothing flashes back to the
+    /// placeholder.
     pub(super) fn scan_ended(&mut self) {
-        self.textures.clear();
+        self.stale = self.textures.keys().cloned().collect();
         self.failed.clear();
     }
 
@@ -166,21 +171,27 @@ impl Covers {
     }
 
     /// The book's cover texture if decoded; else asks for it (decoded on this thread when
-    /// `inline`, for tests) and returns `None` for now.
+    /// `inline`, for tests) and returns `None` for now. A stale cover is returned as it is while
+    /// its new decode is asked for.
     pub(super) fn texture(&mut self, ctx: &egui::Context, data: &std::path::Path, book: &Book, inline: bool) -> Option<TextureHandle> {
-        if let Some(cover) = self.textures.get_mut(&book.book_id) {
-            cover.used = self.frame;
-            return Some(cover.texture.clone());
+        let frame = self.frame;
+        let current = self.textures.get_mut(&book.book_id).map(|cover| {
+            cover.used = frame;
+            cover.texture.clone()
+        });
+        if current.is_some() && !self.stale.contains(&book.book_id) {
+            return current;
         }
         if book.cover != Cover::Cached || self.failed.contains(&book.book_id) || self.pending.contains_key(&book.book_id) {
-            return None;
+            return current;
         }
         let path = store::cover_path(data, &book.book_id);
         if inline {
             if self.uploaded >= UPLOADS_PER_FRAME {
                 ctx.request_repaint();
-                return None;
+                return current;
             }
+            self.stale.remove(&book.book_id);
             match decode(&path) {
                 Some(image) => self.upload(ctx, book.book_id.clone(), image),
                 None => self.unreadable(book.book_id.clone(), Some(book.path.clone())),
@@ -188,16 +199,17 @@ impl Covers {
             return self.textures.get(&book.book_id).map(|cover| cover.texture.clone());
         }
         if self.pending.len() >= MAX_IN_FLIGHT {
-            return None;
+            return current;
         }
         if self.loader.is_none() {
             self.loader = Loader::spawn(ctx);
         }
-        let loader = self.loader.as_ref()?;
+        let Some(loader) = self.loader.as_ref() else { return current };
         if loader.ask.send((book.book_id.clone(), path)).is_ok() {
+            self.stale.remove(&book.book_id);
             self.pending.insert(book.book_id.clone(), book.path.clone());
         }
-        None
+        current
     }
 
     /// Drops the covers drawn longest ago once there are more than [`MAX_TEXTURES`].

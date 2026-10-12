@@ -55,17 +55,29 @@ const CELL_PAD: f32 = 8.0;
 const LIST_ROW: f32 = 52.0;
 const LIST_COVER: Vec2 = vec2(30.0, 40.0);
 const HERO_COVER: f32 = 120.0;
-/// The Continue reading card's corner radius and padding (§2: radius 12, 16 inside).
-const HERO_RADIUS: u8 = 12;
+/// The Continue reading card's padding (its radius is every card's, `look::RADIUS_CARD`).
 const HERO_PAD: i8 = 16;
 /// A cover's own radius and its faint light edge, so a dark first page keeps its outline.
 const COVER_RADIUS: u8 = 4;
 const COVER_EDGE: Color32 = Color32::from_rgba_premultiplied(26, 26, 26, 26);
+/// The search field's widest and narrowest width: it gives way before it overlaps the title.
 const SEARCH_WIDTH: f32 = 300.0;
-/// The collection name field's text width: the spec's 192 point well less its side padding.
-const COLLECTION_FIELD_WIDTH: f32 = 176.0;
-const BUTTON: f32 = 32.0;
+const SEARCH_MIN_WIDTH: f32 = 160.0;
+/// The collection name field's width (in the Collections dropdown).
+const COLLECTION_FIELD_WIDTH: f32 = 192.0;
+/// The top bar's controls: one control height (`look::CONTROL_ROW`).
+const BUTTON: f32 = look::CONTROL_ROW;
 const BAR_WIDTH: f32 = 70.0;
+/// The scan's progress line under the top bar: painted over the gap, so it takes no room.
+const SCAN_LINE: f32 = 2.0;
+/// The shelf filter dropdown's widest label width ("Folder: …", "Tag: …").
+const FILTER_MAX_WIDTH: f32 = 220.0;
+/// The grid keeps its column count until the width is this far past a change point, so a
+/// window edge dragged across one doesn't flip the whole grid back and forth.
+const COLUMN_HYSTERESIS: f32 = 2.0;
+/// Rows laid out above and below the visible part of the page, so a fast scroll never shows a
+/// blank row for a frame.
+const OVERSCAN: f32 = 200.0;
 /// The search field's id (`library.search` focuses it).
 const SEARCH_ID: &str = "margin-library-search";
 /// A tag pill on a card or a row: its text size, padding, height, radius (round ends) and the
@@ -576,38 +588,79 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let content = Rect::from_min_max(pos2(left, full.top() + top_pad), pos2(left + width, full.bottom()));
     let traffic_lights = window_chrome::traffic_lights_inset(&ctx, content);
     let mut page = ui.new_child(egui::UiBuilder::new().max_rect(content).layout(egui::Layout::top_down(egui::Align::Min)));
-    top_bar(app, &mut page, &t, traffic_lights, &mut actions);
+    let bar = top_bar(app, &mut page, &t, traffic_lights, &mut actions);
+    scan_line(app, &page, &t, bar);
     page.add_space(GAP_LARGE * 2.0);
-    super::welcome::card(app, &mut page, &t);
-    if app.margin_library.failed.is_some() {
-        page.label(egui::RichText::new("The library database couldn't be opened; see the log.").color(t.text_muted));
-    }
-    let searching = !app.margin_library.query.trim().is_empty();
-    if let (Some(index), Some(meta), false) = (hero, &hero_line, searching) {
-        hero_card(app, &mut page, &t, index, meta, &mut actions);
-        page.add_space(GAP_LARGE * 2.0);
-    }
-    super::tabs::open_now(app, &mut page, &t);
-    shelf_header(app, &mut page, &t, order.len());
-    page.add_space(GAP_LARGE);
-    if matches!(app.margin_library.shelf, Shelf::Folders | Shelf::Collections | Shelf::Tags) {
-        shelf_picker(app, &mut page, &t, &mut actions);
-        page.add_space(GAP_LARGE);
-    }
-    if text::active(&app.margin_library) {
-        text::show(app, &mut page, &t, &order, &mut actions);
-    } else if order.is_empty() {
-        empty_state(app, &mut page, &t);
-    } else {
-        match app.margin_library.view {
-            LibraryView::Grid => grid(app, &mut page, &t, &order, &mut actions),
-            LibraryView::List => list(app, &mut page, &t, &order, &mut actions),
+    // Everything under the top bar scrolls as one page, so what comes and goes above the shelf
+    // (the setup card, Continue reading, Open now) never squeezes the grid. The scroll area
+    // reaches into the right padding, so its floating bar never covers the last column.
+    let scroll_rect = Rect::from_min_max(page.cursor().min, pos2(content.right() + SIDE_PAD / 2.0, content.bottom()));
+    let mut scroller = page.new_child(egui::UiBuilder::new().max_rect(scroll_rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    egui::ScrollArea::vertical().id_salt("margin-library-page").auto_shrink([false, false]).show_viewport(&mut scroller, |ui, viewport| {
+        ui.set_max_width(width);
+        let origin = ui.max_rect().min;
+        super::welcome::card(app, ui, &t);
+        if app.margin_library.failed.is_some() {
+            ui.label(egui::RichText::new("The library database couldn't be opened; see the log.").color(t.text_muted));
         }
-    }
+        // Kept while searching: the results replace only the shelf below.
+        if let (Some(index), Some(meta)) = (hero, &hero_line) {
+            hero_card(app, ui, &t, index, meta, &mut actions);
+            ui.add_space(GAP_LARGE * 2.0);
+        }
+        super::tabs::open_now(app, ui, &t);
+        shelf_header(app, ui, &t, order.len(), &mut actions);
+        ui.add_space(GAP_LARGE);
+        let view = Viewport { origin, visible: viewport };
+        if text::active(&app.margin_library) {
+            text::show(app, ui, &t, &order, &mut actions);
+        } else if order.is_empty() {
+            empty_state(app, ui, &t);
+        } else {
+            match app.margin_library.view {
+                LibraryView::Grid => grid(app, ui, &t, &order, view, &mut actions),
+                LibraryView::List => list(app, ui, &t, &order, view, &mut actions),
+            }
+        }
+        ui.add_space(GAP_LARGE * 2.0);
+    });
     ui.allocate_rect(full, Sense::hover());
     app.margin_library.covers.trim();
     apply(app, &ctx, actions);
     details::show(app, &ctx);
+}
+
+/// Where the page's scroll content starts on screen, and the part of it on screen (in content
+/// coordinates): what the grid and the list need to lay out only their visible rows.
+#[derive(Clone, Copy)]
+struct Viewport {
+    origin: egui::Pos2,
+    visible: Rect,
+}
+
+impl Viewport {
+    /// The first and one past the last of `count` rows `pitch` apart from screen y `top` that are
+    /// on screen (with [`OVERSCAN`]).
+    fn rows(self, top: f32, pitch: f32, count: usize) -> std::ops::Range<usize> {
+        if pitch <= 0.0 || count == 0 {
+            return 0..0;
+        }
+        let start = top - self.origin.y;
+        let first = ((self.visible.top() - OVERSCAN - start) / pitch).floor().max(0.0) as usize;
+        let last = ((self.visible.bottom() + OVERSCAN - start) / pitch).ceil().max(0.0) as usize;
+        first.min(count)..last.saturating_add(1).min(count)
+    }
+}
+
+/// The scan's progress as a thin line just under the top bar, painted over the gap there, so a
+/// scan never moves the bar's controls.
+fn scan_line(app: &PdfCraftApp, ui: &egui::Ui, t: &Tokens, bar: Rect) {
+    let Some(progress) = app.margin_library.scan.as_ref().map(ScanJob::progress) else { return };
+    let done = if progress.to_read == 0 { 0.0 } else { (progress.done as f32 / progress.to_read as f32).clamp(0.0, 1.0) };
+    let track = Rect::from_min_size(pos2(bar.left(), bar.bottom() + GAP), vec2(bar.width(), SCAN_LINE));
+    let radius = CornerRadius::same(1);
+    ui.painter().rect_filled(track, radius, look::Surfaces::of(t).track);
+    ui.painter().rect_filled(Rect::from_min_size(track.min, vec2(track.width() * done, SCAN_LINE)), radius, t.accent);
 }
 
 /// The library stopped showing (a book opened).
@@ -625,16 +678,22 @@ struct Ordered {
     collection: Option<i64>,
     tag: Option<i64>,
     in_text: bool,
-    /// The books the shelf shows, in order (indices into `books`).
+    /// The books the shelf shows, in order (indices into `books`), and their row ids (indices
+    /// change when the books are read again; ids don't).
     order: Arc<[usize]>,
+    ids: Vec<i64>,
     /// The Continue reading book.
     hero: Option<usize>,
 }
 
 impl Ordered {
     fn holds_for(&self, state: &LibraryState) -> bool {
-        self.generation == state.generation
-            && self.query == state.query
+        self.generation == state.generation && self.same_choices(state)
+    }
+
+    /// Everything but the books themselves is as it was.
+    fn same_choices(&self, state: &LibraryState) -> bool {
+        self.query == state.query
             && self.sort == state.sort
             && self.shelf == state.shelf
             && self.folder == state.folder
@@ -656,12 +715,24 @@ fn haystack(book: &Book, tag_names: &HashMap<i64, String>) -> String {
 }
 
 /// The shelf's books in order and the Continue reading book: kept, and made again only when the
-/// books, the search, the sort, the shelf or its folder or collection changed.
+/// books, the search, the sort, the shelf or its folder or collection changed. While a scan adds
+/// books, the books already shown keep their places and new ones go after them, so the grid
+/// doesn't reshuffle under the reader for the length of the scan; the next order after it ends
+/// sorts everything.
 fn ordered(state: &mut LibraryState) -> (Arc<[usize]>, Option<usize>) {
     if let Some(kept) = state.ordered.as_ref().filter(|kept| kept.holds_for(state)) {
         return (kept.order.clone(), kept.hero);
     }
-    let order: Arc<[usize]> = shelf_order(state).into();
+    let mut order = shelf_order(state);
+    if state.scan.is_some()
+        && let Some(kept) = state.ordered.as_ref().filter(|kept| kept.same_choices(state))
+    {
+        let place: HashMap<i64, usize> = kept.ids.iter().enumerate().map(|(at, id)| (*id, at)).collect();
+        // A stable sort: kept books by their old place, the new ones after them in shelf order.
+        order.sort_by_key(|index| state.books.get(*index).and_then(|book| place.get(&book.id).copied()).unwrap_or(usize::MAX));
+    }
+    let ids = order.iter().filter_map(|index| state.books.get(*index).map(|book| book.id)).collect();
+    let order: Arc<[usize]> = order.into();
     let hero = hero_book(state);
     state.orders_built = state.orders_built.saturating_add(1);
     state.ordered = Some(Ordered {
@@ -674,6 +745,7 @@ fn ordered(state: &mut LibraryState) -> (Arc<[usize]>, Option<usize>) {
         tag: state.tag,
         in_text: state.in_text,
         order: order.clone(),
+        ids,
         hero,
     });
     (order, hero)
@@ -769,8 +841,13 @@ fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
     line
 }
 
-fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights: f32, actions: &mut Vec<Action>) {
-    ui.horizontal(|ui| {
+/// The top bar on one [`BUTTON`]-tall row: Back (its slot kept when there is no book to go back
+/// to, so the title never moves), the title, then on the right the search field, "In text" and
+/// the icon buttons, every control one height. Nothing in it changes width with the state: a
+/// scan shows under the bar ([`scan_line`]) and in the Rescan button's tooltip. Returns the
+/// row's rect.
+fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights: f32, actions: &mut Vec<Action>) -> Rect {
+    look::bar_row(ui, BUTTON, |ui| {
         ui.spacing_mut().item_spacing.x = GAP_LARGE;
         // The gap after the space is the row's own item spacing.
         if traffic_lights > 0.0 {
@@ -782,6 +859,8 @@ fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights:
             if look::icon_button(ui, "chevron-left", BUTTON, false, "Back to reading", keys.as_deref()).clicked() {
                 actions.push(Action::Back);
             }
+        } else {
+            ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::hover());
         }
         ui.label(egui::RichText::new("Library").font(theme::semibold(18.0)).color(t.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -810,48 +889,47 @@ fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights:
             if look::icon_button(ui, "layout-grid", BUTTON, !list, "Grid", None).clicked() {
                 app.margin_library.view = LibraryView::Grid;
             }
-            if let Some(progress) = &scanning {
-                ui.label(
-                    egui::RichText::new(format!("Scanning {} / {}", progress.done, progress.to_read)).font(theme::regular(12.0)).color(t.text_muted),
-                );
-            }
             let in_text = app.margin_library.in_text;
             let tip = "Search the pages and highlights of the books instead of their titles, authors, tags and details";
-            if look::Button::secondary(ButtonSize::Compact, "In text").selected(in_text).tip(tip).show(ui).clicked() {
+            if look::Button::secondary(ButtonSize::Standard, "In text").selected(in_text).tip(tip).show(ui).clicked() {
                 app.margin_library.in_text = !in_text;
             }
-            search_field(app, ui, t);
+            // What is left of the row past the title, less a gap: the field narrows before it
+            // would ever run over the title.
+            let search_width = (ui.available_width() - GAP_LARGE).clamp(SEARCH_MIN_WIDTH, SEARCH_WIDTH);
+            search_field(app, ui, t, search_width);
         });
-    });
+    })
+    .response
+    .rect
 }
 
-fn search_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn search_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, width: f32) {
     let id = egui::Id::new(SEARCH_ID);
-    let focused = look::input_focused(ui, id);
-    look::input_frame(t, focused).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-        // Left to right even inside the top bar's right-to-left cluster: icon, then text.
-        ui.allocate_ui_with_layout(vec2(SEARCH_WIDTH - 20.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
-            let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-            icons::paint(ui, icon, "search", 15.0, t.text_muted);
-            let keys = look::shortcut(app, "library.search").map(|keys| format!("  ({keys})")).unwrap_or_default();
-            let what = if app.margin_library.in_text { "Search the books' text" } else { "Search titles" };
-            let field = egui::TextEdit::singleline(&mut app.margin_library.query)
-                .id(id)
-                .frame(egui::Frame::NONE)
-                .hint_text(format!("{what}{keys}"))
-                .desired_width(SEARCH_WIDTH - 50.0);
-            let resp = ui.add(field);
-            if std::mem::take(&mut app.margin_library.focus_search) {
-                resp.request_focus();
-            }
-        });
+    look::field_well(ui, id, vec2(width, BUTTON), |ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+        icons::paint(ui, icon, "search", 15.0, t.text_muted);
+        let keys = look::shortcut(app, "library.search").map(|keys| format!("  ({keys})")).unwrap_or_default();
+        let what = if app.margin_library.in_text { "Search the books' text" } else { "Search titles" };
+        let field = egui::TextEdit::singleline(&mut app.margin_library.query)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .margin(Vec2::ZERO)
+            .hint_text(format!("{what}{keys}"))
+            .desired_width(ui.available_width());
+        let resp = ui.add(field);
+        if std::mem::take(&mut app.margin_library.focus_search) {
+            resp.request_focus();
+        }
     });
 }
 
+/// The Continue reading card. Its author line is there even when the book has no author, so the
+/// card is one height for every book.
 fn hero_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, meta: &str, actions: &mut Vec<Action>) {
     let Some(book) = app.margin_library.books.get(index).cloned() else { return };
-    let frame = look::card_frame(t).corner_radius(HERO_RADIUS).shadow(look::SHADOW_S).inner_margin(HERO_PAD);
+    let frame = look::card_frame(t).shadow(look::SHADOW_S).inner_margin(HERO_PAD);
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_top(|ui| {
@@ -866,9 +944,9 @@ fn hero_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize,
                 ui.label(egui::RichText::new("CONTINUE READING").font(theme::semibold(11.0)).color(t.accent).extra_letter_spacing(0.9));
                 ui.add_space(2.0);
                 ui.add(egui::Label::new(egui::RichText::new(&book.title).font(theme::semibold(20.0)).color(t.text)).truncate());
-                if !book.author.is_empty() {
-                    ui.add(egui::Label::new(egui::RichText::new(&book.author).font(theme::regular(13.0)).color(t.text_muted)).truncate());
-                }
+                // A space keeps the line's height when there is no author.
+                let author = if book.author.is_empty() { " " } else { book.author.as_str() };
+                ui.add(egui::Label::new(egui::RichText::new(author).font(theme::regular(13.0)).color(t.text_muted)).truncate());
                 ui.add_space(GAP);
                 ui.label(egui::RichText::new(meta).font(theme::regular(12.5)).color(t.text_muted));
                 ui.add_space(GAP * 2.0);
@@ -880,11 +958,13 @@ fn hero_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize,
     });
 }
 
-/// The shelf's name and count, then Sort and the shelves as a segmented group on the right.
-fn shelf_header(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, count: usize) {
-    ui.horizontal(|ui| {
+/// The shelf's name and count, then the shelves as a segmented group, Sort and (on Folders,
+/// Collections and Tags) the shelf's filter on the right, on one [`look::CONTROL_ROW`] row. The
+/// filter is a dropdown, not a row of chips, so switching shelves never inserts a row.
+fn shelf_header(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, count: usize, actions: &mut Vec<Action>) {
+    look::control_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        look::section_label(ui, t, app.margin_library.shelf.label(), Some(count));
+        ui.add(egui::Label::new(look::section_caps(t, app.margin_library.shelf.label(), Some(count))).selectable(false));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let current = app.margin_library.shelf;
             let segments = Shelf::ALL.map(|shelf| look::Segment { label: shelf.label(), selected: shelf == current, tip: None });
@@ -893,122 +973,152 @@ fn shelf_header(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, count: usi
             }
             ui.add_space(GAP_LARGE);
             sort_menu(app, ui);
+            if matches!(app.margin_library.shelf, Shelf::Folders | Shelf::Collections | Shelf::Tags) {
+                shelf_filter(app, ui, t, actions);
+            }
         });
     });
 }
 
-/// Sort: a compact secondary button with a chevron, opening the sort orders as a menu.
+/// The sort orders, in the menu's order, with their labels.
+const SORTS: [(LibrarySort, &str); 5] = [
+    (LibrarySort::Recent, "Recent"),
+    (LibrarySort::Title, "Title"),
+    (LibrarySort::Author, "Author"),
+    (LibrarySort::Progress, "Progress"),
+    (LibrarySort::Added, "Added"),
+];
+
+/// Sort: a compact secondary button with a chevron, as wide as its widest label, opening the
+/// sort orders as a menu.
 fn sort_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let label = |sort: LibrarySort| match sort {
-        LibrarySort::Recent => "Recent",
-        LibrarySort::Title => "Title",
-        LibrarySort::Author => "Author",
-        LibrarySort::Progress => "Progress",
-        LibrarySort::Added => "Added",
-    };
-    let text = format!("Sort: {}", label(app.margin_library.sort));
-    let button = look::Button::secondary(ButtonSize::Compact, &text).trailing("chevron-down").show(ui);
+    let current = SORTS.iter().find(|(sort, _)| *sort == app.margin_library.sort).map_or("Recent", |(_, label)| *label);
+    let text = format!("Sort: {current}");
+    let labels: Vec<String> = SORTS.iter().map(|(_, label)| format!("Sort: {label}")).collect();
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let button = look::Button::secondary(ButtonSize::Compact, &text).trailing("chevron-down");
+    let width = button.widest(ui, &labels);
+    let button = button.fixed_width(width).show(ui);
     egui::Popup::menu(&button).show(|ui| {
-        for sort in [LibrarySort::Recent, LibrarySort::Title, LibrarySort::Author, LibrarySort::Progress, LibrarySort::Added] {
-            if ui.selectable_label(app.margin_library.sort == sort, label(sort)).clicked() {
+        look::menu_body(ui);
+        for (sort, label) in SORTS {
+            if look::menu_row(ui, None, label, None, app.margin_library.sort == sort).clicked() {
                 app.margin_library.sort = sort;
-                ui.close();
             }
         }
     });
 }
 
-/// A filter chip: a standard secondary button, the chosen one selected (check, selected label).
-fn chip(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
-    look::Button::secondary(ButtonSize::Standard, label).selected(on).show(ui)
-}
-
-/// The Folders shelf's folder chips, the Tags shelf's tag chips, or the Collections shelf's
-/// collection chips and, under them, the row that creates one.
-fn shelf_picker(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+/// The Folders shelf's folder, the Collections shelf's collection or the Tags shelf's tag, as
+/// one dropdown beside Sort: "All" and every choice (the chosen one checked), then what the
+/// shelf can do: add a library folder, create a collection, delete the chosen collection or tag.
+fn shelf_filter(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
+    let state = &app.margin_library;
+    let (noun, current) = match state.shelf {
+        Shelf::Folders => ("Folder", state.folder.as_deref().map(crate::folders_ui::folder_name)),
+        Shelf::Collections => ("Collection", state.collection.and_then(|id| state.collections.iter().find(|c| c.id == id)).map(|c| c.name.clone())),
+        _ => ("Tag", state.tag.and_then(|id| state.tags.iter().find(|tag| tag.id == id)).map(|tag| tag.name.clone())),
+    };
+    let text = format!("{noun}: {}", current.as_deref().unwrap_or("All"));
+    let button = look::Button::secondary(ButtonSize::Compact, &text).trailing("chevron-down").tip(&text);
+    let width = button.width(ui).min(FILTER_MAX_WIDTH);
+    let button = button.fixed_width(width).show(ui);
+    look::popover(&button, egui::Id::new(("margin-shelf-filter", noun))).show(|ui| {
+        look::menu_body(ui);
         match app.margin_library.shelf {
-            Shelf::Folders => {
-                let folders: Vec<PathBuf> = folder_paths(&app.margin_keys.settings().library.folders);
-                if folders.is_empty() && look::Button::secondary(ButtonSize::Standard, "Add a library folder…").icon("folder-plus").show(ui).clicked()
-                {
-                    super::welcome::add_library_folder(app);
-                }
-                if chip(ui, "All", app.margin_library.folder.is_none()).clicked() {
-                    app.margin_library.folder = None;
-                }
-                for folder in folders {
-                    let folder = folder.to_string_lossy().into_owned();
-                    let on = app.margin_library.folder.as_deref() == Some(folder.as_str());
-                    let name = crate::folders_ui::folder_name(&folder);
-                    if look::Button::secondary(ButtonSize::Standard, &name).selected(on).tip(&folder).show(ui).clicked() {
-                        app.margin_library.folder = Some(folder);
-                    }
-                }
-            }
-            Shelf::Collections => {
-                if chip(ui, "All", app.margin_library.collection.is_none()).clicked() {
-                    app.margin_library.collection = None;
-                }
-                let collections = app.margin_library.collections.clone();
-                for collection in collections {
-                    let on = app.margin_library.collection == Some(collection.id);
-                    let resp = chip(ui, &format!("{}  {}", collection.name, collection.count), on);
-                    if resp.clicked() {
-                        app.margin_library.collection = Some(collection.id);
-                    }
-                    resp.context_menu(|ui| {
-                        if ui.button("Delete collection").clicked() {
-                            actions.push(Action::DeleteCollection(collection.id));
-                        }
-                    });
-                }
-            }
-            Shelf::Tags => {
-                if app.margin_library.tags.is_empty() {
-                    ui.label(egui::RichText::new("No tags yet. Right-click a book to tag it.").color(t.text_muted));
-                }
-                if chip(ui, "All", app.margin_library.tag.is_none()).clicked() {
-                    app.margin_library.tag = None;
-                }
-                let tags = app.margin_library.tags.clone();
-                for tag in tags {
-                    let on = app.margin_library.tag == Some(tag.id);
-                    let resp = chip(ui, &format!("{}  {}", tag.name, tag.count), on);
-                    if resp.clicked() {
-                        app.margin_library.tag = Some(tag.id);
-                    }
-                    resp.context_menu(|ui| {
-                        if ui.button("Delete tag").clicked() {
-                            actions.push(Action::DeleteTag(tag.id));
-                        }
-                    });
-                }
-            }
-            _ => {}
+            Shelf::Folders => folder_choices(app, ui),
+            Shelf::Collections => collection_choices(app, ui, actions),
+            _ => tag_choices(app, ui, t, actions),
         }
     });
-    if app.margin_library.shelf == Shelf::Collections {
-        ui.add_space(GAP);
-        new_collection_row(app, ui, t, actions);
+}
+
+/// The Folders dropdown: All and each watched folder, or only "Add a library folder…" while
+/// there are none.
+fn folder_choices(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let folders: Vec<PathBuf> = folder_paths(&app.margin_keys.settings().library.folders);
+    if folders.is_empty() {
+        if look::menu_row(ui, Some("folder-plus"), "Add a library folder…", None, false).clicked() {
+            ui.close();
+            super::welcome::add_library_folder(app);
+        }
+        return;
+    }
+    if look::menu_row(ui, None, "All", None, app.margin_library.folder.is_none()).clicked() {
+        app.margin_library.folder = None;
+        ui.close();
+    }
+    for folder in folders {
+        let folder = folder.to_string_lossy().into_owned();
+        let on = app.margin_library.folder.as_deref() == Some(folder.as_str());
+        let name = crate::folders_ui::folder_name(&folder);
+        if look::menu_row(ui, None, &name, None, on).on_hover_text(&folder).clicked() {
+            app.margin_library.folder = Some(folder);
+            ui.close();
+        }
     }
 }
 
-/// The outlined "Collection name" field and its primary Add, off while the name is blank.
-fn new_collection_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
-    ui.horizontal(|ui| {
+/// The Collections dropdown: All and each collection with its count, Delete for the chosen one,
+/// and the field that creates one.
+fn collection_choices(app: &mut PdfCraftApp, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    if look::menu_row(ui, None, "All", None, app.margin_library.collection.is_none()).clicked() {
+        app.margin_library.collection = None;
+        ui.close();
+    }
+    let collections = app.margin_library.collections.clone();
+    for collection in &collections {
+        let on = app.margin_library.collection == Some(collection.id);
+        if look::menu_row(ui, None, &format!("{}  {}", collection.name, collection.count), None, on).clicked() {
+            app.margin_library.collection = Some(collection.id);
+            ui.close();
+        }
+    }
+    if let Some(chosen) = collections.iter().find(|c| Some(c.id) == app.margin_library.collection) {
+        ui.separator();
+        if look::menu_row(ui, Some("trash-2"), &format!("Delete collection “{}”", chosen.name), None, false).clicked() {
+            actions.push(Action::DeleteCollection(chosen.id));
+            ui.close();
+        }
+    }
+    ui.separator();
+    new_collection_row(app, ui, actions);
+}
+
+/// The Tags dropdown: All and each tag with its count (a hint while there are none), and Delete
+/// for the chosen one.
+fn tag_choices(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &mut Vec<Action>) {
+    let tags = app.margin_library.tags.clone();
+    if tags.is_empty() {
+        ui.label(egui::RichText::new("No tags yet. Right-click a book to tag it.").color(t.text_muted));
+        return;
+    }
+    if look::menu_row(ui, None, "All", None, app.margin_library.tag.is_none()).clicked() {
+        app.margin_library.tag = None;
+        ui.close();
+    }
+    for tag in &tags {
+        let on = app.margin_library.tag == Some(tag.id);
+        if look::menu_row(ui, None, &format!("{}  {}", tag.name, tag.count), None, on).clicked() {
+            app.margin_library.tag = Some(tag.id);
+            ui.close();
+        }
+    }
+    if let Some(chosen) = tags.iter().find(|tag| Some(tag.id) == app.margin_library.tag) {
+        ui.separator();
+        if look::menu_row(ui, Some("trash-2"), &format!("Delete tag “{}”", chosen.name), None, false).clicked() {
+            actions.push(Action::DeleteTag(chosen.id));
+            ui.close();
+        }
+    }
+}
+
+/// The "Collection name" field and its primary Add, off while the name is blank.
+fn new_collection_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    look::control_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = GAP;
         let id = egui::Id::new("margin-new-collection");
-        let field = look::input_frame(t, look::input_focused(ui, id)).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
-            let edit = egui::TextEdit::singleline(&mut app.margin_library.new_collection)
-                .id(id)
-                .frame(egui::Frame::NONE)
-                .hint_text("New collection")
-                .desired_width(COLLECTION_FIELD_WIDTH);
-            ui.add(edit)
-        });
-        let resp = field.inner;
+        let resp = look::text_field(ui, id, &mut app.margin_library.new_collection, "New collection", COLLECTION_FIELD_WIDTH);
         ui.ctx().accesskit_node_builder(resp.id, |node| node.set_label("Collection name"));
         let named = !app.margin_library.new_collection.trim().is_empty();
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1037,25 +1147,41 @@ fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// The cover grid, laid out a row at a time for the rows on screen only.
-fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], actions: &mut Vec<Action>) {
+/// How many columns of at least [`CELL_MIN`] fit `width`, kept from the last frame while the
+/// width is within [`COLUMN_HYSTERESIS`] of where the count changes.
+fn grid_columns(ctx: &egui::Context, width: f32) -> usize {
+    let id = egui::Id::new("margin-library-columns");
+    let fit = |width: f32| (((width + CELL_GAP_X) / (CELL_MIN + CELL_GAP_X)).floor().max(0.0) as usize).max(1);
+    let fresh = fit(width);
+    let columns = match ctx.data(|d| d.get_temp::<usize>(id)) {
+        Some(last) if last != fresh && fit(width - COLUMN_HYSTERESIS) <= last && last <= fit(width + COLUMN_HYSTERESIS) => last,
+        _ => fresh,
+    };
+    ctx.data_mut(|d| d.insert_temp(id, columns));
+    columns
+}
+
+/// The cover grid in the page's scroll area: its whole height is taken, but only the rows on
+/// screen are laid out.
+fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], view: Viewport, actions: &mut Vec<Action>) {
     let width = ui.available_width();
-    let columns = (((width + CELL_GAP_X) / (CELL_MIN + CELL_GAP_X)).floor() as usize).max(1);
+    let columns = grid_columns(ui.ctx(), width);
     let cell_w = ((width - CELL_GAP_X * (columns as f32 - 1.0)) / columns as f32).max(1.0);
     let cover_h = (cell_w - 2.0 * CELL_PAD).max(1.0) * COVER_ASPECT;
     let row_h = cover_h + CELL_TEXT + 2.0 * CELL_PAD;
     let rows = order.len().div_ceil(columns);
-    ui.spacing_mut().item_spacing.y = CELL_GAP_Y;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("margin-library-grid").show_rows(ui, row_h, rows, |ui, range| {
-        for row in range {
-            let (rect, _) = ui.allocate_exact_size(vec2(width, row_h), Sense::hover());
-            for column in 0..columns {
-                let Some(&index) = order.get(row * columns + column) else { break };
-                let cell = Rect::from_min_size(pos2(rect.left() + column as f32 * (cell_w + CELL_GAP_X), rect.top()), vec2(cell_w, row_h));
-                book_cell(app, ui, t, index, cell, cover_h, actions);
-            }
+    let pitch = row_h + CELL_GAP_Y;
+    let top = ui.cursor().top();
+    let area = Rect::from_min_size(pos2(ui.cursor().left(), top), vec2(width, (rows as f32 * pitch - CELL_GAP_Y).max(0.0)));
+    for row in view.rows(top, pitch, rows) {
+        let y = top + row as f32 * pitch;
+        for column in 0..columns {
+            let Some(&index) = order.get(row * columns + column) else { break };
+            let cell = Rect::from_min_size(pos2(area.left() + column as f32 * (cell_w + CELL_GAP_X), y), vec2(cell_w, row_h));
+            book_cell(app, ui, t, index, cell, cover_h, actions);
         }
-    });
+    }
+    ui.allocate_rect(area, Sense::hover());
 }
 
 /// One book in the grid: a card (cover, title, status) with the S shadow, its fill and edge
@@ -1109,55 +1235,48 @@ fn status_line(ui: &egui::Ui, t: &Tokens, book: &Book, rect: Rect) {
 }
 
 /// The list view: one row per book in a panel-coloured, edged container, a divider between
-/// rows; virtualised like the grid.
-fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], actions: &mut Vec<Action>) {
-    let container = egui::Frame::NONE.fill(t.panel).stroke(look::edge_stroke(t.border)).corner_radius(look::RADIUS_CARD).inner_margin(look::EDGE);
-    container.show(ui, |ui| list_rows(app, ui, t, order, actions));
+/// rows; in the page's scroll area, laying out only the rows on screen like the grid.
+fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], view: Viewport, actions: &mut Vec<Action>) {
+    let width = ui.available_width();
+    let pitch = LIST_ROW + look::EDGE;
+    let height = order.len() as f32 * pitch - look::EDGE + 2.0 * look::EDGE;
+    let container = Rect::from_min_size(ui.cursor().min, vec2(width, height.max(0.0)));
+    ui.painter().rect(container, CornerRadius::same(look::RADIUS_CARD), t.panel, look::edge_stroke(t.border), egui::StrokeKind::Inside);
+    let top = container.top() + look::EDGE;
+    let row_width = (width - 2.0 * look::EDGE).max(0.0);
+    for row in view.rows(top, pitch, order.len()) {
+        let Some(&index) = order.get(row) else { continue };
+        let rect = Rect::from_min_size(pos2(container.left() + look::EDGE, top + row as f32 * pitch), vec2(row_width, LIST_ROW));
+        list_row(app, ui, t, index, rect, actions);
+    }
+    ui.allocate_rect(container, Sense::hover());
 }
 
-fn list_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], actions: &mut Vec<Action>) {
-    let width = ui.available_width();
-    ui.spacing_mut().item_spacing.y = look::EDGE;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("margin-library-list").show_rows(ui, LIST_ROW, order.len(), |ui, range| {
-        for &index in order.get(range).unwrap_or_default() {
-            let Some(book) = app.margin_library.books.get(index).cloned() else { continue };
-            let (rect, resp) = ui.allocate_exact_size(vec2(width, LIST_ROW), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
-            look::row_fill(ui, t, rect, &resp, false);
-            ui.painter().hline(rect.x_range(), rect.bottom() + look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
-            let cover = Rect::from_min_size(pos2(rect.left() + GAP, rect.center().y - LIST_COVER.y / 2.0), LIST_COVER);
-            paint_cover(app, ui, t, cover, &book);
-            let text_left = cover.right() + GAP_LARGE;
-            let status = Rect::from_min_max(pos2(rect.right() - 200.0, rect.top()), pos2(rect.right() - GAP, rect.bottom()));
-            let names = tag_names(&app.margin_library, &book);
-            let pills = tag_pills(ui, t, &names, LIST_PILLS_WIDTH);
-            let pills_left = status.left() - GAP_LARGE - pills.width;
-            paint_pills(ui, t, &pills, pos2(pills_left, rect.center().y - PILL_HEIGHT / 2.0));
-            let text_width = (pills_left - GAP_LARGE - text_left).max(GAP);
-            crate::widgets::row_text(
-                ui,
-                pos2(text_left, rect.top() + 17.0),
-                crate::bidi::visual(&book.title),
-                theme::medium(13.0),
-                t.text,
-                text_width,
-            );
-            let detail = if book.author.is_empty() { book.path.clone() } else { book.author.clone() };
-            crate::widgets::row_text(
-                ui,
-                pos2(text_left, rect.top() + 35.0),
-                crate::bidi::visual(&detail),
-                theme::regular(11.5),
-                t.text_muted,
-                text_width,
-            );
-            status_line(ui, t, &book, status);
-            if resp.clicked() {
-                actions.push(Action::Open(book.path.clone()));
-            }
-            context_menu(app, &resp, &book, actions);
-        }
-    });
+/// One book's row at `rect`: cover, title and author (or path), its tag pills in a slot every
+/// row reserves (so every title is cut at the same x), and the status on the right.
+fn list_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, rect: Rect, actions: &mut Vec<Action>) {
+    let Some(book) = app.margin_library.books.get(index).cloned() else { return };
+    let resp = ui.interact(rect, ui.id().with(("book-row", book.id)), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
+    look::row_fill(ui, t, rect, &resp, false);
+    ui.painter().hline(rect.x_range(), rect.bottom() + look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
+    let cover = Rect::from_min_size(pos2(rect.left() + GAP, rect.center().y - LIST_COVER.y / 2.0), LIST_COVER);
+    paint_cover(app, ui, t, cover, &book);
+    let text_left = cover.right() + GAP_LARGE;
+    let status = Rect::from_min_max(pos2(rect.right() - 200.0, rect.top()), pos2(rect.right() - GAP, rect.bottom()));
+    let names = tag_names(&app.margin_library, &book);
+    let pills = tag_pills(ui, t, &names, LIST_PILLS_WIDTH);
+    let slot_right = status.left() - GAP_LARGE;
+    paint_pills(ui, t, &pills, pos2(slot_right - pills.width, rect.center().y - PILL_HEIGHT / 2.0));
+    let text_width = (slot_right - LIST_PILLS_WIDTH - GAP_LARGE - text_left).max(GAP);
+    crate::widgets::row_text(ui, pos2(text_left, rect.top() + 17.0), crate::bidi::visual(&book.title), theme::medium(13.0), t.text, text_width);
+    let detail = if book.author.is_empty() { book.path.clone() } else { book.author.clone() };
+    crate::widgets::row_text(ui, pos2(text_left, rect.top() + 35.0), crate::bidi::visual(&detail), theme::regular(11.5), t.text_muted, text_width);
+    status_line(ui, t, &book, status);
+    if resp.clicked() {
+        actions.push(Action::Open(book.path.clone()));
+    }
+    context_menu(app, &resp, &book, actions);
 }
 
 /// The names of the book's tags, A to Z.
@@ -1207,65 +1326,67 @@ fn paint_pills(ui: &egui::Ui, t: &Tokens, pills: &Pills, left_top: egui::Pos2) {
     }
 }
 
-/// The book's menu: open, details, show in folder, finished, collections, tags, remove.
+/// The book's menu: open, details, show in folder, finished, collections, tags, remove. Margin's
+/// menu rows, so every label starts at the same x and the menu is one width for every book.
 fn context_menu(app: &mut PdfCraftApp, resp: &egui::Response, book: &Book, actions: &mut Vec<Action>) {
     resp.context_menu(|ui| {
-        if ui.button("Open").clicked() {
+        look::menu_body(ui);
+        if look::menu_row(ui, Some("book-open"), "Open", None, false).clicked() {
             actions.push(Action::Open(book.path.clone()));
         }
-        if ui.button("Details\u{2026}").clicked() {
+        if look::menu_row(ui, Some("file-text"), "Details\u{2026}", None, false).clicked() {
             actions.push(Action::Details(book.id));
         }
-        if ui.button("Show in folder").clicked() {
+        if look::menu_row(ui, Some("folder-open"), "Show in folder", None, false).clicked() {
             actions.push(Action::ShowInFolder(book.path.clone()));
         }
         let finished = if book.finished { "Mark as not finished" } else { "Mark as finished" };
-        if ui.button(finished).clicked() {
+        if look::menu_row(ui, Some("circle-check"), finished, None, false).clicked() {
             actions.push(Action::Finished(book.id, !book.finished));
         }
-        ui.menu_button("Add to collection", |ui| {
+        look::submenu(ui, "layers", "Add to collection", false, |ui| {
             for collection in &app.margin_library.collections {
                 let member = book.collections.contains(&collection.id);
-                if ui.add_enabled(!member, egui::Button::new(&collection.name)).clicked() {
+                if ui.add_enabled_ui(!member, |ui| look::menu_row(ui, None, &collection.name, None, member)).inner.clicked() {
                     actions.push(Action::AddTo(collection.id, book.id));
                 }
             }
             if !app.margin_library.collections.is_empty() {
                 ui.separator();
             }
-            if ui.button("New collection").clicked() {
+            if look::menu_row(ui, Some("plus"), "New collection", None, false).clicked() {
                 actions.push(Action::NewCollectionWith(book.id));
             }
         });
         tags_menu(app, ui, book, actions);
         if let Some(collection) =
             app.margin_library.collection.filter(|c| app.margin_library.shelf == Shelf::Collections && book.collections.contains(c))
-            && ui.button("Remove from this collection").clicked()
+            && look::menu_row(ui, Some("minus"), "Remove from this collection", None, false).clicked()
         {
             actions.push(Action::RemoveFrom(collection, book.id));
         }
         ui.separator();
-        if ui.button("Remove from library").clicked() {
+        if look::menu_row(ui, Some("trash-2"), "Remove from library", None, false).clicked() {
             actions.push(Action::Remove(book.id));
         }
     });
 }
 
-/// Tags ▸: every tag (a click puts it on the book or takes it off), then a field that tags the
-/// book with a new name on Enter.
+/// Tags ▸: every tag, checked when the book has it (a click puts it on the book or takes it
+/// off, and the submenu stays open for the next one), then a field that tags the book with a new
+/// name on Enter.
 fn tags_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, book: &Book, actions: &mut Vec<Action>) {
-    ui.menu_button("Tags", |ui| {
+    look::submenu(ui, "tag", "Tags", true, |ui| {
         for tag in &app.margin_library.tags {
             let on = book.tags.contains(&tag.id);
-            if ui.selectable_label(on, &tag.name).clicked() {
+            if look::menu_row(ui, None, &tag.name, None, on).clicked() {
                 actions.push(if on { Action::Untag(book.id, tag.id) } else { Action::TagWith(book.id, tag.name.clone()) });
             }
         }
         if !app.margin_library.tags.is_empty() {
             ui.separator();
         }
-        let field = egui::TextEdit::singleline(&mut app.margin_library.new_tag).hint_text("New tag").desired_width(TAG_FIELD_WIDTH);
-        let resp = ui.add(field);
+        let resp = look::text_field(ui, egui::Id::new(("margin-new-tag", book.id)), &mut app.margin_library.new_tag, "New tag", TAG_FIELD_WIDTH);
         let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if entered && !app.margin_library.new_tag.trim().is_empty() {
             actions.push(Action::TagWith(book.id, std::mem::take(&mut app.margin_library.new_tag)));

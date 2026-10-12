@@ -1,7 +1,8 @@
 //! The library's setup card in the real shell: on a first run it offers the vault, a library
-//! folder and Open; picking writes `notes.vault` and `library.folders` into `settings.jsonc`;
-//! "Not now" is remembered with the app state. The system's folder panel is answered through
-//! `PdfCraftApp::pick_override`, the hook automation and tests use instead of a native panel.
+//! folder and Open; picking writes `notes.vault` and `library.folders` into `settings.jsonc` and
+//! moves the card on to the next step; its close button and "Not now" are written to disk at
+//! once. The system's folder panel is answered through `PdfCraftApp::pick_override`, the hook
+//! automation and tests use instead of a native panel.
 
 use std::path::PathBuf;
 
@@ -75,7 +76,9 @@ fn first_run_card_connects_the_vault_and_a_library_folder() {
 
     pick(&mut h, "Choose vault…", &place.path("vault"));
     assert_eq!(place.settings().notes.vault, Some(place.path("vault")));
-    assert!(h.query_by_label("Disconnect").is_some(), "connected: Change and Disconnect");
+    assert!(h.query_by_label("Choose vault…").is_none(), "the vault step is done");
+    assert!(h.query_by_label("Disconnect").is_none(), "onboarding only moves forward: no Disconnect");
+    assert!(h.query_by_label("Set up Margin").is_some(), "the card stays for the folder step");
 
     pick(&mut h, "Add folder…", &place.path("books"));
     assert_eq!(place.settings().library.folders, [place.path("books").to_string_lossy().into_owned()]);
@@ -84,7 +87,8 @@ fn first_run_card_connects_the_vault_and_a_library_folder() {
     if let Some(folder) = std::env::var_os("MARGIN_NOTES_EVIDENCE_DIR").map(PathBuf::from) {
         std::fs::write(folder.join("setup-settings.jsonc"), &written).unwrap();
     }
-    h.run_steps(2);
+    // The card folds away over the slide animation.
+    h.run_steps(30);
     assert!(h.query_by_label("Set up Margin").is_none(), "everything is set: the card is gone");
 }
 
@@ -93,7 +97,7 @@ fn not_now_hides_the_card_across_restarts() {
     let place = Place::new("dismiss");
     let mut h = harness(&place, None);
     h.get_by_label("Not now").click();
-    h.run_steps(2);
+    h.run_steps(30);
     assert!(h.query_by_label("Set up Margin").is_none());
     let state = h.state().persist();
     drop(h);
@@ -101,6 +105,20 @@ fn not_now_hides_the_card_across_restarts() {
     h.run_steps(2);
     assert!(h.query_by_label("Set up Margin").is_none(), "dismissed stays dismissed");
     assert!(h.query_by_label("Add a library folder…").is_some(), "the empty library still offers a folder");
+}
+
+#[test]
+fn the_close_button_hides_the_card_even_without_the_app_state() {
+    let place = Place::new("close");
+    let mut h = harness(&place, None);
+    h.get_by_label("Close setup").click();
+    h.run_steps(30);
+    assert!(h.query_by_label("Set up Margin").is_none());
+    drop(h);
+    // No eframe state is handed over: the dismissal was written to the data folder at once.
+    let mut h = harness(&place, None);
+    h.run_steps(2);
+    assert!(h.query_by_label("Set up Margin").is_none(), "the close is remembered on disk");
 }
 
 #[test]

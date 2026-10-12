@@ -13,11 +13,13 @@ use crate::PdfCraftApp;
 /// The menu row's label.
 const LABEL: &str = "Import BibTeX or Zotero\u{2026}";
 
-/// The Library app menu's import row (`header::APP_MENU`).
+/// The Library app menu's import row (`header::APP_MENU`): one label always, off with "Importing…"
+/// in its tooltip while an import runs, so the row never changes.
 pub(crate) fn item(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let running = app.margin_library.import.is_some();
-    let label = if running { "Importing\u{2026}" } else { LABEL };
-    if ui.add_enabled(!running, egui::Button::new(label)).clicked() {
+    let row = ui.add_enabled_ui(!running, |ui| crate::margin::look::menu_row(ui, Some("file-input"), LABEL, None, false)).inner;
+    let row = if running { row.on_disabled_hover_text("Importing\u{2026}") } else { row };
+    if row.clicked() {
         ui.close();
         pick(app);
     }
