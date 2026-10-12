@@ -10,9 +10,8 @@ use crate::margin::{obsidian, welcome};
 
 /// The Save button beside a template field.
 const TEMPLATE_SAVE_WIDTH: f32 = 56.0;
-/// A template field never gets narrower than this, nor its text area.
+/// A template field never gets narrower than this.
 const TEMPLATE_MIN_WIDTH: f32 = 100.0;
-const TEMPLATE_TEXT_MIN_WIDTH: f32 = 80.0;
 
 /// Draws both sections (in the Settings window's body).
 pub(super) fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
@@ -45,43 +44,47 @@ pub(super) fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// How many folders there are, with Add and a Remove menu (right to left: the row's layout).
+/// Remove is always there, off with no folders, so the row never reflows when one is added.
 fn folders_control(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let folders = app.margin_keys.settings().library.folders.clone();
-    if look::Button::secondary(ButtonSize::Standard, "Add…").icon("folder-plus").show(ui).clicked() {
+    if look::Button::secondary(ButtonSize::Standard, "Add folder…").icon("folder-plus").show(ui).clicked() {
         welcome::add_library_folder(app);
     }
-    if !folders.is_empty() {
-        ui.menu_button("Remove", |ui| {
-            for folder in &folders {
-                if ui.button(crate::folders_ui::folder_name(folder)).on_hover_text(folder.as_str()).clicked() {
-                    welcome::remove_folder(app, folder);
-                    ui.close();
-                }
+    let remove =
+        ui.add_enabled_ui(!folders.is_empty(), |ui| look::Button::secondary(ButtonSize::Standard, "Remove").trailing("chevron-down").show(ui)).inner;
+    egui::Popup::menu(&remove).show(|ui| {
+        look::menu_body(ui);
+        for folder in &folders {
+            if look::menu_row(ui, Some("folder-open"), &crate::folders_ui::folder_name(folder), None, false).on_hover_text(folder.as_str()).clicked()
+            {
+                welcome::remove_folder(app, folder);
             }
-        });
-    }
+        }
+    });
     let summary = match folders.len() {
         0 => "None yet".to_owned(),
         1 => "1 folder".to_owned(),
         n => format!("{n} folders"),
     };
-    ui.label(summary).on_hover_text(folders.join("\n"));
+    ui.add(egui::Label::new(summary).truncate()).on_hover_text(folders.join("\n"));
 }
 
-/// The vault's folder name, Choose or Change, and Disconnect.
+/// The vault's folder name (cut to what the slot leaves), Choose or Change (one width), and
+/// Disconnect, always there and off without a vault, so choosing a vault never reflows the row.
 fn vault_control(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let vault = app.notes.config.vault.clone();
-    if vault.is_some() && look::Button::secondary(ButtonSize::Standard, "Disconnect").show(ui).clicked() {
+    if ui.add_enabled_ui(vault.is_some(), |ui| look::Button::secondary(ButtonSize::Standard, "Disconnect").show(ui)).inner.clicked() {
         welcome::disconnect_vault(app);
     }
-    let choose = if vault.is_some() { "Change…" } else { "Choose…" };
-    if look::Button::secondary(ButtonSize::Standard, choose).icon("folder-open").show(ui).clicked() {
+    let choose = look::Button::secondary(ButtonSize::Standard, if vault.is_some() { "Change vault…" } else { "Choose vault…" }).icon("folder-open");
+    let width = choose.widest(ui, &["Change vault…", "Choose vault…"]);
+    if choose.fixed_width(width).show(ui).clicked() {
         welcome::pick_vault(app);
     }
     let shown =
         vault.as_ref().map_or_else(|| "Not set".to_owned(), |path| path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned());
     let tip = vault.as_ref().map_or_else(|| "No vault selected".to_owned(), |path| path.display().to_string());
-    ui.label(shown).on_hover_text(tip);
+    ui.add(egui::Label::new(shown).truncate()).on_hover_text(tip);
 }
 
 fn export_target_name(target: ExportTarget) -> &'static str {
@@ -247,29 +250,50 @@ fn text_setting(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, setting: N
         .filter(|draft| draft.source == current)
         .map_or_else(|| current.clone(), |draft| draft.text);
 
+    // A divider and padding like every other setting row.
+    let top = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), top + look::EDGE / 2.0, egui::Stroke::new(look::EDGE, t.divider));
     ui.add_space(ROW_PAD_Y);
     ui.label(RichText::new(setting.name()).font(theme::medium(NAME_SIZE)).color(t.text));
     ui.add_space(NAME_GAP);
     ui.label(RichText::new(setting.description()).font(theme::regular(DESCRIPTION_SIZE)).color(t.text_muted));
     ui.add_space(NAME_GAP);
-    ui.horizontal(|ui| {
+    let unsaved = draft != current;
+    // Save on the right, at the field's top, then the field in the rest: a field that scrolls
+    // past its rows instead of growing, so typing never moves the rows below or the button.
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        ui.spacing_mut().item_spacing.x = look::GAP;
+        let save_label = if unsaved { "Save •" } else { "Save" };
+        let save = look::Button::secondary(ButtonSize::Standard, save_label).name("Save").fixed_width(TEMPLATE_SAVE_WIDTH);
+        let saved = ui.add_enabled_ui(unsaved, |ui| save.show(ui)).inner.clicked();
         let input_id = ui.make_persistent_id(("margin-notes-template-field", setting.id()));
-        let editor_width = (ui.available_width() - TEMPLATE_SAVE_WIDTH - ROW_GAP).max(TEMPLATE_MIN_WIDTH);
-        let text_width = (editor_width - f32::from(FIELD_PAD.left) - f32::from(FIELD_PAD.right)).max(TEMPLATE_TEXT_MIN_WIDTH);
+        let editor_width = ui.available_width().max(TEMPLATE_MIN_WIDTH);
         let rows = setting.rows();
-        let editor = if rows == 1 { egui::TextEdit::singleline(&mut draft) } else { egui::TextEdit::multiline(&mut draft).desired_rows(rows) };
-        let editor = editor.id(input_id).frame(egui::Frame::NONE).font(theme::regular(FIELD_TEXT)).desired_width(text_width);
-        let field = look::input_frame(t, look::input_focused(ui, input_id)).inner_margin(FIELD_PAD).show(ui, |ui| ui.add(editor));
-        ui.ctx().accesskit_node_builder(field.inner.id, |node| node.set_label(setting.name()));
+        let line = ui.fonts_mut(|fonts| fonts.row_height(&theme::regular(FIELD_TEXT)));
+        let height = if rows == 1 { CONTROL_HEIGHT } else { rows as f32 * line + 2.0 * look::GAP };
+        look::field_well(ui, input_id, vec2(editor_width, height), |ui| {
+            egui::ScrollArea::vertical().id_salt(input_id.with("scroll")).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
+                let editor =
+                    if rows == 1 { egui::TextEdit::singleline(&mut draft) } else { egui::TextEdit::multiline(&mut draft).desired_rows(rows) };
+                let editor = editor
+                    .id(input_id)
+                    .frame(egui::Frame::NONE)
+                    .margin(Vec2::ZERO)
+                    .font(theme::regular(FIELD_TEXT))
+                    .desired_width(ui.available_width());
+                let field = ui.add(editor);
+                ui.ctx().accesskit_node_builder(field.id, |node| node.set_label(setting.name()));
+            });
+        });
         ui.ctx().data_mut(|memory| memory.insert_temp(draft_id, TemplateDraft { source: current.clone(), text: draft.clone() }));
-        let save = ui.add_sized(vec2(TEMPLATE_SAVE_WIDTH, CONTROL_HEIGHT), egui::Button::new("Save"));
-        if save.clicked() && draft != current {
+        if saved {
             match setting.with(app.notes.config.clone(), draft) {
                 Ok(config) => save_notes(app, config),
                 Err(error) => app.notify(format!("{}: {error}", setting.name())),
             }
         }
     });
+    ui.add_space(ROW_PAD_Y);
 }
 
 fn save_notes(app: &mut PdfCraftApp, config: NotesConfig) {

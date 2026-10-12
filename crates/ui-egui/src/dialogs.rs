@@ -66,7 +66,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut close = false;
     let mut next = dialog;
-    let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
+    let modal = crate::widgets::dialog_modal(ctx, egui::Id::new("dialog")).show(ctx, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
@@ -115,7 +115,12 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ui.label(if v.is_empty() { egui::RichText::new("—").color(t.text_faint) } else { egui::RichText::new(v) });
                     ui.end_row();
                 };
-                egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
+                // In Margin every tab gets the same body height, so switching tabs never moves the
+                // sheet or its tab strip.
+                let margin = t.kind == crate::theme::ThemeKind::Margin;
+                let body = egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, !margin]);
+                let body = if margin { body.min_scrolled_height(460.0) } else { body };
+                body.show(ui, |ui| {
                     egui::Grid::new("props").num_columns(2).spacing([18.0, 8.0]).min_col_width(140.0).show(ui, |ui| match tab {
                         PropsTab::Description => {
                             row(ui, "File", crate::bidi::visual(&doc.name).into_owned());
@@ -1150,8 +1155,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                     close = true;
                 }
-            } else if changed {
-                if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+            } else if changed || (t.kind == crate::theme::ThemeKind::Margin && matches!(dialog, Dialog::Properties(_))) {
+                // Margin keeps [Cancel][OK] on an editable dialog, OK off until something changed,
+                // so the button under the pointer never changes its label or meaning.
+                if ui.add_enabled_ui(changed, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
                     apply = true;
                     close = true;
                 }
@@ -1391,7 +1398,7 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // the prompt taller than the window (#236); 80 characters wrap to a few lines.
     let shown = shorten_middle(&name, 80);
     let mut choice: Option<Option<bool>> = None;
-    let modal = egui::Modal::new(egui::Id::new("save_prompt")).show(ctx, |ui| {
+    let modal = crate::widgets::dialog_modal(ctx, egui::Id::new("save_prompt")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("save", 22.0, t.accent));
@@ -1452,7 +1459,7 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let email = pending.url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"));
     let (title, open) = if email { (tl!("Write this email?"), tl!("Open email app")) } else { (tl!("Open this web page?"), tl!("Open link")) };
     let mut choice: Option<bool> = None;
-    let modal = egui::Modal::new(egui::Id::new("link_prompt")).show(ctx, |ui| {
+    let modal = crate::widgets::dialog_modal(ctx, egui::Id::new("link_prompt")).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("external-link", 22.0, t.accent));
@@ -1518,7 +1525,7 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut submit = false;
     let mut cancel = false;
-    let modal = egui::Modal::new(egui::Id::new("password")).show(ctx, |ui| {
+    let modal = crate::widgets::dialog_modal(ctx, egui::Id::new("password")).show(ctx, |ui| {
         ui.set_width(400.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("lock", 22.0, t.accent));
@@ -1534,11 +1541,12 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
             submit = true;
         }
         r.request_focus();
-        if let Some(e) = &prompt.error {
-            ui.add_space(4.0);
-            // Known error text is translated; anything else passes through.
-            ui.label(egui::RichText::new(tl!(e)).color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B)));
-        }
+        // The error line is always there (empty without an error), so a wrong password never
+        // grows the dialog.
+        ui.add_space(4.0);
+        // Known error text is translated; anything else passes through.
+        let error = prompt.error.as_deref().map(|e| tl!(e)).unwrap_or(" ");
+        ui.label(egui::RichText::new(error).color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B)));
         ui.add_space(12.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if widgets::pill_button(ui, tl!("Open"), true).clicked() {

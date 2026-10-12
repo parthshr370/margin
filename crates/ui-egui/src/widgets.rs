@@ -5,11 +5,12 @@ use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, vec2};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
-/// A mode-bar tab: text with an underline when active.
+/// A mode-bar tab: text with an underline when active. Its width is measured in the bold weight
+/// whether active or not, so selecting a tab never slides its neighbours.
 pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = if active { theme::semibold(13.5) } else { theme::medium(13.5) };
-    let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
+    let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), theme::semibold(13.5), t.text).size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 22.0, 48.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label));
     if resp.hovered() && !active {
@@ -23,9 +24,15 @@ pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
     resp
 }
 
-/// Rounded pill button; `primary` fills with the accent.
+/// Rounded pill button; `primary` fills with the accent. In Margin's theme it is Margin's one
+/// button ([`crate::margin::look::Button`], standard size), so dialogs shared with PdfCraft match
+/// Margin's own.
 pub fn pill_button(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
     let t = Tokens::get(ui.ctx());
+    if t.kind == theme::ThemeKind::Margin {
+        let size = crate::margin::look::ButtonSize::Standard;
+        return if primary { crate::margin::look::button_primary(ui, size, label) } else { crate::margin::look::button_secondary(ui, size, label) };
+    }
     let font = theme::medium(12.5);
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 26.0, 28.0), Sense::click());
@@ -38,6 +45,13 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
     ui.painter().rect(rect, CornerRadius::same(14), fill, stroke, egui::StrokeKind::Inside);
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, text);
     resp
+}
+
+/// A dialog's modal: Margin's sheet (its frame, scrim, and top anchor, so it never recentres as
+/// its contents change) in Margin's theme, egui's modal otherwise.
+pub fn dialog_modal(ctx: &egui::Context, id: egui::Id) -> egui::Modal {
+    let t = Tokens::get(ctx);
+    if t.kind == theme::ThemeKind::Margin { crate::margin::look::modal(ctx, id, &t) } else { egui::Modal::new(id) }
 }
 
 /// Icon + label, transparent until hovered.
