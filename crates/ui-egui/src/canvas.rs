@@ -1205,6 +1205,25 @@ impl DocView {
         }
     }
 
+    /// Margin: the page area now starts at `viewport_min` (chrome was shown or hidden). Scroll so
+    /// the page line drawn at `screen_pos` last frame is drawn at that height again (a point in
+    /// the gap between pages keeps its distance from the page); the sideways scroll stays as it
+    /// was, so leaving focus mode puts the page back where it was. Leaves a jump, zoom or
+    /// destination already pending alone. False when no page was drawn near `screen_pos`.
+    pub(crate) fn hold_screen_point(&mut self, screen_pos: Pos2, viewport_min: Pos2) -> bool {
+        if self.goto.is_some() || self.zoom_anchor.is_some() || self.goto_point.is_some() {
+            return false;
+        }
+        let anchor = self
+            .screen_rects
+            .iter()
+            .filter(|(_, rect)| rect.width() > 0.0 && rect.height() > 0.0)
+            .find(|(_, rect)| rect.expand(self.page_gap()).contains(screen_pos))
+            .map(|(page, rect)| (*page, None, Some((screen_pos.y - rect.top()) / rect.height()), screen_pos - viewport_min));
+        self.goto_point = anchor;
+        anchor.is_some()
+    }
+
     /// Standard zoom steps (as in Acrobat's zoom menu).
     pub fn zoom_step(&mut self, up: bool) {
         const STEPS: [f32; 17] = [0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
@@ -1955,13 +1974,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_h = avail.height();
     let zoom_before_fit = view.zoom;
     view.fit_zoom(info);
-    // Margin keeps the reading line when fit width/page follows a resized window or sidebar, and
-    // when chrome changes the page area (focus mode, the sidebar docking, a narrow window): the
-    // line at the top of the page stays at the top.
+    // Margin keeps the reading line where it is on screen when chrome changes the page area
+    // (focus mode, the sidebar docking, a narrow window): the text at the top of the area both
+    // frames show stays at its height, so hiding chrome only uncovers page and showing it only
+    // covers some. Fit width or page following a resized window or sidebar keeps the line too.
     let last = view.viewport_screen;
     let moved = last.width() > 0.0 && (last.min.distance(avail.min) > 0.5 || (last.size() - avail.size()).length() > 0.5);
-    if app.flavor == crate::Flavor::Margin && (view.zoom != zoom_before_fit || moved) {
-        crate::margin::reading::refitted(view);
+    if app.flavor == crate::Flavor::Margin {
+        let line = pos2(last.center().x.clamp(avail.left(), avail.right()), last.top().max(avail.top()) + view.page_gap());
+        let held = moved && view.layout != PageLayout::Single && view.hold_screen_point(line, avail.min);
+        if !held && (view.zoom != zoom_before_fit || moved) {
+            crate::margin::reading::refitted(view);
+        }
     }
 
     // Pinch / ctrl+scroll zoom, anchored on the current page.

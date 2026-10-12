@@ -130,8 +130,7 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Above the progress notice while a job runs.
-    let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
-    let lift = if card > 0.0 { 28.0 + card + 10.0 } else { 28.0 };
+    let lift = progress_notice_top(app, ctx).map_or(28.0, |top| screen.bottom() - top + 10.0);
     egui::Area::new(egui::Id::new("toast"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
@@ -167,8 +166,8 @@ pub struct ProgressNotice {
     pub cancellable: bool,
 }
 
-/// Where the progress notice keeps its height this frame, for placing the toast above it.
-const PROGRESS_HEIGHT: &str = "progress-notice-height";
+/// Where the progress notice keeps its top edge this frame, for placing the toast above it.
+const PROGRESS_TOP: &str = "progress-notice-top";
 /// The progress notice's bottom edge above the window's.
 const PROGRESS_BOTTOM: f32 = 28.0;
 
@@ -176,15 +175,20 @@ const PROGRESS_BOTTOM: f32 = 28.0;
 /// sit above it (Margin's toasts).
 pub(crate) fn progress_notice_top(app: &PdfCraftApp, ctx: &egui::Context) -> Option<f32> {
     app.progress_notice.as_ref()?;
-    let height = ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_HEIGHT)))?;
-    Some(ctx.content_rect().bottom() - PROGRESS_BOTTOM - height)
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_TOP)))
 }
 
 /// Draw [`PdfCraftApp::progress_notice`]: the label, a bar that eases towards the fraction with
 /// a light sweeping across it, the percentage and Cancel. Returns true when Cancel was clicked.
+/// Margin draws it as its own card over the reading area (`margin::toast::progress`).
 pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
     let Some(p) = &app.progress_notice else { return false };
     let t = Tokens::get(ctx);
+    if t.kind == theme::ThemeKind::Margin {
+        let (cancel, rect) = crate::margin::toast::progress(app, ctx, p);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(PROGRESS_TOP), rect.top()));
+        return cancel;
+    }
     let screen = ctx.content_rect();
     // The same inverted card as the toast.
     let (fill, text) = if t.dark() {
@@ -242,7 +246,7 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
                 }
             });
         });
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(PROGRESS_HEIGHT), area.response.rect.height()));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(PROGRESS_TOP), area.response.rect.top()));
     ctx.request_repaint_after(std::time::Duration::from_millis(33));
     cancel
 }

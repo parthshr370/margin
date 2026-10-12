@@ -34,6 +34,9 @@ const DOT_LIFT: f32 = 5.0;
 /// The shortest time between two moves while dragging.
 const PREVIEW_INTERVAL: f64 = 0.05;
 const CARD_TEXT: f32 = 12.0;
+/// The card's width: the same for every page, so it never resizes or re-centres its arrow while
+/// scrubbing (a long section title is cut, whole in the tooltip of the Contents row).
+const CARD_WIDTH: f32 = 220.0;
 
 /// What the track shows about the document, gathered before the view is borrowed.
 pub(crate) struct Marks {
@@ -149,8 +152,9 @@ fn drive(ui: &egui::Ui, resp: &Response, view: &mut DocView, pointer_page: Optio
     }
 }
 
-/// The card over the track at the pointer: the page's label (and its position when the label
-/// isn't its number), the section it is in, and how many highlights it has.
+/// The card over the track at the pointer, [`CARD_WIDTH`] wide: the page's label (and its
+/// position when the label isn't its number), the section it is in, and how many highlights it
+/// has.
 pub(crate) fn preview(resp: &Response, info: &DocInfo, marks: &Marks, page: usize) {
     let label = info.pages.get(page).map(|p| p.label.trim()).filter(|l| !l.is_empty()).map_or_else(|| (page + 1).to_string(), str::to_owned);
     let position = (label != (page + 1).to_string()).then(|| format!("{} / {}", page + 1, marks.pages));
@@ -159,6 +163,7 @@ pub(crate) fn preview(resp: &Response, info: &DocInfo, marks: &Marks, page: usiz
     let x = resp.interact_pointer_pos().or_else(|| resp.hover_pos()).map_or(resp.rect.center().x, |p| p.x);
     look::pointer_card(resp, x, |ui| {
         let t = Tokens::get(ui.ctx());
+        ui.set_width(CARD_WIDTH);
         let text = |s: String, color| egui::RichText::new(s).font(theme::regular(CARD_TEXT)).color(color);
         ui.horizontal(|ui| {
             ui.label(text(format!("p. {label}"), t.text));
@@ -167,7 +172,7 @@ pub(crate) fn preview(resp: &Response, info: &DocInfo, marks: &Marks, page: usiz
             }
         });
         if let Some(section) = section.filter(|s| !s.is_empty()) {
-            ui.label(text(section, t.text_muted));
+            ui.add(egui::Label::new(text(section, t.text_muted)).truncate());
         }
         match highlights {
             0 => {}

@@ -282,7 +282,7 @@ pub struct Sidebar {
     pub visible: bool,
     /// the first start's tab; later starts reopen the last tab used (never Find)
     pub tab: SidebarTab,
-    /// windows narrower than this get the sidebar over the page instead of beside it; 0 = always beside
+    /// windows narrower than this get the sidebar over the page instead of beside it; once over the page it docks again only 48 px wider, so a window edge dragged across the width doesn't flip it; 0 = always beside
     #[schemars(range(max = 10_000))]
     pub overlay_below_px: u32,
 }

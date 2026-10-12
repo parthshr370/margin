@@ -68,8 +68,10 @@ fn track(h: &Harness<'static, PdfCraftApp>, pages: usize) -> Rect {
 }
 
 fn along(rect: Rect, share: f32) -> Pos2 {
-    // Half a point in from either end: on a 500-page track a whole point is already page 2.
-    let inset = 0.5;
+    // A fifth of a point in from either end: the track is about 430 points wide at this window
+    // size (the footer keeps the time-left slot), so each of 500 pages gets less than a point and
+    // half a point in is already page 2.
+    let inset = 0.2;
     rect.left_center() + vec2(inset + (rect.width() - 2.0 * inset) * share, 0.0)
 }
 
