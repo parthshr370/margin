@@ -128,6 +128,20 @@ fn toast(h: &Harness<'static, PdfCraftApp>) -> String {
     h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
 }
 
+/// The failure held on screen, once there is one. A write is refused on its worker thread,
+/// after it has read the highlights' text (perhaps rendering the page for it), so how many
+/// frames that takes depends on the machine.
+fn await_held(h: &mut Harness<'static, PdfCraftApp>) -> String {
+    for _ in 0..200 {
+        h.run_steps(1);
+        if let Some(held) = h.state().margin_chrome.notices.held() {
+            return held.to_owned();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("Timed out waiting for a held failure; toast: {}", toast(h));
+}
+
 #[test]
 fn a_highlight_copies_as_a_pdf_plus_callout() {
     let vault = Vault::new("copy");
@@ -181,7 +195,7 @@ fn a_note_path_leaving_the_vault_is_refused_with_a_toast() {
     // A path that got in some other way (a hand-edited settings file) is refused at write time.
     h.state_mut().notes.note_template = "reading/../../escape.md".into();
     ask(&mut h, Request::Write);
-    let held = h.state().margin_chrome.notices.held().unwrap_or_default().to_owned();
+    let held = await_held(&mut h);
     assert!(held.contains("must stay inside the vault"), "{held}");
     assert!(!vault.0.join("escape.md").exists() && !vault.dir().join("escape.md").exists());
     h.state_mut().notify("Copied");
