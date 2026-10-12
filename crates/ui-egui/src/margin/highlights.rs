@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
-use egui::{Align, Color32, Layout, Rect, Sense, Stroke, UiBuilder, vec2};
+use egui::{Align, Color32, Layout, Rect, Sense, Stroke, UiBuilder, Vec2, vec2};
 use margin_config::marks as records;
 use margin_config::{HighlightStyle, Locator};
 use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape};
@@ -73,21 +73,20 @@ const KIND_ICON: f32 = 14.0;
 const META_TEXT: f32 = 11.5;
 const QUOTE_TEXT: f32 = 12.5;
 const NOTE_TEXT: f32 = 12.0;
-/// An unselected card shows this many lines of its quote; the selected one shows all of it.
+/// An unexpanded card shows this many lines of its quote; "Show more" shows all of it.
 const QUOTE_ROWS: usize = 3;
 /// The note editor's text padding and height in lines.
 const EDITOR_MARGIN: egui::Margin = egui::Margin::symmetric(8, 6);
 const EDITOR_ROWS: usize = 2;
-/// The hover actions: four buttons this size, this far apart.
-const ACTION: f32 = 24.0;
+/// The hover actions: four in-card buttons, this far apart.
+const ACTION: f32 = look::SMALL_BUTTON;
 const ACTION_GAP: f32 = 2.0;
 const ACTION_COUNT: f32 = 4.0;
-/// The right-click menu's width.
-const MENU_WIDTH: f32 = 200.0;
-/// The search field: its padding, the search icon, and the filter button beside it.
-const SEARCH_PAD: egui::Margin = egui::Margin::symmetric(8, 5);
+/// The search field's icon, its height and the filter button beside it (one compact control
+/// tall, like the pane's other controls), and the widest count it shows.
 const SEARCH_ICON: f32 = 14.0;
-const FILTER_BUTTON: f32 = 28.0;
+const FILTER_BUTTON: f32 = look::BUTTON_HEIGHT;
+const COUNT_TEMPLATE: &str = "000 of 000";
 /// The filter popover's width.
 const FILTER_WIDTH: f32 = 220.0;
 /// Characters of a date the cards compare and show: "2026-10-10 12:30".
@@ -545,8 +544,9 @@ impl CardInput<'_> {
 }
 
 /// The search, filters, draft note and cards of view `index`. Edits go to the undo stacks;
-/// returns where to show the clicked mark.
-pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) -> Option<Nav> {
+/// returns where to show the clicked mark. With no marks yet, `empty_lines` say how to make one,
+/// inside the list under the notes box, and the search is off.
+pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, empty_lines: &[&str]) -> Option<Nav> {
     let keys = Keys::of(app);
     let this_year = app.session.today().0;
     let palette = palette_key(&app.notes);
@@ -562,7 +562,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         list.source = Some(source);
         list.shown_for = None;
     }
-    controls(ui, t, &mut list, &app.notes);
+    ui.add_enabled_ui(list.total() > 0, |ui| controls(ui, t, &mut list, &app.notes));
     if list.shown_for.as_ref() != Some(&list.filter) {
         list.shown = select(&list.rows, &list.filter);
         list.shown_for = Some(list.filter.clone());
@@ -581,13 +581,17 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         no_note: no_note.as_deref(),
         this_year,
     };
-    if list.shown.is_empty() && list.total() > 0 {
-        super::sidebar::empty(ui, t, &["No highlights match."]);
-    }
+    let no_matches = list.shown.is_empty() && list.total() > 0;
+    let no_marks = list.total() == 0 && view.margin.marks.draft.is_none();
     egui::ScrollArea::vertical().id_salt(("margin-highlights", view.id.0)).auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
         let width = ui.available_width();
         obsidian::panel_block(ui, t, &mut view.comments.notes);
+        if no_matches {
+            super::sidebar::empty(ui, t, &["No highlights match."]);
+        } else if no_marks {
+            super::sidebar::empty(ui, t, empty_lines);
+        }
         let mut top = ui.min_rect().bottom() - origin.y;
         for &row_index in &list.shown {
             let Some(row) = list.rows.get(row_index) else { continue };
@@ -654,42 +658,48 @@ fn must_draw(view: &DocView, entry: &Entry) -> bool {
     }
 }
 
-/// The search field and the filter button, then how many cards the filters leave.
+/// The search field (with how many cards the filters leave, and a clear button, inside it on the
+/// right while a filter is on) and the filter button, on one compact row that never changes
+/// height.
 fn controls(ui: &mut egui::Ui, t: &Tokens, list: &mut List, notes: &Notes) {
     let id = egui::Id::new("margin-highlights-search");
-    ui.horizontal(|ui| {
+    let filtering = !list.filter.query.trim().is_empty() || list.filter.narrows();
+    let shown = filtering.then(|| {
+        list.shown_for.as_ref().filter(|shown| **shown == list.filter).map_or_else(|| select(&list.rows, &list.filter).len(), |_| list.shown.len())
+    });
+    let mut clear = false;
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), look::BUTTON_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = GAP;
         let field_width = (ui.available_width() - FILTER_BUTTON - GAP).max(FILTER_BUTTON);
-        look::input_frame(t, look::input_focused(ui, id)).inner_margin(SEARCH_PAD).show(ui, |ui| {
-            ui.set_width(field_width - f32::from(SEARCH_PAD.left) - f32::from(SEARCH_PAD.right));
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                let (icon, _) = ui.allocate_exact_size(vec2(SEARCH_ICON, SEARCH_ICON), Sense::hover());
-                icons::paint(ui, icon, "search", SEARCH_ICON, t.text_muted);
-                let field = egui::TextEdit::singleline(&mut list.filter.query)
-                    .id(id)
-                    .frame(egui::Frame::NONE)
-                    .hint_text("Search highlights and notes")
-                    .desired_width(ui.available_width());
-                ui.add(field);
-            });
+        look::field_well(ui, id, vec2(field_width, look::BUTTON_HEIGHT), |ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            let (icon, _) = ui.allocate_exact_size(vec2(SEARCH_ICON, SEARCH_ICON), Sense::hover());
+            icons::paint(ui, icon, "search", SEARCH_ICON, t.text_muted);
+            let trailing = match shown {
+                Some(_) => look::template_width(ui, COUNT_TEMPLATE, theme::regular(META_TEXT)) + look::SMALL_BUTTON + 2.0 * GAP,
+                None => 0.0,
+            };
+            let field = egui::TextEdit::singleline(&mut list.filter.query)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .margin(Vec2::ZERO)
+                .hint_text("Search highlights and notes")
+                .desired_width((ui.available_width() - trailing).max(0.0));
+            ui.add(field);
+            if let Some(shown) = shown {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    clear = look::icon_button(ui, "x", look::SMALL_BUTTON, false, "Clear filters", None).clicked();
+                    let words = format!("{shown} of {}", list.total());
+                    look::reserved_label(ui, &words, COUNT_TEMPLATE, theme::regular(META_TEXT), t.text_muted, Align::Max);
+                });
+            }
         });
         let button = look::icon_button(ui, "filter", FILTER_BUTTON, list.filter.narrows(), "Filter and sort", None);
         look::popover(&button, id.with("filters")).show(|ui| filter_menu(ui, t, &mut list.filter, notes));
     });
-    if !list.filter.query.trim().is_empty() || list.filter.narrows() {
-        let shown = list
-            .shown_for
-            .as_ref()
-            .filter(|shown| **shown == list.filter)
-            .map_or_else(|| select(&list.rows, &list.filter).len(), |_| list.shown.len());
-        ui.horizontal(|ui| {
-            let words = format!("{shown} of {} shown", list.total());
-            ui.label(egui::RichText::new(words).font(theme::regular(META_TEXT)).color(t.text_muted));
-            if ui.add(egui::Button::new(egui::RichText::new("Clear").font(theme::regular(META_TEXT))).frame(false)).clicked() {
-                list.filter = Filter { sort: list.filter.sort, ..Filter::default() };
-            }
-        });
+    if clear {
+        list.filter = Filter { sort: list.filter.sort, ..Filter::default() };
     }
     ui.add_space(GAP);
 }
@@ -715,7 +725,7 @@ fn filter_menu(ui: &mut egui::Ui, t: &Tokens, filter: &mut Filter, notes: &Notes
     }
     look::section_label(ui, t, "Kind", None);
     for kind in KindFilter::ALL {
-        if ui.selectable_label(filter.kind == kind, kind.label()).clicked() {
+        if look::menu_row(ui, None, kind.label(), None, filter.kind == kind).clicked() {
             filter.kind = kind;
         }
     }
@@ -737,6 +747,7 @@ fn draft(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut DocView) -> b
     let Some((NotePlace { page, .. }, _)) = view.margin.marks.draft else { return false };
     let label = info.pages.get(page).map_or_else(|| page.saturating_add(1).to_string(), |p| p.label.clone());
     let mut outcome = Edited::Typing;
+    let editor_id = egui::Id::new("margin-new-page-note");
     look::card_frame(t).inner_margin(GAP_LARGE).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
@@ -745,7 +756,7 @@ fn draft(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut DocView) -> b
             ui.label(egui::RichText::new(format!("New page note · p. {label}")).font(theme::regular(META_TEXT)).color(t.text_muted));
         });
         if let Some((_, text)) = view.margin.marks.draft.as_mut() {
-            outcome = editor(ui, t, egui::Id::new("margin-new-page-note"), text, "Write a note for this page");
+            outcome = editor(ui, t, editor_id, text, "Write a note for this page");
         }
     });
     ui.add_space(GAP);
@@ -1183,7 +1194,7 @@ fn color_row(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<usize> {
 /// the notes actions, its note and Delete with its keys.
 fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     let (t, row) = (input.shared.t, input.row);
-    ui.set_min_width(MENU_WIDTH);
+    look::menu_body(ui);
     let title = match row.entry {
         Entry::Mark(Pick::Note(_)) => format!("Page note · p. {}", input.page_label),
         _ => format!("{} {} · p. {}", color_name(input.shared.notes, row.color), row.label.to_lowercase(), input.page_label),
@@ -1199,7 +1210,7 @@ fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     if let Some(kind) = row.other_kind() {
         let refused = if input.allowed() { row.kind_refused } else { Some(NOT_ALLOWED) };
         let label = if kind == Markup::Underline { "Change to underline" } else { "Change to highlight" };
-        let change = ui.add_enabled(refused.is_none(), egui::Button::new(label));
+        let change = ui.add_enabled_ui(refused.is_none(), |ui| look::menu_row(ui, Some("replace"), label, None, false)).inner;
         let change = match refused {
             Some(why) => look::tooltip(change, &format!("{label}: {why}"), None),
             None => change,
@@ -1210,7 +1221,7 @@ fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     }
     ui.separator();
     if input.can_copy() {
-        let copy = ui.button("Copy callout");
+        let copy = look::menu_row(ui, Some("copy"), "Copy callout", None, false);
         let copy = if input.shared.external { look::tooltip(copy, obsidian::EXTERNAL_TIP, None) } else { copy };
         if copy.clicked() {
             action = Some(Action::CopyCallout);
@@ -1218,19 +1229,20 @@ fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     }
     if input.shared.notes_on && row.subtype != NOTE_SUBTYPE {
         let refused = input.open_refused();
-        let open = ui.add_enabled(refused.is_none(), egui::Button::new("Open in Obsidian"));
+        let open = ui.add_enabled_ui(refused.is_none(), |ui| look::menu_row(ui, Some("external-link"), "Open in Obsidian", None, false)).inner;
         let tip = refused.map_or_else(|| "Add this highlight to the reading note and open it in Obsidian".to_owned(), str::to_owned);
         if look::tooltip(open, &tip, None).clicked() {
             action = Some(Action::OpenInObsidian);
         }
     }
     let has_note = row.note.as_deref().is_some_and(|c| !c.trim().is_empty());
-    if ui.add_enabled(input.allowed(), egui::Button::new(if has_note { "Edit note" } else { "Add note" })).clicked() {
+    let note_label = if has_note { "Edit note" } else { "Add note" };
+    if ui.add_enabled_ui(input.allowed(), |ui| look::menu_row(ui, Some("pen-line"), note_label, None, false)).inner.clicked() {
         action = Some(Action::EditNote);
     }
     ui.separator();
-    let delete = egui::Button::new("Delete").shortcut_text(input.shared.keys.delete.clone().unwrap_or_default());
-    if ui.add_enabled(input.editable(), delete).clicked() {
+    let delete_keys = input.shared.keys.delete.as_deref();
+    if ui.add_enabled_ui(input.editable(), |ui| look::menu_row(ui, Some("trash-2"), "Delete", delete_keys, false)).inner.clicked() {
         action = Some(Action::Delete);
     }
     if action.is_some() {
@@ -1239,8 +1251,10 @@ fn menu(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
     action
 }
 
-/// The quote (three lines unless selected) and the note. Without a quote, the note alone; with
-/// neither, the mark's type in muted italics. A page note's text is its body.
+/// The quote (three lines until "Show more" is clicked) and the note. Without a quote, the note
+/// alone; with neither, the mark's type in muted italics. A page note's text is its body.
+/// Selecting a card never grows it: only its own "Show more" does, and only the cards below it
+/// move.
 fn body(ui: &mut egui::Ui, input: &CardInput<'_>, selected: bool, editing: bool) {
     let (t, row) = (input.shared.t, input.row);
     let quote = row.quote.trim();
@@ -1253,9 +1267,14 @@ fn body(ui: &mut egui::Ui, input: &CardInput<'_>, selected: bool, editing: bool)
         return;
     }
     if !quote.is_empty() {
-        let rows = if selected { usize::MAX } else { QUOTE_ROWS };
+        let expanded_id = ui.id().with("margin-quote-expanded");
+        let expanded = ui.data(|d| d.get_temp::<bool>(expanded_id)).unwrap_or(false);
+        let rows = if expanded { usize::MAX } else { QUOTE_ROWS };
         let color = look::row_text(t, selected, t.text);
-        text_block(ui, quote, TextFormat { font_id: theme::regular(QUOTE_TEXT), color, ..Default::default() }, rows);
+        let cut = text_block(ui, quote, TextFormat { font_id: theme::regular(QUOTE_TEXT), color, ..Default::default() }, rows);
+        if (cut || expanded) && look::button_ghost(ui, look::ButtonSize::Compact, if expanded { "Show less" } else { "Show more" }).clicked() {
+            ui.data_mut(|d| d.insert_temp(expanded_id, !expanded));
+        }
     } else if note.is_none() && !editing {
         let format = TextFormat { font_id: theme::regular(QUOTE_TEXT), color: t.text_faint, italics: true, ..Default::default() };
         text_block(ui, row.label, format, 1);
@@ -1265,13 +1284,15 @@ fn body(ui: &mut egui::Ui, input: &CardInput<'_>, selected: bool, editing: bool)
     }
 }
 
-/// Text wrapped to the card's width, cut to `rows` lines with an ellipsis.
-fn text_block(ui: &mut egui::Ui, text: &str, format: TextFormat, rows: usize) {
+/// Text wrapped to the card's width, cut to `rows` lines with an ellipsis. True when it was cut.
+fn text_block(ui: &mut egui::Ui, text: &str, format: TextFormat, rows: usize) -> bool {
     let mut job = LayoutJob::single_section(text.to_owned(), format);
     job.wrap = TextWrapping { max_width: ui.available_width(), max_rows: rows, break_anywhere: false, overflow_character: Some('…') };
     let galley = ui.painter().layout_job(job);
+    let cut = galley.elided;
     let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
     ui.painter().galley(rect.min, galley, Color32::PLACEHOLDER);
+    cut
 }
 
 /// What the reader did with a note editor this frame.

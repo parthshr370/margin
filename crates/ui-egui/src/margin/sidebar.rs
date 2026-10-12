@@ -346,22 +346,15 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// Highlights, underlines, strikethroughs and squiggles, and page notes, as cards
-/// (`margin::highlights`).
+/// (`margin::highlights`). With none yet the pane keeps the same layout (its search, the notes
+/// box) and says how to make one inside the list, so the first highlight never rearranges it.
 fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
     let count = super::highlights::count(app, index);
     pane_title(ui, t, "Highlights", Some(count));
-    let drafting = app.views.get(index).is_some_and(|view| view.margin.marks.draft.is_some());
-    if count == 0 && !drafting {
-        if let Some(view) = app.views.get_mut(index) {
-            super::obsidian::panel_block(ui, t, &mut view.comments.notes);
-        }
-        let note_hint = look::shortcut(app, super::marks::NOTE_ADD_ID).map(|keys| format!("{keys} adds a note to the page."));
-        let mut lines = vec!["No highlights yet.", "Pick Highlight in the rail, then select text."];
-        lines.extend(note_hint.as_deref());
-        empty(ui, t, &lines);
-        return;
-    }
-    let nav = super::highlights::show(app, ui, t, index);
+    let note_hint = look::shortcut(app, super::marks::NOTE_ADD_ID).map(|keys| format!("{keys} adds a note to the page."));
+    let mut empty_lines = vec!["No highlights yet.", "Pick Highlight in the rail, then select text."];
+    empty_lines.extend(note_hint.as_deref());
+    let nav = super::highlights::show(app, ui, t, index, &empty_lines);
     navigate(app.views.get_mut(index), nav);
 }
 
