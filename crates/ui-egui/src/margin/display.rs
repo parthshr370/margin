@@ -277,15 +277,13 @@ pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     // row, Manual trim's previews) the body scrolls, its frame padding and a section step clear
     // of the window's edge, so no lower control is out of reach. The popup's area offers only
     // last frame's size, so the body asks for the room itself (as its least scrolled height) and
-    // still shrinks to its content. While it scrolls, its bar gets a gutter of its own instead
-    // of covering the values and switches. Wheel and scroll bar only: a drag in the body belongs
-    // to its sliders and trim previews.
+    // still shrinks to its content. The scroll bar's gutter is always reserved, so the popover
+    // keeps one width whether or not the body scrolls. Wheel and scroll bar only: a drag in the
+    // body belongs to its sliders and trim previews.
     let room = (ui.ctx().content_rect().bottom() - ui.cursor().top() - 2.0 * GAP_SECTION).max(MIN_BODY);
-    let overflow_id = egui::Id::new("margin-display-body-overflows");
-    let overflows = ui.data(|d| d.get_temp::<bool>(overflow_id)).unwrap_or(false);
-    ui.set_width(POPOVER_WIDTH + if overflows { SCROLL_GUTTER } else { 0.0 });
+    ui.set_width(POPOVER_WIDTH + SCROLL_GUTTER);
     let sources = egui::scroll_area::ScrollSource::SCROLL_BAR | egui::scroll_area::ScrollSource::MOUSE_WHEEL;
-    let output = egui::ScrollArea::vertical()
+    egui::ScrollArea::vertical()
         .id_salt("margin-display-body")
         .scroll_source(sources)
         .auto_shrink([false, true])
@@ -295,11 +293,6 @@ pub fn popover_contents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.set_width(POPOVER_WIDTH);
             body(app, index, ui, &t);
         });
-    let overflowing = output.content_size.y > output.inner_rect.height() + 1.0;
-    if overflowing != overflows {
-        ui.data_mut(|d| d.insert_temp(overflow_id, overflowing));
-        ui.ctx().request_repaint();
-    }
 }
 
 /// [`popover_contents`] for the document `index`.
@@ -326,7 +319,7 @@ fn body(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, t: &Tokens) {
     } else {
         i18n::t("Off: the page color stays as you set it")
     };
-    if switch_row(ui, t, i18n::t("Follow system dark mode"), Some(follow_sub), state.follow_system) {
+    if switch_row(ui, t, i18n::t("Follow system dark mode"), Some(follow_sub), state.follow_system, true) {
         state.follow_system = !state.follow_system;
     }
     if let Some(row) = default_row {
@@ -384,11 +377,10 @@ fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
         ui.add(egui::Label::new(egui::RichText::new(i18n::t(shown.mode.description())).font(font).color(t.text_muted)).wrap());
     });
     ui.add_space(GAP);
-    if shown.mode.offers_keep_hues() {
-        let sub = i18n::t("Ink and Mono only: photos the page embeds keep their colours; drawings stay two-tone");
-        if switch_row(ui, t, i18n::t("Keep figure hues"), Some(sub), state.color.keep_hues) {
-            state.color.keep_hues = !state.color.keep_hues;
-        }
+    // Always shown, so picking a mode never moves the rows below; only Ink and Mono enable it.
+    let sub = i18n::t("Ink and Mono only: photos the page embeds keep their colours; drawings stay two-tone");
+    if switch_row(ui, t, i18n::t("Keep figure hues"), Some(sub), state.color.keep_hues, shown.mode.offers_keep_hues()) {
+        state.color.keep_hues = !state.color.keep_hues;
     }
     slider_row(ui, t, i18n::t("Brightness"), &mut state.color.brightness, BRIGHTNESS_RANGE, |v| v.to_string());
     let mono = shown.mode == PageMode::Mono;
@@ -414,11 +406,10 @@ fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &To
     let layouts = [(PageLayout::Continuous, "Scroll"), (PageLayout::Single, "Single"), (PageLayout::TwoUp, "Two-up")];
     let segments = layouts.map(|(choice, name)| Segment { label: i18n::t(name), selected: view.layout == choice, tip: None });
     let command = choice_row(ui, t, i18n::t("Pages"), &segments).and_then(|i| layouts.get(i)).map(|(choice, _)| choice.command());
-    if view.cover_applies() {
-        let sub = i18n::t("The first page sits alone on the right, like a book's cover");
-        if switch_row(ui, t, i18n::t("Cover page alone"), Some(sub), view.cover) {
-            view.set_cover(!view.cover);
-        }
+    // Always shown, so picking Two-up never moves the rows below; only Two-up enables it.
+    let sub = i18n::t("Two-up only: the first page sits alone on the right, like a book's cover");
+    if switch_row(ui, t, i18n::t("Cover page alone"), Some(sub), view.cover, view.cover_applies()) {
+        view.set_cover(!view.cover);
     }
     let reading = reading::reads(view);
     let segments = [
@@ -456,24 +447,31 @@ fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &To
         view.margin.trim.manual = manual;
         reading::go(view, spot);
     }
-    if !(view.margin.trim.on && view.margin.trim.manual) {
-        return;
-    }
+    let shown = view.margin.trim.on && view.margin.trim.manual;
+    // The editor slides open and shut instead of pushing the rows below in one frame.
+    look::collapsible(ui, egui::Id::new("margin-display-manual-trim"), shown, |ui| manual_trim_editor(view, pages, ui, t));
+}
+
+/// Manual trim's editor: the page previews to drag the kept part on, the hint and the odd and
+/// even switch. Both preview slots are always laid out, so the switch never resizes the block.
+fn manual_trim_editor(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &Tokens) {
     let current = view.current;
     let separate = view.margin.trim.separate;
     // Odd pages are 1, 3, … (0-based even indices).
-    let shown: Vec<(usize, &str)> = if separate {
+    let shown: [Option<(usize, &str)>; 2] = if separate {
         let odd = current - current % 2;
-        vec![(odd, "Odd pages"), (odd + 1, "Even pages")]
+        [Some((odd, "Odd pages")), Some((odd + 1, "Even pages"))]
     } else {
-        vec![(current, "All pages")]
+        [Some((current, "All pages")), None]
     };
     let mut changed = false;
     ui.add_space(GAP);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP_LARGE;
-        for (page, label) in shown {
+        for slot in shown {
             ui.vertical(|ui| {
+                ui.set_width(TRIM_PREVIEW_WIDTH);
+                let Some((page, label)) = slot else { return };
                 ui.spacing_mut().item_spacing.y = GAP / 2.0;
                 changed |= trim_preview(view, page, pages.get(page.min(pages.len().saturating_sub(1))).copied(), label, ui, t);
                 ui.label(egui::RichText::new(i18n::t(label)).font(theme::regular(SUB_TEXT)).color(t.text_faint));
@@ -483,7 +481,7 @@ fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &To
     ui.add_space(GAP);
     ui.label(egui::RichText::new(i18n::t("Drag across a page to keep that part")).font(theme::regular(SUB_TEXT)).color(t.text_faint));
     let sub = i18n::t("For scanned books, whose margins swap sides");
-    if switch_row(ui, t, i18n::t("Odd and even pages separately"), Some(sub), separate) {
+    if switch_row(ui, t, i18n::t("Odd and even pages separately"), Some(sub), separate, true) {
         let trim = &mut view.margin.trim;
         trim.separate = !separate;
         if trim.separate {
@@ -620,21 +618,25 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: 
 }
 
 /// A label (with an optional line under it) and a switch on the right: a [`CONTROL_ROW`] at
-/// least, the text padded by half the small step. True when clicked.
-fn switch_row(ui: &mut egui::Ui, t: &Tokens, label: &str, sub: Option<&str>, on: bool) -> bool {
+/// least, the text padded by half the small step. A row that doesn't apply stays in place,
+/// disabled, so the rows below never move. True when clicked.
+fn switch_row(ui: &mut egui::Ui, t: &Tokens, label: &str, sub: Option<&str>, on: bool, enabled: bool) -> bool {
     ui.allocate_ui_with_layout(vec2(POPOVER_WIDTH, CONTROL_ROW), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_min_height(CONTROL_ROW);
-        ui.vertical(|ui| {
-            ui.set_width(POPOVER_WIDTH - look::SWITCH_SIZE.x - GAP_LARGE);
-            ui.spacing_mut().item_spacing.y = SUB_GAP;
-            ui.add_space(GAP / 2.0);
-            ui.label(egui::RichText::new(label).font(theme::regular(LABEL_TEXT)).color(t.text_muted));
-            if let Some(sub) = sub {
-                ui.add(egui::Label::new(egui::RichText::new(sub).font(theme::regular(SUB_TEXT)).color(t.text_faint)).wrap());
-            }
-            ui.add_space(GAP / 2.0);
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| look::switch(ui, on, label).clicked()).inner
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.vertical(|ui| {
+                ui.set_width(POPOVER_WIDTH - look::SWITCH_SIZE.x - GAP_LARGE);
+                ui.spacing_mut().item_spacing.y = SUB_GAP;
+                ui.add_space(GAP / 2.0);
+                ui.label(egui::RichText::new(label).font(theme::regular(LABEL_TEXT)).color(t.text_muted));
+                if let Some(sub) = sub {
+                    ui.add(egui::Label::new(egui::RichText::new(sub).font(theme::regular(SUB_TEXT)).color(t.text_faint)).wrap());
+                }
+                ui.add_space(GAP / 2.0);
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| look::switch(ui, on, label).clicked()).inner
+        })
+        .inner
     })
     .inner
 }

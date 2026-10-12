@@ -131,6 +131,7 @@ fn main() -> eframe::Result {
         "Margin",
         native,
         Box::new(move |cc| {
+            pdfcraft_ui_egui::margin::set_version(env!("CARGO_PKG_VERSION"));
             let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
             // Margin's defaults; saved settings override them.
             app.set_theme_preference(ThemePreference::Dark);

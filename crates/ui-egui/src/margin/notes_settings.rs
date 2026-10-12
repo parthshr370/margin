@@ -241,9 +241,41 @@ struct TemplateDraft {
     text: String,
 }
 
+/// Where `setting`'s draft lives in egui's memory: one id for the field and for Done's save.
+fn template_draft_id(setting: NotesTextSetting) -> egui::Id {
+    egui::Id::new(("margin-notes-template-draft", setting.id()))
+}
+
+/// Done in the Settings window: saves every template field with unsaved text, as its own Save
+/// would, in one write. A draft that can't be used (a path leaving the vault) is reported and
+/// left out; the others are still saved.
+pub(super) fn save_drafts(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let mut config = app.notes.config.clone();
+    let mut changed = false;
+    for setting in NotesTextSetting::ALL {
+        let current = setting.value(&app.notes.config).to_owned();
+        let draft = ctx.data_mut(|memory| {
+            let draft = memory.get_temp::<TemplateDraft>(template_draft_id(setting));
+            memory.remove::<TemplateDraft>(template_draft_id(setting));
+            draft
+        });
+        let Some(draft) = draft.filter(|draft| draft.source == current && draft.text != current) else { continue };
+        match setting.with(config.clone(), draft.text) {
+            Ok(next) => {
+                config = next;
+                changed = true;
+            }
+            Err(error) => app.notify(format!("{}: {error}", setting.name())),
+        }
+    }
+    if changed {
+        save_notes(app, config);
+    }
+}
+
 fn text_setting(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, setting: NotesTextSetting) {
     let current = setting.value(&app.notes.config).to_owned();
-    let draft_id = ui.make_persistent_id(("margin-notes-template-draft", setting.id()));
+    let draft_id = template_draft_id(setting);
     let mut draft = ui
         .ctx()
         .data(|memory| memory.get_temp::<TemplateDraft>(draft_id))

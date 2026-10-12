@@ -8,6 +8,8 @@ use pdfcraft_engine::Edit;
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
+/// Margin's About body, the same for every tab (the longest, Contributors, scrolls in it).
+const ABOUT_BODY_HEIGHT: f32 = 360.0;
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     password(app, ctx);
@@ -1104,9 +1106,26 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 ui.data_mut(|d| d.insert_temp(tab_id, tab));
                 ui.separator();
-                match tab {
+                let margin = app.flavor == crate::Flavor::Margin;
+                let mut tab_body = |ui: &mut egui::Ui| match tab {
                     1 => crate::credits::contributors_ui(ui),
                     2 => crate::credits::models_ui(ui),
+                    _ if margin => {
+                        ui.label(egui::RichText::new("Margin").font(theme::semibold(20.0)));
+                        // Margin's own release version, which its binary sets; the PdfCraft crates
+                        // keep the workspace's.
+                        if let Some(version) = crate::margin::version() {
+                            ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", version)]));
+                        }
+                        ui.add_space(6.0);
+                        // Margin's interface text is English for now (`margin` module docs).
+                        ui.label("A reader-first PDF app, built on the open-source PdfCraft. MIT OR Apache-2.0.");
+                        ui.label(
+                            egui::RichText::new("UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono (OFL) · OCR: ocrs")
+                                .color(t.text_muted)
+                                .small(),
+                        );
+                    }
                     _ => {
                         ui.label(egui::RichText::new("PdfCraft").font(theme::semibold(20.0)));
                         ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", env!("CARGO_PKG_VERSION"))]));
@@ -1124,6 +1143,12 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             link_command = Some(cmd);
                         }
                     }
+                };
+                // Margin's tabs share one body height, so switching tabs never resizes the sheet.
+                if margin {
+                    egui::ScrollArea::vertical().id_salt("about_body").auto_shrink([false, false]).max_height(ABOUT_BODY_HEIGHT).show(ui, tab_body);
+                } else {
+                    tab_body(ui);
                 }
             }
         }
@@ -1498,8 +1523,11 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
             .small(),
         );
         ui.add_space(14.0);
+        // Margin keeps the accent for an action that goes ahead; Cancel, the safe answer, stays
+        // right-most (where the primary sits in its other dialogs) but plain.
+        let cancel_primary = app.flavor != crate::Flavor::Margin;
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Cancel"), true).clicked() {
+            if widgets::pill_button(ui, tl!("Cancel"), cancel_primary).clicked() {
                 choice = Some(false);
             }
             if widgets::pill_button(ui, open, false).clicked() {

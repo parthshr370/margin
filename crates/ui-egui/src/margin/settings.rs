@@ -50,7 +50,6 @@ const CONTROL_HEIGHT: f32 = look::CONTROL_ROW;
 /// Every row's control slot: one width for every row, so a row's text wraps the same on the first
 /// frame as on the next, whatever its control shows (a vault name, a folder count, a language).
 pub(super) const CONTROL_SLOT: f32 = 340.0;
-const TITLE_SIZE: f32 = 18.0;
 const NAME_SIZE: f32 = 14.0;
 const DESCRIPTION_SIZE: f32 = 12.5;
 /// A description's line height as a share of its size (the mockup's 1.45 leading).
@@ -75,6 +74,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // The sheet hangs from `sheet_top`, so its body gets what is left under that.
     let body_room = (screen.height() - look::sheet_top(ctx) - SCREEN_INSET - chrome_height).max(MIN_BODY);
     let mut close = false;
+    let mut done = false;
     let modal = look::modal(ctx, egui::Id::new("margin-settings"), &t).frame(look::modal_frame(&t)).show(ctx, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing = Vec2::ZERO;
@@ -85,23 +85,26 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 body(app, ui, &t);
             });
         });
-        close |= footer(ui);
+        done = footer(ui);
     });
-    if close || modal.should_close() {
+    // Done keeps the template fields' unsaved text; the × and Esc close without it.
+    #[cfg(not(target_arch = "wasm32"))]
+    if done {
+        notes_settings::save_drafts(app, ctx);
+    }
+    if close || done || modal.should_close() {
         app.dialog = None;
     }
 }
 
-/// "Settings" and the close button. True when the button was clicked.
+/// "Settings" and the close button, the shared sheet header. True when the button was clicked.
 fn header(ui: &mut egui::Ui, t: &Tokens) -> bool {
     ui.add_space(HEADER_PAD_TOP);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_ROW), Sense::hover());
     let mut row = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(PAD_X, 0.0))).layout(Layout::left_to_right(Align::Center)));
-    row.label(RichText::new(i18n::t("Settings")).font(theme::semibold(TITLE_SIZE)).color(t.text));
-    let clicked = row
-        .with_layout(Layout::right_to_left(Align::Center), |ui| look::button_icon(ui, ButtonSize::Standard, "x", i18n::t("Close"), None).clicked());
+    let clicked = look::sheet_header(&mut row, t, i18n::t("Settings"));
     ui.add_space(HEADER_PAD_BOTTOM);
-    clicked.inner
+    clicked
 }
 
 /// Done, on the right. True when clicked.
@@ -149,7 +152,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, text, |ui, _| {
         let choices = [(DocLayout::Scroll, "Scroll", "scroll"), (DocLayout::Single, "Single", "single"), (DocLayout::TwoUp, "Two-up", "two_up")];
         let segments = choices.map(|(choice, label, _)| Segment { label: i18n::t(label), selected: layout == choice, tip: None });
-        let picked = look::segmented(ui, &segments).and_then(|i| choices.get(i)).filter(|(choice, _, _)| *choice != layout);
+        let picked = look::segmented_sized(ui, &segments, CONTROL_HEIGHT).and_then(|i| choices.get(i)).filter(|(choice, _, _)| *choice != layout);
         if let Some((_, _, value)) = picked {
             write = Some(("view.layout", value));
         }
@@ -165,7 +168,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let choices =
             [(DocFit::Width, "Width", "width", None), (DocFit::Page, "Page", "page", None), (DocFit::Read, "Reading", "read", Some(reading_tip))];
         let segments = choices.map(|(choice, label, _, tip)| Segment { label: i18n::t(label), selected: fit == choice, tip });
-        let picked = look::segmented(ui, &segments).and_then(|i| choices.get(i)).filter(|(choice, _, _, _)| *choice != fit);
+        let picked = look::segmented_sized(ui, &segments, CONTROL_HEIGHT).and_then(|i| choices.get(i)).filter(|(choice, _, _, _)| *choice != fit);
         if let Some((_, _, value, _)) = picked {
             write = Some(("view.fit", value));
         }

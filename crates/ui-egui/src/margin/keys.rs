@@ -646,6 +646,11 @@ pub(crate) fn select_tool(app: &mut PdfCraftApp) {
     app.quick_tool = QuickTool::Select;
 }
 
+/// Margin's own ids that act on the open document: off in the menus and the palette without one.
+pub(crate) fn needs_document(id: &str) -> bool {
+    ["view.", "reader.", "annotation.", "note."].iter().any(|prefix| id.starts_with(prefix))
+}
+
 fn is_catalog(id: &str) -> bool {
     pdfcraft_engine::catalog::TOOL_GROUPS.iter().flat_map(|group| group.sections).flat_map(|section| section.items).any(|item| item.command == id)
 }

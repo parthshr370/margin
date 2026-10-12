@@ -484,7 +484,7 @@ fn sync_row(app: &PdfCraftApp, row: &mut LiveRow, reread_keys: bool) {
     let spec = commands::command(id);
     let enabled = match spec {
         Some(spec) => app.command_enabled(spec),
-        None => !needs_document(id) || app.active.is_some(),
+        None => !super::keys::needs_document(id) || app.active.is_some(),
     };
     if enabled != row.enabled {
         row.item.set_enabled(enabled);
@@ -498,11 +498,6 @@ fn sync_row(app: &PdfCraftApp, row: &mut LiveRow, reread_keys: bool) {
             row.item.set_text(title);
         }
     }
-}
-
-/// Margin's own ids that act on the open document.
-fn needs_document(id: &str) -> bool {
-    ["view.", "reader.", "annotation.", "note."].iter().any(|prefix| id.starts_with(prefix))
 }
 
 /// The keymap's shortcut for `id` as a menu key equivalent: its first binding still in effect that
