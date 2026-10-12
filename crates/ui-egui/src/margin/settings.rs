@@ -74,7 +74,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         HEADER_PAD_TOP + HEADER_ROW + HEADER_PAD_BOTTOM + FOOTER_PAD_TOP + look::BUTTON_HEIGHT.max(CONTROL_HEIGHT) + FOOTER_PAD_BOTTOM;
     let body_room = (screen.height() - 2.0 * SCREEN_INSET - chrome_height).max(MIN_BODY);
     let mut close = false;
-    let modal = look::modal(egui::Id::new("margin-settings"), &t).frame(look::modal_frame(&t)).show(ctx, |ui| {
+    let modal = look::modal(ctx, egui::Id::new("margin-settings"), &t).frame(look::modal_frame(&t)).show(ctx, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         close |= header(ui, &t);

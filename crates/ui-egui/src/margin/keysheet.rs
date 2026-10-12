@@ -161,7 +161,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(sheet) = app.margin_keys.sheet.as_mut() else { return };
     let mut close = false;
     let mut key_context = false;
-    let modal = crate::margin::look::modal(egui::Id::new("margin-keysheet"), &t).show(ctx, |ui| {
+    let modal = crate::margin::look::modal(ctx, egui::Id::new("margin-keysheet"), &t).show(ctx, |ui| {
         ui.set_width(620.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(18.0)));

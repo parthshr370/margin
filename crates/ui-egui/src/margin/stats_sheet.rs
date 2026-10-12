@@ -284,7 +284,9 @@ fn draw(app: &mut PdfCraftApp, ctx: &egui::Context, sheet: &mut Sheet) -> Option
     let recording = app.margin_keys.settings().stats.enabled;
     let has_document = app.active.is_some();
     let mut action = None;
-    let modal = look::modal(egui::Id::new("margin-stats"), &t).frame(frame).show(ctx, |ui| {
+    // Pinned to its size (below), so it is centred once and never moves.
+    let top = (screen.height() - outer.y) / 2.0;
+    let modal = look::modal_at(egui::Id::new("margin-stats"), &t, top).frame(frame).show(ctx, |ui| {
         ui.set_min_size(size);
         ui.set_max_size(size);
         ui.spacing_mut().item_spacing = Vec2::ZERO;
