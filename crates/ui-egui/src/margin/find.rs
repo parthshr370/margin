@@ -29,7 +29,7 @@ const FIELD_MAX_WIDTH: f32 = 460.0;
 const FIELD_MIN_WIDTH: f32 = 320.0;
 const FIELD_HEIGHT: f32 = 30.0;
 /// The field's small buttons (Aa, whole words, previous, next, close) and text.
-const FIELD_BUTTON: f32 = 24.0;
+const FIELD_BUTTON: f32 = look::SMALL_BUTTON;
 const FIELD_BUTTON_COUNT: f32 = 5.0;
 const FIELD_TEXT: f32 = 13.0;
 const COUNT_TEXT: f32 = 11.5;
@@ -351,9 +351,7 @@ pub(crate) fn results(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, inde
     let Some(view) = app.views.get_mut(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let info = &doc.info;
-    ui.add_space(GAP_LARGE);
-    ui.horizontal(|ui| look::section_label(ui, t, "Find", None));
-    ui.add_space(GAP);
+    look::pane_header(ui, t, "Find", None, |_| {});
     let Some(find) = view.find.as_ref() else {
         status(ui, t, &["Press / or Ctrl+F to find text in this document."]);
         return;

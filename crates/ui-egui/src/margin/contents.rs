@@ -4,10 +4,11 @@
 //! the active path always shows. Entries keep the reader's own open and closed choices, not
 //! flips of a default that moves with the section. The current section is revealed (its
 //! ancestors opened, its row scrolled to the middle once) when Contents opens, after a
-//! deliberate jump (anything that changes the Back history: the outline, links, the page field,
-//! Back itself) and on "Reveal current". While the reader reads on, the list follows the
-//! section only if its row was in view, so a list scrolled away stays put. A chevron only
-//! opens or closes; a row goes to its destination. Sections follow the reading line,
+//! deliberate jump from elsewhere (anything else that changes the Back history: links, the page
+//! field, Back itself) and on "Reveal current". A click in this list opens nothing and scrolls
+//! nothing, so the row clicked stays under the pointer. While the reader reads on, the list
+//! follows the section only if its row was in view, so a list scrolled away stays put. A chevron
+//! only opens or closes; a row goes to its destination. Sections follow the reading line,
 //! including multiple section starts on the same page.
 
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ use egui::{Align, Align2, Rect, Sense, vec2};
 use pdfcraft_render::{DocInfo, OutlineItem};
 
 use super::look::{self, ButtonSize, ROW_PAD};
-use super::sidebar::{ROW_HEIGHT, ROW_SPACING, empty, pane_title};
+use super::sidebar::{ROW_HEIGHT, ROW_SPACING, empty};
 use super::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, links, reading};
 use crate::canvas::ViewPlace;
 use crate::theme::{self, Tokens};
@@ -44,6 +45,9 @@ struct Tree {
     drawn_pass: u64,
     /// Whether the marked row was inside the list's view last frame.
     marked_in_view: bool,
+    /// Last frame's jump came from a row of this list: the history change it makes is the
+    /// reader's own click, not a jump to reveal.
+    own_jump: bool,
 }
 
 /// The pane's actions under its title.
@@ -58,7 +62,7 @@ struct Links {
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
     let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
     let info = &doc.info;
-    pane_title(ui, t, "Contents", None);
+    look::pane_header(ui, t, "Contents", None, |_| {});
     if info.outline.is_empty() {
         empty(ui, t, &["This document has no table of contents.", "Pages and Find still get you around."]);
         return;
@@ -74,7 +78,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         set_all(&info.outline, &mut tree.open, open);
     }
     let reopened = tree.seen_history.is_none() || tree.drawn_pass.saturating_add(1) < pass;
-    let jumped = tree.seen_history.is_some_and(|seen| seen != history);
+    let jumped = tree.seen_history.is_some_and(|seen| seen != history) && !std::mem::take(&mut tree.own_jump);
     let reveal = reopened || jumped || links.reveal;
     let moved = tree.followed.as_deref() != Some(current.as_slice());
     if reveal {
@@ -82,8 +86,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
             tree.open.insert(prefix.to_vec(), true);
         }
     }
-    // Opening Contents and "Reveal current" centre the row; a jump (often a click in this very
-    // list) and reading on only bring it into view, so a row already in view never moves.
+    // Opening Contents and "Reveal current" centre the row; a jump from elsewhere and reading on
+    // only bring it into view, so a row already in view never moves.
     let scroll = if reopened || links.reveal {
         Some(Some(Align::Center))
     } else if jumped || (moved && tree.marked_in_view) {
@@ -106,6 +110,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         tree.open.insert(path, open);
     }
     tree.marked_in_view = marked_in_view;
+    tree.own_jump = go.is_some();
     ui.data_mut(|d| d.insert_temp(tree_id, tree));
     if let (Some(destination), Some(view)) = (go, app.views.get_mut(index)) {
         links::jump(view, info, destination);

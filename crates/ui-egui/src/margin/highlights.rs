@@ -741,26 +741,32 @@ fn filter_menu(ui: &mut egui::Ui, t: &Tokens, filter: &mut Filter, notes: &Notes
     }
 }
 
-/// The page note being written (`note.add`), on a card above the list. `true` when Save was
-/// pressed.
+/// The page note being written (`note.add`), on a card above the list. Its height grows from
+/// nothing as it appears and shrinks away when it goes (`look::collapsible`), so the list under
+/// it slides instead of jumping. `true` when Save was pressed.
 fn draft(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut DocView) -> bool {
-    let Some((NotePlace { page, .. }, _)) = view.margin.marks.draft else { return false };
-    let label = info.pages.get(page).map_or_else(|| page.saturating_add(1).to_string(), |p| p.label.clone());
-    let mut outcome = Edited::Typing;
     let editor_id = egui::Id::new("margin-new-page-note");
-    look::card_frame(t).inner_margin(GAP_LARGE).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        ui.horizontal(|ui| {
-            ui.add(icons::image("sticky-note", KIND_ICON, t.text_muted));
-            ui.label(egui::RichText::new(format!("New page note · p. {label}")).font(theme::regular(META_TEXT)).color(t.text_muted));
+    let open = view.margin.marks.draft.is_some();
+    let outcome = look::collapsible(ui, editor_id.with("margin-draft-card"), open, |ui| {
+        // While it slides away the note is gone: an empty card shrinks.
+        let Some((NotePlace { page, .. }, _)) = view.margin.marks.draft else { return Edited::Typing };
+        let label = info.pages.get(page).map_or_else(|| page.saturating_add(1).to_string(), |p| p.label.clone());
+        let mut outcome = Edited::Typing;
+        look::card_frame(t).inner_margin(GAP_LARGE).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+            ui.horizontal(|ui| {
+                ui.add(icons::image("sticky-note", KIND_ICON, t.text_muted));
+                ui.label(egui::RichText::new(format!("New page note · p. {label}")).font(theme::regular(META_TEXT)).color(t.text_muted));
+            });
+            if let Some((_, text)) = view.margin.marks.draft.as_mut() {
+                outcome = editor(ui, t, editor_id, text, "Write a note for this page");
+            }
         });
-        if let Some((_, text)) = view.margin.marks.draft.as_mut() {
-            outcome = editor(ui, t, editor_id, text, "Write a note for this page");
-        }
+        ui.add_space(GAP);
+        outcome
     });
-    ui.add_space(GAP);
-    match outcome {
+    match outcome.unwrap_or(Edited::Typing) {
         Edited::Typing => false,
         Edited::Saved => true,
         Edited::Cancelled => {

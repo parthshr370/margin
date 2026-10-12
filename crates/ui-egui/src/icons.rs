@@ -33,9 +33,15 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
     image(name, size, tint).paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(size)));
 }
 
-/// Square icon button: transparent until hovered; `selected` gets the accent treatment.
+/// Square icon button: transparent until hovered; `selected` gets the accent treatment. In
+/// Margin's theme it is Margin's icon button (`margin::look::icon_button`) at the same size, so
+/// PdfCraft's panels hosted in Margin's sidebar share Margin's two glyph sizes and states.
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
+    let label = if tooltip.is_empty() { name } else { tooltip };
+    if t.kind == crate::theme::ThemeKind::Margin {
+        return crate::margin::look::icon_button(ui, name, box_size, selected, label, None);
+    }
     let style = IconButtonStyle {
         normal: ButtonVisuals { fill: Color32::TRANSPARENT, stroke: egui::Stroke::NONE, icon: t.icon },
         hovered: ButtonVisuals { fill: t.hover, stroke: egui::Stroke::NONE, icon: t.icon },
@@ -44,7 +50,6 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
         corner_radius: t.radius.into(),
         focus_stroke: egui::Stroke::new(1.0, t.accent),
     };
-    let label = if tooltip.is_empty() { name } else { tooltip };
     let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |ui, rect, tint| {
         paint(ui, rect, name, (box_size * 0.5).round(), tint);
     });

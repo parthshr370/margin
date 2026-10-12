@@ -478,66 +478,79 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
                 };
-                ui.horizontal(|ui| {
-                    if ember {
-                        crate::margin::look::section_label(ui, &t, tl!(title), count);
-                    } else {
+                let picked = (panel == RightPanel::Pages && view.selected.len() > 1).then(|| {
+                    let n = view.selected.len().to_string();
+                    crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)])
+                });
+                // Margin's pane header has compact buttons and no close × (the header's sidebar
+                // button closes it); PdfCraft's keeps its own row.
+                let button = if ember { crate::margin::look::BUTTON_HEIGHT } else { 26.0 };
+                // Right to left: "…", filter, search (Acrobat's order left to right).
+                let mut trailing = |ui: &mut egui::Ui| {
+                    if panel == RightPanel::Comments {
+                        panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
+                    }
+                    if panel == RightPanel::Comments
+                        && icons::button(ui, "search", button, view.comments.search.is_some(), tl!("Search comments")).clicked()
+                    {
+                        view.comments.search = match view.comments.search {
+                            Some(_) => None,
+                            None => Some(String::new()),
+                        };
+                        view.comments.search_focus = true;
+                    }
+                    if panel == RightPanel::Bookmarks && (bm_editable || !info.outline.is_empty()) {
+                        let more = icons::button(ui, "ellipsis", button, false, tl!("Bookmark options"));
+                        egui::Popup::menu(&more).show(|ui| {
+                            ui.set_min_width(200.0);
+                            if bm_editable && ui.button(tl!("New bookmarks from structure")).clicked() {
+                                bm_action = Some(BmAction::FromStructure);
+                                ui.close();
+                            }
+                            if !info.outline.is_empty() {
+                                for (levels, label) in [
+                                    (usize::MAX, tl!("Expand all bookmarks")),
+                                    (1, tl!("Expand top-level bookmarks")),
+                                    (0, tl!("Collapse all bookmarks")),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        bm_expand = Some(levels);
+                                        ui.close();
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    let new_tip = crate::commands::command_tip(ui.ctx(), tl!("New bookmark ({key})"), "bookmark.add");
+                    if panel == RightPanel::Bookmarks && bm_editable && icons::button(ui, "bookmark-plus", button, false, &new_tip).clicked() {
+                        bm_action = Some(BmAction::New);
+                    }
+                };
+                if ember {
+                    crate::margin::look::pane_header(ui, &t, tl!(title), count, |ui| {
+                        trailing(ui);
+                        if let Some(picked) = picked {
+                            ui.label(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text));
+                        }
+                    });
+                } else {
+                    ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
                         if let Some(c) = count {
                             ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
                         }
-                    }
-                    if panel == RightPanel::Pages && view.selected.len() > 1 {
-                        let n = view.selected.len().to_string();
-                        let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
-                        ui.label(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text));
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
-                            close = true;
+                        if let Some(picked) = picked {
+                            ui.label(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text));
                         }
-                        // Right to left: close, "…", filter, search (Acrobat's order left to right).
-                        if panel == RightPanel::Comments {
-                            panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
-                        }
-                        if panel == RightPanel::Comments
-                            && icons::button(ui, "search", 26.0, view.comments.search.is_some(), tl!("Search comments")).clicked()
-                        {
-                            view.comments.search = match view.comments.search {
-                                Some(_) => None,
-                                None => Some(String::new()),
-                            };
-                            view.comments.search_focus = true;
-                        }
-                        if panel == RightPanel::Bookmarks && (bm_editable || !info.outline.is_empty()) {
-                            let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Bookmark options"));
-                            egui::Popup::menu(&more).show(|ui| {
-                                ui.set_min_width(200.0);
-                                if bm_editable && ui.button(tl!("New bookmarks from structure")).clicked() {
-                                    bm_action = Some(BmAction::FromStructure);
-                                    ui.close();
-                                }
-                                if !info.outline.is_empty() {
-                                    for (levels, label) in [
-                                        (usize::MAX, tl!("Expand all bookmarks")),
-                                        (1, tl!("Expand top-level bookmarks")),
-                                        (0, tl!("Collapse all bookmarks")),
-                                    ] {
-                                        if ui.button(label).clicked() {
-                                            bm_expand = Some(levels);
-                                            ui.close();
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        let new_tip = crate::commands::command_tip(ui.ctx(), tl!("New bookmark ({key})"), "bookmark.add");
-                        if panel == RightPanel::Bookmarks && bm_editable && icons::button(ui, "bookmark-plus", 26.0, false, &new_tip).clicked() {
-                            bm_action = Some(BmAction::New);
-                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
+                                close = true;
+                            }
+                            trailing(ui);
+                        });
                     });
-                });
-                ui.add_space(6.0);
+                    ui.add_space(6.0);
+                }
                 let search_id = egui::Id::new(("bookmark_search", id.0));
                 let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
                 if panel == RightPanel::Bookmarks && !info.outline.is_empty() {

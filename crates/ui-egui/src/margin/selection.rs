@@ -32,8 +32,8 @@ use crate::theme::Tokens;
 
 /// The bar's egui id; its layer tells a press on it from a press outside.
 const BAR_ID: &str = "margin-selection-bar";
-/// A button's side.
-const BUTTON: f32 = 28.0;
+/// A button's side, and the colour dots' cells beside them: one height for the whole bar.
+const BUTTON: f32 = look::BUTTON_HEIGHT;
 /// The bar's padding around its buttons, and its distance from the selected text.
 const PADDING: u8 = 4;
 const OFFSET: f32 = 8.0;
@@ -230,7 +230,7 @@ fn draw(app: &PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) -> Opt
                                 shortcut: keys.as_deref(),
                             })
                             .collect();
-                        if let Some(index) = look::color_dots(ui, &dots) {
+                        if let Some(index) = look::color_dots_in(ui, &dots, BUTTON) {
                             clicked = Some(Action::Color(index));
                         }
                         // A toggle: it underlines the selection, turns the bar's highlight

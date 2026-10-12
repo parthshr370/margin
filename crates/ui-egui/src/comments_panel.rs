@@ -512,7 +512,10 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
         && cv.hidden_statuses.is_empty()
         && cv.hidden_colors.is_empty()
         && cv.hidden_checks.is_empty());
-    let more = icons::button(ui, "ellipsis", 26.0, false, tl!("More options"));
+    // In Margin's sidebar the header's buttons are its compact control height.
+    let margin = Tokens::get(ui.ctx()).kind == crate::theme::ThemeKind::Margin;
+    let button = if margin { crate::margin::look::BUTTON_HEIGHT } else { 26.0 };
+    let more = icons::button(ui, "ellipsis", button, false, tl!("More options"));
     egui::Popup::menu(&more).show(|ui| {
         ui.set_min_width(220.0);
         ui.label(egui::RichText::new(tl!("Sort by")).small());
@@ -541,7 +544,7 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
             }
         }
     });
-    let filter = icons::button(ui, "filter", 26.0, active, tl!("Filter comments"));
+    let filter = icons::button(ui, "filter", button, active, tl!("Filter comments"));
     egui::Popup::menu(&filter).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(200.0);
         let toggle = |ui: &mut egui::Ui, list: &mut Vec<String>, value: &str, label: &str| {

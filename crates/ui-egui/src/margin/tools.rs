@@ -6,7 +6,7 @@
 //! own options (Format text, signatures, the Redact footer) are PdfCraft's
 //! (`panels::tool_detail_body`), which draws that group's items through [`section`].
 
-use egui::{Align, Layout, Rect, Sense, Stroke, UiBuilder, vec2};
+use egui::{Rect, Sense, vec2};
 use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem, ToolSection};
 use pdfcraft_engine::commands::{self, Needs};
 
@@ -23,10 +23,6 @@ const LABEL_TEXT: f32 = 13.0;
 const GROUP_TEXT: f32 = 12.0;
 const GROUP_BEFORE: f32 = 24.0;
 const GROUP_AFTER: f32 = 8.0;
-/// The chrome strip at the top: a standard button's height plus the small step above and
-/// below, and its title's size.
-const HEADER_HEIGHT: f32 = 48.0;
-const TITLE_TEXT: f32 = 14.0;
 
 /// The Tools pane: the working tool groups, or the picked group's items and options.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
@@ -57,9 +53,7 @@ fn has_working(group: &ToolGroup) -> bool {
 }
 
 fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    if header(ui, t, "Tools", false).close {
-        app.margin_chrome.sidebar_open = false;
-    }
+    look::pane_header(ui, t, "Tools", None, |_| {});
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.add_space(GAP);
@@ -71,47 +65,17 @@ fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
+/// A picked group: the pane header names it, with "All tools" on its right going back.
 fn detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, group: &'static ToolGroup) {
-    let picked = header(ui, t, group.label, true);
-    if picked.back {
+    let mut back = false;
+    look::pane_header(ui, t, group.label, None, |ui| {
+        back = look::Button::ghost(ButtonSize::Compact, "All tools").icon("chevron-left").name("Back to all tools").show(ui).clicked();
+    });
+    if back {
         app.left = LeftPanel::AllTools;
         app.mode = crate::Mode::AllTools;
     }
-    if picked.close {
-        app.margin_chrome.sidebar_open = false;
-    }
     crate::panels::tool_detail_body(app, ui, t, group);
-}
-
-/// What the header's buttons asked for.
-struct Picked {
-    back: bool,
-    close: bool,
-}
-
-/// The chrome strip across the pane (its edge below it): a ghost Back on a group, the title, a
-/// ghost Close.
-fn header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> Picked {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
-    // Across the whole pane, into the sidebar's side padding.
-    let strip = rect.expand2(vec2(GAP, 0.0));
-    let painter = ui.painter().with_clip_rect(ui.clip_rect().union(strip));
-    painter.rect_filled(strip, 0.0, t.chrome);
-    painter.hline(strip.x_range(), strip.bottom() - look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
-    let mut picked = Picked { back: false, close: false };
-    ui.scope_builder(UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)), |ui| {
-        ui.spacing_mut().item_spacing.x = GAP;
-        if back {
-            picked.back = look::button_icon(ui, ButtonSize::Standard, "chevron-left", "Back to all tools", None).clicked();
-        } else {
-            ui.add_space(ROW_INSET);
-        }
-        ui.label(egui::RichText::new(title).font(theme::semibold(TITLE_TEXT)).color(t.text));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            picked.close = look::button_icon(ui, ButtonSize::Standard, "x", "Close tools", None).clicked();
-        });
-    });
-    picked
 }
 
 /// One section of a picked group, Margin's way: its label, then a row per working item; a row
