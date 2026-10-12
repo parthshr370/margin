@@ -2,7 +2,7 @@
 //! drives the document's page colour, layout and trim, and PdfCraft is unchanged.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::canvas::PageLayout;
 use pdfcraft_ui_egui::margin::display::{self, DisplayState};
 use pdfcraft_ui_egui::margin::pagecolor::PageMode;
@@ -117,10 +117,14 @@ fn popover_picks_modes_and_resets_sliders() {
     h.run_steps(2);
     assert_eq!(state(&h).color.mode, PageMode::Sepia);
     assert!(!state(&h).follow_system, "a pick by hand turns follow system off");
-    assert!(h.query_by_label("Keep figure hues").is_none(), "only Ink and Mono offer it");
+    let keep_hues_disabled = |h: &Harness<'static, (PdfCraftApp, bool)>| {
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Keep figure hues").accesskit_node().is_disabled()
+    };
+    assert!(keep_hues_disabled(&h), "only Ink and Mono offer it; the row stays, disabled");
 
     h.get_by_label("Ink").click();
     h.run_steps(2);
+    assert!(!keep_hues_disabled(&h));
     h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Keep figure hues").click();
     h.run_steps(2);
     assert!(!state(&h).color.keep_hues);
@@ -149,16 +153,21 @@ fn popover_picks_modes_and_resets_sliders() {
 #[test]
 fn popover_sets_two_up_with_a_cover_and_a_manual_trim() {
     let mut h = popover_harness("layout");
-    assert!(h.query_by_label("Cover page alone").is_none(), "only Two-up has a cover page");
+    let cover_disabled = |h: &Harness<'static, (PdfCraftApp, bool)>| {
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Cover page alone").accesskit_node().is_disabled()
+    };
+    assert!(cover_disabled(&h), "only Two-up has a cover page; the row stays, disabled");
     h.get_by_label("Two-up").click();
     h.run_steps(2);
     assert_eq!(h.state().0.views[0].layout, PageLayout::TwoUp);
+    assert!(!cover_disabled(&h));
     h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Cover page alone").click();
     h.run_steps(2);
     assert!(h.state().0.views[0].cover);
 
     h.get_by_label("Manual").click();
-    h.run_steps(2);
+    // The editor slides open; let it finish before dragging on its preview.
+    h.run_steps(20);
     let trim = &h.state().0.views[0].margin.trim;
     assert!(trim.on && trim.manual);
     // Drag across the middle of the preview: keep its central part.

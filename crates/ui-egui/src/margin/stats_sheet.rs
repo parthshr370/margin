@@ -29,7 +29,6 @@ const SECTION_GAP: f32 = 24.0;
 /// Padding inside a card, chart well or the day card, and the gap between related things in it.
 const INNER_PAD: f32 = 16.0;
 const INNER_GAP: f32 = 8.0;
-const TITLE_SIZE: f32 = 24.0;
 const SECTION_TITLE_SIZE: f32 = 15.0;
 const BODY_TEXT: f32 = 13.0;
 const SMALL_TEXT: f32 = 12.0;
@@ -284,7 +283,9 @@ fn draw(app: &mut PdfCraftApp, ctx: &egui::Context, sheet: &mut Sheet) -> Option
     let recording = app.margin_keys.settings().stats.enabled;
     let has_document = app.active.is_some();
     let mut action = None;
-    let modal = look::modal(egui::Id::new("margin-stats"), &t).frame(frame).show(ctx, |ui| {
+    // Pinned to its size (below), so it is centred once and never moves.
+    let top = (screen.height() - outer.y) / 2.0;
+    let modal = look::modal_at(egui::Id::new("margin-stats"), &t, top).frame(frame).show(ctx, |ui| {
         ui.set_min_size(size);
         ui.set_max_size(size);
         ui.spacing_mut().item_spacing = Vec2::ZERO;
@@ -314,9 +315,9 @@ fn header(ui: &mut egui::Ui, t: &Tokens, recording: bool, export_off: Option<&st
     ui.painter().hline(rect.x_range(), rect.bottom() - look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
     let mut row = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(PAD, 0.0))).layout(Layout::left_to_right(Align::Center)));
     row.spacing_mut().item_spacing.x = INNER_GAP;
-    row.label(RichText::new("Reading stats").font(theme::semibold(TITLE_SIZE)).color(t.text));
+    row.label(RichText::new("Reading stats").font(theme::semibold(look::SHEET_TITLE)).color(t.text));
     row.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if look::button_icon(ui, ButtonSize::Standard, "x", "Close", None).clicked() {
+        if look::close_button(ui, ButtonSize::Standard, "Close").clicked() {
             *action = Some(Action::Close);
         }
         let export = ui.add_enabled_ui(export_off.is_none(), |ui| {

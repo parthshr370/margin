@@ -1168,17 +1168,27 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let can_post = !c.text.trim().is_empty() || matches!(c.kind, ComposerKind::Edit(_));
-                    if ui
-                        .add_enabled(
+                    // Margin's composer uses Margin's one button family; PdfCraft keeps its pills.
+                    let margin = t.kind == crate::theme::ThemeKind::Margin;
+                    let compact = crate::margin::look::ButtonSize::Compact;
+                    let post_clicked = if margin {
+                        ui.add_enabled_ui(can_post, |ui| crate::margin::look::button_primary(ui, compact, tl!("Post"))).inner.clicked()
+                    } else {
+                        ui.add_enabled(
                             can_post,
                             egui::Button::new(egui::RichText::new(tl!("Post")).color(Color32::WHITE)).fill(t.accent).corner_radius(14),
                         )
                         .clicked()
-                        || (enter && can_post)
-                    {
+                    };
+                    if post_clicked || (enter && can_post) {
                         post = true;
                     }
-                    if ui.add(egui::Button::new(tl!("Cancel")).corner_radius(14)).clicked() {
+                    let cancel_clicked = if margin {
+                        crate::margin::look::button_secondary(ui, compact, tl!("Cancel")).clicked()
+                    } else {
+                        ui.add(egui::Button::new(tl!("Cancel")).corner_radius(14)).clicked()
+                    };
+                    if cancel_clicked {
                         cancel = true;
                     }
                 });
@@ -1276,6 +1286,10 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
 /// Items of the canvas context menu for the selected comment (or the page).
 pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs, allowed: bool) -> Option<CanvasAction> {
     let mut action = None;
+    // Margin's menus share one width, so the same menu never opens wider for a longer label.
+    if crate::theme::Tokens::get(ui.ctx()).kind == crate::theme::ThemeKind::Margin {
+        crate::margin::look::menu_body(ui);
+    }
     let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && a.in_reply_to.is_none()));
     match selected {
         Some(a) => {

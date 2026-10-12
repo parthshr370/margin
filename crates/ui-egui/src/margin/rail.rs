@@ -24,11 +24,14 @@ pub enum RailItem<'a> {
     Divider,
 }
 
-const BUTTON: f32 = 32.0;
+const BUTTON: f32 = look::CONTROL_ROW;
 /// The rail's padding around its buttons; its corners follow the buttons' plus this.
 const PADDING: u8 = 6;
 /// Distance from the page area's edge.
 const INSET: f32 = 14.0;
+/// A divider row's height, and the space between rows.
+const DIVIDER: f32 = 9.0;
+const ROW_SPACING: f32 = 2.0;
 
 impl<'a> RailItem<'a> {
     fn from_id(id: &'a str, app: &PdfCraftApp) -> Option<Self> {
@@ -114,7 +117,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     }
     let t = Tokens::get(ui.ctx());
     let side = app.margin_keys.settings().ui.rail.side;
-    let (pivot, anchor) = placement(area, side, shown);
+    let base = base_height(app);
+    let (pivot, anchor) = placement(area, side, shown, base);
     egui::Area::new(id).order(egui::Order::Middle).pivot(pivot).fixed_pos(anchor).interactable(open).fade_in(false).show(ui.ctx(), |ui| {
         if !open {
             // Closing: no clicks (`interactable`) and no keyboard focus either.
@@ -122,7 +126,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
         }
         ui.set_opacity(shown);
         look::floating_frame(&t, look::RADIUS_FLOATING).inner_margin(egui::Margin::same(PADDING as i8)).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().item_spacing.y = ROW_SPACING;
             ui.vertical(|ui| {
                 let mut clicked = None;
                 let mut snapshot_to_note = false;
@@ -142,7 +146,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     if item == RailItem::Command("edit.snapshot") {
                         let vault = app.notes.vault.is_some();
                         r.context_menu(|ui| {
-                            if ui.add_enabled(vault, egui::Button::new("Save snapshot to note")).clicked() {
+                            look::menu_body(ui);
+                            let row = ui.add_enabled_ui(vault, |ui| look::menu_row(ui, Some("camera"), "Save snapshot to note", None, false)).inner;
+                            let row = if vault { row } else { row.on_disabled_hover_text("Choose an Obsidian vault in Settings first") };
+                            if row.clicked() {
                                 snapshot_to_note = true;
                                 ui.close();
                             }
@@ -171,16 +178,26 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     });
 }
 
-fn placement(area: Rect, side: margin_config::RailSide, shown: f32) -> (egui::Align2, egui::Pos2) {
+/// The rail's height with no tool controls: its buttons, dividers and padding.
+fn base_height(app: &PdfCraftApp) -> f32 {
+    let items: Vec<RailItem<'_>> = app.margin_keys.settings().ui.rail.items.iter().filter_map(|id| RailItem::from_id(id, app)).collect();
+    let rows: f32 = items.iter().map(|item| if *item == RailItem::Divider { DIVIDER } else { BUTTON }).sum();
+    rows + ROW_SPACING * items.len().saturating_sub(1) as f32 + 2.0 * f32::from(PADDING)
+}
+
+/// Where the rail hangs: by its top, at the height that centres the rail without tool controls,
+/// so picking a comment tool grows it downward and never moves the button just clicked.
+fn placement(area: Rect, side: margin_config::RailSide, shown: f32, base: f32) -> (egui::Align2, egui::Pos2) {
     let inset = INSET - (1.0 - shown) * motion::RAIL_SHIFT;
+    let top = area.top() + ((area.height() - base) / 2.0).max(look::GAP_LARGE);
     match side {
-        margin_config::RailSide::Left => (egui::Align2::LEFT_CENTER, area.left_center() + vec2(inset, 0.0)),
-        margin_config::RailSide::Right => (egui::Align2::RIGHT_CENTER, area.right_center() - vec2(inset, 0.0)),
+        margin_config::RailSide::Left => (egui::Align2::LEFT_TOP, egui::pos2(area.left() + inset, top)),
+        margin_config::RailSide::Right => (egui::Align2::RIGHT_TOP, egui::pos2(area.right() - inset, top)),
     }
 }
 
 fn divider(ui: &mut egui::Ui, t: &Tokens) {
-    let (r, _) = ui.allocate_exact_size(vec2(BUTTON, 9.0), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(BUTTON, DIVIDER), Sense::hover());
     ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
 }
 
@@ -296,13 +313,13 @@ mod tests {
     }
 
     #[test]
-    fn left_and_right_rails_anchor_inside_the_requested_edge() {
+    fn left_and_right_rails_hang_from_the_top_inside_the_requested_edge() {
         let area = Rect::from_min_size(egui::pos2(100.0, 50.0), vec2(600.0, 800.0));
-        let (pivot, anchor) = placement(area, margin_config::RailSide::Left, 1.0);
-        assert_eq!(pivot, egui::Align2::LEFT_CENTER);
-        assert_eq!(anchor.x, area.left() + INSET);
-        let (pivot, anchor) = placement(area, margin_config::RailSide::Right, 1.0);
-        assert_eq!(pivot, egui::Align2::RIGHT_CENTER);
+        let (pivot, anchor) = placement(area, margin_config::RailSide::Left, 1.0, 200.0);
+        assert_eq!(pivot, egui::Align2::LEFT_TOP);
+        assert_eq!(anchor, egui::pos2(area.left() + INSET, area.top() + 300.0), "centred for its height without tool controls");
+        let (pivot, anchor) = placement(area, margin_config::RailSide::Right, 1.0, 200.0);
+        assert_eq!(pivot, egui::Align2::RIGHT_TOP);
         assert_eq!(anchor.x, area.right() - INSET);
     }
 }

@@ -6,9 +6,9 @@
 //! it steps through, and a quiet "Back to p. N" pill offers the way back for a few seconds
 //! after each jump (the mockup's `.backpill`).
 
-use egui::{Align2, PointerButton, pos2};
+use egui::{Align2, PointerButton, Rect, pos2};
 
-use super::look::{self, GAP};
+use super::look::{self, GAP, GAP_SECTION};
 use super::motion;
 use super::reading::{self, Spot};
 use crate::PdfCraftApp;
@@ -18,7 +18,8 @@ use crate::theme::{self, Tokens};
 /// How long the Back pill stays after a jump (the mockup's 6 s).
 const PILL_SECS: f64 = 6.0;
 /// The pill's bottom edge above the page area's (the mockup's 56 px less its 36 px footer);
-/// Margin's toasts sit on the same line.
+/// Margin's toasts sit on the same line, centred, while the pill keeps the page area's
+/// bottom-left corner, so neither moves when the other comes or goes.
 pub(crate) const PILL_LIFT: f32 = 20.0;
 /// The pill's padding around its button, and the shortcut's text size.
 const PILL_PAD: f32 = 4.0;
@@ -102,9 +103,9 @@ pub(crate) fn search_jump(view: &mut DocView) {
 }
 
 /// Every Margin frame, after the page is drawn: the mouse's back/forward buttons, the end of a
-/// search, and the Back pill. Returns the pill's top edge while it shows, so a toast can sit
-/// above it.
-pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) -> Option<f32> {
+/// search, and the Back pill. Returns the pill's rect while it shows, so a toast too wide to
+/// clear it can sit above it.
+pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) -> Option<Rect> {
     let now = ctx.input(|i| i.time);
     let requested_depth = app.margin_keys.settings().reader.back_stack;
     for view in &mut app.views {
@@ -134,9 +135,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) -> Option<f32> {
     if app.margin_chrome.focus_mode { None } else { pill(app, ctx, index, now) }
 }
 
-/// "‹ Back to p. N  Alt+←" above the footer, for [`PILL_SECS`] after a jump; it fades in and out.
-/// Returns its top edge while it shows.
-fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> Option<f32> {
+/// "‹ Back to p. N  Alt+←" in the page area's bottom-left corner, for [`PILL_SECS`] after a
+/// jump; it fades in and out. Returns its rect while it shows.
+fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> Option<Rect> {
     let key = look::shortcut(app, "reader.back");
     let enabled = app.margin_keys.settings().reader.back_pill;
     if !enabled {
@@ -168,9 +169,9 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> O
         .map_or_else(|| (place.page + 1).to_string(), str::to_owned);
     let text = format!("Back to p. {label}");
     let t = Tokens::get(ctx);
-    let anchor = pos2(area.center().x, area.bottom() - PILL_LIFT + (1.0 - shown) * motion::RISE);
+    let anchor = pos2(area.left() + GAP_SECTION, area.bottom() - PILL_LIFT + (1.0 - shown) * motion::RISE);
     let mut back = false;
-    let drawn = egui::Area::new(id).pivot(Align2::CENTER_BOTTOM).fixed_pos(anchor).interactable(showing).show(ctx, |ui| {
+    let drawn = egui::Area::new(id).pivot(Align2::LEFT_BOTTOM).fixed_pos(anchor).interactable(showing).show(ctx, |ui| {
         ui.set_opacity(shown);
         look::floating_frame(&t, look::RADIUS_MENU).inner_margin(egui::Margin::symmetric(PILL_PAD as i8, PILL_PAD as i8)).show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -190,7 +191,7 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> O
     if back && let Some(view) = app.views.get_mut(index) {
         view.view_history(false);
     }
-    Some(drawn.response.rect.top())
+    Some(drawn.response.rect)
 }
 
 #[cfg(test)]

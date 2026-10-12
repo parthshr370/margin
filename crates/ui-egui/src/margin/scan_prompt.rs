@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use super::look::{Button, ButtonSize, GAP, ROW_PAD};
+use super::look::{self, Button, ButtonSize, GAP, ROW_PAD};
 use crate::canvas::DocView;
 use crate::ocr_ui::OcrPages;
 use crate::theme::{self, Tokens};
@@ -96,6 +96,9 @@ pub(crate) fn find(ui: &mut egui::Ui, app: &mut PdfCraftApp, index: usize) {
     }
 }
 
+/// The prompt over the page's top: a floating banner of one fixed width (its question, or the
+/// recognition's progress, wraps inside it, so a changing page count never resizes or recentres
+/// it), with a × that dismisses the question like "Not now".
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize) {
     let Some(view) = app.views.get(index) else { return };
     let page = view.scan_prompt.pending;
@@ -103,21 +106,29 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize) {
     if page.is_none() && !running {
         return;
     }
-    let position = view.viewport_rect().center_top() + egui::vec2(0.0, PROMPT_INSET);
-    egui::Area::new(egui::Id::new(("margin-scan-prompt", view.id)))
+    let area = view.viewport_rect();
+    let width = PROMPT_WIDTH.min(area.width() - 2.0 * PROMPT_INSET).max(0.0);
+    let position = area.center_top() + egui::vec2(0.0, PROMPT_INSET);
+    let closed = egui::Area::new(egui::Id::new(("margin-scan-prompt", view.id)))
         .order(egui::Order::Foreground)
         .pivot(egui::Align2::CENTER_TOP)
         .fixed_pos(position)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(PROMPT_WIDTH);
+            let close = (!running).then_some("Dismiss the scan prompt");
+            look::floating_banner(ui, width, close, |ui| {
                 if running {
                     progress(ui, app);
                 } else if let Some(page) = page {
                     body(ui, app, index, page);
                 }
-            });
-        });
+            })
+            .1
+        })
+        .inner;
+    if closed && let Some(view) = app.views.get_mut(index) {
+        view.scan_prompt.dismissed = true;
+        view.scan_prompt.pending = None;
+    }
 }
 
 fn progress(ui: &mut egui::Ui, app: &mut PdfCraftApp) {

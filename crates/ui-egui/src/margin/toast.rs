@@ -4,7 +4,7 @@
 //! string cannot carry: Undo for a deleted mark, and a failure that stays until it is dismissed
 //! or its action runs, so a routine message never replaces it.
 
-use egui::{Align2, pos2};
+use egui::{Align2, Rect, pos2};
 use pdfcraft_engine::DocId;
 
 use super::history::PILL_LIFT;
@@ -115,9 +115,10 @@ pub(crate) fn undoable(app: &mut PdfCraftApp, text: &str, doc: DocId) {
 }
 
 /// Every Margin frame, last: the routine message (with Undo when it offers it) over the held
-/// failure, centred above the footer in the reading area, above the Back pill (`pill_top`) and
-/// PdfCraft's progress notice. Repaints only until the routine message expires.
-pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill_top: Option<f32>) {
+/// failure, centred above the footer in the reading area, above PdfCraft's progress notice. The
+/// Back pill (`pill`) has the area's bottom-left corner: the toast goes above it only in an area
+/// too narrow for both side by side. Repaints only until the routine message expires.
+pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill: Option<Rect>) {
     let now = ctx.input(|i| i.time);
     let routine = app.toast.take().map(|(text, start)| (text, if start == 0.0 { now } else { start }));
     let active = app.active_ids().map(|(_, id)| id);
@@ -137,13 +138,16 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill_top: Option<
         .map(crate::canvas::DocView::viewport_rect)
         .filter(egui::Rect::is_positive)
         .unwrap_or_else(|| ctx.content_rect());
-    let mut bottom = area.bottom() - PILL_LIFT;
-    for top in [pill_top, crate::widgets::progress_notice_top(app, ctx)].into_iter().flatten() {
-        bottom = bottom.min(top - GAP);
-    }
     let max_width = (area.width() - 2.0 * GAP_SECTION).min(MAX_WIDTH);
     if max_width <= 0.0 {
         return;
+    }
+    // Placed for its widest, so a longer message never lifts it over the pill.
+    let widest = (area.center().x - max_width / 2.0)..=(area.center().x + max_width / 2.0);
+    let mut bottom = area.bottom() - PILL_LIFT;
+    let beside_pill = pill.filter(|pill| pill.right() + GAP >= *widest.start() && pill.left() <= *widest.end()).map(|pill| pill.top());
+    for top in [beside_pill, crate::widgets::progress_notice_top(app, ctx)].into_iter().flatten() {
+        bottom = bottom.min(top - GAP);
     }
     let t = Tokens::get(ctx);
     let offers_undo = app.margin_chrome.notices.undo.is_some();
@@ -227,4 +231,69 @@ fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, actions: &[Op
         });
     });
     pressed
+}
+
+/// The progress card's width (fixed, so a changing label or percent never resizes it), its bar's
+/// height and the widest its percent gets.
+const PROGRESS_WIDTH: f32 = 340.0;
+const PROGRESS_BAR: f32 = 4.0;
+const PERCENT_TEMPLATE: &str = "100%";
+/// How long the bar takes to catch up with the job's progress, and how often it repaints while
+/// it does (PdfCraft's notice's 30 frames a second).
+const PROGRESS_EASE: f32 = 0.3;
+const PROGRESS_REPAINT: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// PdfCraft's progress notice (`app.progress_notice`: an export, recognition) in Margin: a
+/// floating card of a fixed width centred where the toasts sit, above the footer in the reading
+/// area (the toasts go above it), with the label, the percent in a fixed slot, the bar and a
+/// secondary Cancel. Returns whether Cancel was clicked and the card's rect.
+pub(crate) fn progress(app: &PdfCraftApp, ctx: &egui::Context, notice: &crate::widgets::ProgressNotice) -> (bool, Rect) {
+    let t = Tokens::get(ctx);
+    let area = app
+        .active
+        .and_then(|i| app.views.get(i))
+        .map(crate::canvas::DocView::viewport_rect)
+        .filter(egui::Rect::is_positive)
+        .unwrap_or_else(|| ctx.content_rect());
+    let width = PROGRESS_WIDTH.min(area.width() - 2.0 * GAP_SECTION).max(0.0);
+    let fraction = if notice.fraction.is_finite() { notice.fraction.clamp(0.0, 1.0) } else { 0.0 };
+    let shown = ctx.animate_value_with_time(egui::Id::new("margin-progress-bar"), fraction, PROGRESS_EASE);
+    let mut cancel = false;
+    let drawn = egui::Area::new(egui::Id::new("margin-progress-notice"))
+        .order(egui::Order::Foreground)
+        .pivot(Align2::CENTER_BOTTOM)
+        .fixed_pos(pos2(area.center().x, area.bottom() - PILL_LIFT))
+        .show(ctx, |ui| {
+            look::floating_frame(&t, look::RADIUS_MENU).inner_margin(GAP_LARGE).show(ui, |ui| {
+                ui.set_width(width);
+                ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+                ui.horizontal(|ui| {
+                    let font = theme::regular(TEXT_SIZE);
+                    let label_width = (ui.available_width() - look::template_width(ui, PERCENT_TEMPLATE, font.clone()) - GAP).max(0.0);
+                    ui.allocate_ui_with_layout(egui::vec2(label_width, BUTTON_HEIGHT), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_min_width(label_width);
+                        ui.add(egui::Label::new(egui::RichText::new(&notice.label).font(font.clone()).color(t.text)).truncate());
+                    });
+                    let percent = format!("{:.0}%", shown * 100.0);
+                    look::reserved_label(ui, &percent, PERCENT_TEMPLATE, font, t.text_muted, egui::Align::Max);
+                });
+                let (track, resp) = ui.allocate_exact_size(egui::vec2(width, PROGRESS_BAR), egui::Sense::hover());
+                resp.widget_info(|| {
+                    let mut info = egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator);
+                    info.value = Some(f64::from(fraction) * 100.0);
+                    info
+                });
+                let radius = egui::CornerRadius::same((PROGRESS_BAR / 2.0) as u8);
+                ui.painter().rect_filled(track, radius, look::Surfaces::of(&t).track);
+                let done = Rect::from_min_size(track.min, egui::vec2(track.width() * shown, track.height()));
+                ui.painter().rect_filled(done, radius, t.accent);
+                if notice.cancellable {
+                    ui.allocate_ui_with_layout(egui::vec2(width, BUTTON_HEIGHT), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        cancel = look::button_secondary(ui, look::ButtonSize::Compact, "Cancel").clicked();
+                    });
+                }
+            });
+        });
+    ctx.request_repaint_after(PROGRESS_REPAINT);
+    (cancel, drawn.response.rect)
 }

@@ -18,29 +18,50 @@ const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 440.0;
 const TAB_HEIGHT: f32 = 32.0;
-const TOP_BUTTON: f32 = 30.0;
+const TOP_BUTTON: f32 = look::CONTROL_ROW;
+/// Once floating, the sidebar docks again only this far past `ui.sidebar.overlay_below_px`, so
+/// a window edge dragged across the threshold doesn't flip it back and forth.
+const DOCK_HYSTERESIS: f32 = 48.0;
 pub(super) const ROW_HEIGHT: f32 = 28.0;
 /// Rows sit nearly touching, so neighbouring hover fills read as one list.
 pub(super) const ROW_SPACING: f32 = 2.0;
 const COVER: egui::Vec2 = vec2(52.0, 67.0);
-/// The card's stats: at most this many lines, the units joined by [`STATS_SEPARATOR`].
-const STATS_LINES: usize = 2;
+/// The card's stats: one line, the units joined by [`STATS_SEPARATOR`] (the rest in its
+/// tooltip), kept even before there are stats, so the card is one height all session.
+const STATS_LINES: usize = 1;
 const STATS_SEPARATOR: &str = " · ";
 const META_TEXT: f32 = 11.0;
+/// The card's title (at most [`TITLE_ROWS`] rows, the rest in its tooltip) and author sizes, and
+/// the space between its lines.
+const TITLE_TEXT: f32 = 13.0;
+const TITLE_ROWS: usize = 2;
+const AUTHOR_TEXT: f32 = 12.0;
+const CARD_LINE_GAP: f32 = 2.0;
+/// The widest the card's progress percent gets: its slot keeps this width, so the bar beside it
+/// never moves as the percent grows.
+const PERCENT_TEMPLATE: &str = "100%";
+const PROGRESS_BAR_HEIGHT: f32 = 3.0;
+const PROGRESS_BAR_RADIUS: u8 = 2;
 /// The page bookmark list scrolls past this height, leaving room for the PDF's bookmarks.
 const PAGE_BOOKMARKS_MAX_HEIGHT: f32 = 220.0;
-const ROW_BUTTON: f32 = 22.0;
+/// A page bookmark row's remove button and its page label's size.
+const ROW_BUTTON: f32 = look::SMALL_BUTTON;
+const BOOKMARK_LABEL_TEXT: f32 = 11.0;
 
 /// The sidebar, sliding open and closed with `margin_chrome.sidebar_open` over
-/// [`motion::SLIDE`]: while it moves, its width eases between zero and the width the reader set
-/// and the panes keep their full width, clipped, so nothing reflows inside it. In a window
+/// [`motion::SLIDE`]. The page area changes once per open or close, not on every frame of the
+/// slide: opening docks the panel at its full width at once and slides the panes in inside it;
+/// closing gives the page its room back at once and slides the panes away over it. In a window
 /// narrower than `ui.sidebar.overlay_below_px` it floats over the page instead ([`overlay`]),
 /// and starts closed ([`super::ReaderChrome::start_narrow`]).
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("margin_sidebar");
     let window = ui.ctx().content_rect();
-    let narrow = window.width() < app.margin_keys.settings().ui.sidebar.overlay_below_px as f32;
+    let threshold = app.margin_keys.settings().ui.sidebar.overlay_below_px as f32;
+    let was_narrow = ui.ctx().data(|d| d.get_temp::<bool>(id.with("narrow"))).unwrap_or(false);
+    let narrow = window.width() < if was_narrow { threshold + DOCK_HYSTERESIS } else { threshold };
+    ui.ctx().data_mut(|d| d.insert_temp(id.with("narrow"), narrow));
     app.margin_chrome.start_narrow(narrow);
     let shown = motion::toggle(ui.ctx(), id.with("open"), app.margin_chrome.sidebar_open, motion::SLIDE);
     if shown <= 0.0 {
@@ -51,24 +72,24 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     }
     if shown < 1.0 {
-        // A panel of its own, so the resizable panel keeps the reader's width.
         let width = egui::PanelState::load(ui.ctx(), id).map_or(DEFAULT_WIDTH, |s| s.size().x).clamp(MIN_WIDTH, MAX_WIDTH);
+        if !app.margin_chrome.sidebar_open {
+            // Closing: the page already has its room back; the panes slide away over it.
+            floating(app, ui.ctx(), &t, id, shown, Rect::from_min_max(window.min, egui::pos2(window.left() + width, window.bottom())), false);
+            return;
+        }
+        // Opening: the panel takes its full width now (one re-fit of the page), and the panes
+        // slide in inside it, clipped.
         egui::Panel::left(id.with("sliding"))
-            .exact_size(width * shown)
+            .exact_size(width)
             .resizable(false)
             .show_separator_line(look::has_edges(&t))
             .frame(egui::Frame::NONE.fill(t.panel))
             .show(ui, |ui| {
                 let visible = ui.max_rect();
-                let rect = Rect::from_min_size(egui::pos2(visible.right() - width, visible.top()), vec2(width, visible.height()));
+                let rect = Rect::from_min_size(egui::pos2(visible.left() - (1.0 - shown) * width, visible.top()), vec2(width, visible.height()));
                 let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
                 body.set_clip_rect(visible.intersect(ui.clip_rect()));
-                if !app.margin_chrome.sidebar_open {
-                    // Closing: no clicks and no keyboard focus (its icons fade to faint as it goes).
-                    let opacity = body.opacity();
-                    body.disable();
-                    body.set_opacity(opacity);
-                }
                 sections(app, &mut body, &t);
                 ui.expand_to_include_rect(visible);
             });
@@ -103,9 +124,21 @@ fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id,
     let open = app.margin_chrome.sidebar_open;
     let width = egui::PanelState::load(ctx, id).map_or(DEFAULT_WIDTH, |s| s.size().x).clamp(MIN_WIDTH, MAX_WIDTH).min(window.width());
     let (top, bottom) = (window.top() + super::header::HEIGHT, (window.bottom() - super::footer::HEIGHT).max(window.top() + super::header::HEIGHT));
-    let left = window.left() - (1.0 - shown) * width;
-    let rect = Rect::from_min_max(egui::pos2(left, top), egui::pos2(left + width, bottom));
-    let visible = Rect::from_min_max(egui::pos2(window.left(), top), rect.right_bottom());
+    let visible =
+        floating(app, ctx, t, id, shown, Rect::from_min_max(egui::pos2(window.left(), top), egui::pos2(window.left() + width, bottom)), open);
+    let pressed_outside =
+        ctx.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| p.y > top && p.y < bottom && !visible.contains(p)));
+    if open && pressed_outside && !egui::Popup::is_any_open(ctx) {
+        app.margin_chrome.sidebar_open = false;
+    }
+}
+
+/// The sidebar's sections on a floating card at `full` (its place when fully shown), slid
+/// `1 - shown` of its width off the left edge, with the M shadow; it takes input only while
+/// `open`. Returns the part on screen.
+fn floating(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id, shown: f32, full: Rect, open: bool) -> Rect {
+    let rect = full.translate(vec2(-(1.0 - shown) * full.width(), 0.0));
+    let visible = Rect::from_min_max(egui::pos2(full.left(), full.top()), rect.right_bottom());
     egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).show(ctx, |ui| {
         let painter = ui.painter();
         painter.add(look::SHADOW_M.as_shape(visible, CornerRadius::ZERO));
@@ -122,11 +155,7 @@ fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id,
         // The area covers all of it, so a press on its background never reaches the page.
         ui.expand_to_include_rect(visible);
     });
-    let pressed_outside =
-        ctx.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| p.y > top && p.y < bottom && !visible.contains(p)));
-    if open && pressed_outside && !egui::Popup::is_any_open(ctx) {
-        app.margin_chrome.sidebar_open = false;
-    }
+    visible
 }
 
 /// The sidebar's three parts: buttons and the document card, the pane, the tab strip.
@@ -184,7 +213,10 @@ fn top_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui, traffic_lights: f32) {
 
 /// Cover, title, author and how far in the reader is, on a card: the title in full text,
 /// everything else muted, the progress bar's fill the only accent. Under that row, across the
-/// card, the book's reading stats when it has some (`stats_lines`).
+/// card, one line of the book's reading stats ("Not read yet" before there are any). Every part
+/// keeps its room whether or not it has text (the title's two rows, the author's, the stats
+/// line), so the card is one height for every document and all session, and the pane under it
+/// never moves.
 fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Option<Vec<String>>) {
     let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
     let info = &doc.info;
@@ -212,48 +244,59 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Opti
                     icons::paint(ui, cover, "file-text", 22.0, t.text_muted);
                 }
             }
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                let width = ui.available_width();
+            // The text column is exactly the cover's height: title and author from its top, the
+            // progress row on its bottom.
+            let width = ui.available_width();
+            ui.allocate_ui_with_layout(vec2(width, COVER.y), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_min_size(vec2(width, COVER.y));
+                ui.set_max_height(COVER.y);
+                ui.spacing_mut().item_spacing.y = CARD_LINE_GAP;
                 let title = info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
-                let mut job = egui::text::LayoutJob::simple(title, theme::semibold(13.0), t.text, width);
-                job.wrap.max_rows = 2;
-                ui.label(job);
-                if let Some(author) = info.author.as_deref().filter(|a| !a.trim().is_empty()) {
-                    ui.add(egui::Label::new(egui::RichText::new(author).font(theme::regular(12.0)).color(t.text_muted)).truncate());
+                let mut job = egui::text::LayoutJob::simple(title.clone(), theme::semibold(TITLE_TEXT), t.text, width);
+                job.wrap.max_rows = TITLE_ROWS;
+                let galley = ui.painter().layout_job(job);
+                let cut = galley.elided;
+                let shown = ui.add(egui::Label::new(galley).selectable(false));
+                if cut {
+                    shown.on_hover_text(title);
                 }
-                ui.add_space(GAP);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = GAP;
-                    let percent = (view.current + 1).saturating_mul(100).checked_div(pages).unwrap_or(0);
-                    ui.label(meta(&format!("{percent}%")));
-                    let count = format!("{pages} pp");
-                    let count_width = ui.fonts_mut(|f| f.layout_no_wrap(count.clone(), theme::regular(META_TEXT), t.text_muted).size().x);
-                    let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
-                    let (bar, _) = ui.allocate_exact_size(vec2(bar_width, 3.0), Sense::hover());
-                    ui.painter().rect_filled(bar, CornerRadius::same(2), look::Surfaces::of(t).track);
-                    let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
-                    let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
-                    ui.painter().rect_filled(fill, CornerRadius::same(2), t.accent);
-                    ui.label(meta(&count));
+                if let Some(author) = info.author.as_deref().filter(|a| !a.trim().is_empty()) {
+                    ui.add(egui::Label::new(egui::RichText::new(author).font(theme::regular(AUTHOR_TEXT)).color(t.text_muted)).truncate());
+                }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = GAP;
+                        let percent = (view.current + 1).saturating_mul(100).checked_div(pages).unwrap_or(0);
+                        look::reserved_label(ui, &format!("{percent}%"), PERCENT_TEMPLATE, theme::regular(META_TEXT), t.text_muted, egui::Align::Max);
+                        let count = format!("{pages} pp");
+                        let count_width = look::template_width(ui, &count, theme::regular(META_TEXT));
+                        let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
+                        let (bar, _) = ui.allocate_exact_size(vec2(bar_width, PROGRESS_BAR_HEIGHT), Sense::hover());
+                        ui.painter().rect_filled(bar, CornerRadius::same(PROGRESS_BAR_RADIUS), look::Surfaces::of(t).track);
+                        let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
+                        let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
+                        ui.painter().rect_filled(fill, CornerRadius::same(PROGRESS_BAR_RADIUS), t.accent);
+                        ui.label(meta(&count));
+                    });
                 });
             });
         });
-        if let Some(parts) = summary.filter(|parts| !parts.is_empty()) {
-            ui.add_space(GAP);
-            let width = ui.available_width();
-            let measure = |text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), theme::regular(META_TEXT), t.text_muted).size().x);
-            let lines = stats_lines(&parts, width, measure);
-            let shown = ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                for line in &lines {
-                    ui.add(egui::Label::new(meta(line)).truncate());
-                }
-            });
-            // The whole summary when a unit had no room.
-            if lines.iter().map(|line| line.split(STATS_SEPARATOR).count()).sum::<usize>() < parts.len() {
-                look::tooltip(shown.response, &parts.join(STATS_SEPARATOR), None);
-            }
+        // Statistics are desktop-only: a browser has no stats line to keep room for.
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
+        ui.add_space(GAP);
+        let parts = summary.unwrap_or_default();
+        let width = ui.available_width();
+        let measure = |text: &str| look::template_width(ui, text, theme::regular(META_TEXT));
+        let line = stats_lines(&parts, width, measure).into_iter().next();
+        let shown = match &line {
+            Some(line) => ui.add(egui::Label::new(meta(line)).truncate()),
+            None => ui.add(egui::Label::new(egui::RichText::new("Not read yet").font(theme::regular(META_TEXT)).color(t.text_faint)).truncate()),
+        };
+        // The whole summary when a unit had no room.
+        if line.as_ref().map_or(0, |line| line.split(STATS_SEPARATOR).count()) < parts.len() {
+            look::tooltip(shown, &parts.join(STATS_SEPARATOR), None);
         }
     });
     ui.add_space(GAP_LARGE);
@@ -301,13 +344,6 @@ fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
-/// A pane's title: its small-caps section label, lined up with the rows' text.
-pub(super) fn pane_title(ui: &mut egui::Ui, t: &Tokens, title: &str, count: Option<usize>) {
-    ui.add_space(GAP_LARGE);
-    ui.horizontal(|ui| look::section_label(ui, t, title, count));
-    ui.add_space(GAP);
-}
-
 /// The mockup's empty state: a muted message, centred.
 pub(super) fn empty(ui: &mut egui::Ui, t: &Tokens, lines: &[&str]) {
     ui.add_space(GAP_LARGE * 2.0);
@@ -334,34 +370,26 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         // The thumbnail grid (`margin::pages`); PdfCraft's Pages panel stays PdfCraft's.
         SidebarTab::Pages => super::pages::show(app, ui, t, index),
         SidebarTab::Other(_) => {
-            // PdfCraft's panel, its title row a section label here (`look::RowLook::Ember`), the
+            // PdfCraft's panel, its title row a pane header here (`look::RowLook::Ember`), the
             // Comments panel's cards too.
             if let Some(view) = app.views.get_mut(index) {
                 view.comments.rows = RowLook::Ember;
             }
-            ui.add_space(GAP_LARGE);
             crate::panels::right_panel(app, ui);
         }
     }
 }
 
 /// Highlights, underlines, strikethroughs and squiggles, and page notes, as cards
-/// (`margin::highlights`).
+/// (`margin::highlights`). With none yet the pane keeps the same layout (its search, the notes
+/// box) and says how to make one inside the list, so the first highlight never rearranges it.
 fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
     let count = super::highlights::count(app, index);
-    pane_title(ui, t, "Highlights", Some(count));
-    let drafting = app.views.get(index).is_some_and(|view| view.margin.marks.draft.is_some());
-    if count == 0 && !drafting {
-        if let Some(view) = app.views.get_mut(index) {
-            super::obsidian::panel_block(ui, t, &mut view.comments.notes);
-        }
-        let note_hint = look::shortcut(app, super::marks::NOTE_ADD_ID).map(|keys| format!("{keys} adds a note to the page."));
-        let mut lines = vec!["No highlights yet.", "Pick Highlight in the rail, then select text."];
-        lines.extend(note_hint.as_deref());
-        empty(ui, t, &lines);
-        return;
-    }
-    let nav = super::highlights::show(app, ui, t, index);
+    look::pane_header(ui, t, "Highlights", Some(count), |_| {});
+    let note_hint = look::shortcut(app, super::marks::NOTE_ADD_ID).map(|keys| format!("{keys} adds a note to the page."));
+    let mut empty_lines = vec!["No highlights yet.", "Pick Highlight in the rail, then select text."];
+    empty_lines.extend(note_hint.as_deref());
+    let nav = super::highlights::show(app, ui, t, index, &empty_lines);
     navigate(app.views.get_mut(index), nav);
 }
 
@@ -425,23 +453,25 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
     let current = view.current;
     let marked = rows.iter().any(|row| row.page == current);
     let mut actions = BookmarkActions::default();
-    ui.add_space(GAP_LARGE);
-    ui.horizontal(|ui| {
-        look::section_label(ui, t, "Page bookmarks", Some(rows.len()));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let label = if marked { "Remove this page's bookmark" } else { "Bookmark this page" };
-            actions.toggle = look::icon_button(ui, if marked { "bookmark" } else { "bookmark-plus" }, 26.0, marked, label, key.as_deref()).clicked();
-        });
+    let label = if marked { "Remove this page's bookmark" } else { "Bookmark this page" };
+    look::pane_header(ui, t, "Page bookmarks", Some(rows.len()), |ui| {
+        let icon = if marked { "bookmark" } else { "bookmark-plus" };
+        actions.toggle = look::icon_button(ui, icon, look::BUTTON_HEIGHT, marked, label, key.as_deref()).clicked();
     });
-    ui.add_space(GAP);
     if rows.is_empty() {
         let hint = match &key {
             Some(key) => format!("Press {key} to bookmark the page you're on."),
             None => "Bookmark the page you're on with the button above.".to_owned(),
         };
-        ui.horizontal(|ui| {
+        // Wrapped within the pane: a hint one line wide would widen the pane's content, and the
+        // headers under it would lay out past the sidebar's edge.
+        let width = (ui.available_width() - 2.0 * ROW_PAD).max(0.0);
+        ui.horizontal_top(|ui| {
             ui.add_space(ROW_PAD);
-            ui.label(egui::RichText::new(hint).font(theme::regular(12.0)).color(t.text_muted));
+            ui.allocate_ui_with_layout(vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(width);
+                ui.add(egui::Label::new(egui::RichText::new(hint).font(theme::regular(12.0)).color(t.text_muted)).wrap());
+            });
         });
     } else {
         let mut renaming: Option<(String, String)> = ui.data(|d| d.get_temp(renaming_id));
@@ -489,8 +519,9 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
     }
 }
 
-/// One page bookmark's row: hovered, it trades the page label for a remove button; its menu
-/// renames or removes it.
+/// One page bookmark's row: hovered, it trades the page label for a remove button in the same
+/// slot (as wide as the wider of the two), so the title never re-truncates under the pointer;
+/// its menu renames or removes it.
 fn bookmark_row(
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -505,29 +536,30 @@ fn bookmark_row(
     look::row_fill(ui, t, rect, &resp, here);
     let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
     icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
+    let label_font = theme::regular(BOOKMARK_LABEL_TEXT);
+    let slot_width = look::template_width(ui, &row.label, label_font.clone()).max(ROW_BUTTON);
     let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
     let mut removing = false;
-    let label_width = if resp.hovered() || ui.rect_contains_pointer(side) {
+    if resp.hovered() || ui.rect_contains_pointer(side) {
         let x = ui.interact(side, ui.id().with(("remove-page-bookmark", &row.id)), Sense::click());
-        icons::paint(ui, side, "x", 12.0, look::icon_tint(t, false, x.hovered()));
+        icons::paint(ui, side, "x", look::glyph_size(ROW_BUTTON), look::icon_tint(t, false, x.hovered()));
         if look::tooltip(x, "Remove bookmark", None).clicked() {
             removing = true;
         }
-        ROW_BUTTON
     } else {
-        ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, &row.label, theme::regular(11.0), t.text_muted);
-        ui.fonts_mut(|f| f.layout_no_wrap(row.label.clone(), theme::regular(11.0), t.text_muted).size().x)
-    };
+        ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, &row.label, label_font, t.text_muted);
+    }
     let text_left = icon.right() + GAP;
-    let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
+    let max_width = (rect.right() - ROW_PAD * 2.0 - slot_width - text_left).max(0.0);
     let color = look::row_text(t, here, t.text);
     crate::widgets::row_text(ui, egui::pos2(text_left, rect.center().y), row.title.as_str(), theme::regular(12.5), color, max_width);
     resp.context_menu(|ui| {
-        if ui.button("Rename").clicked() {
+        look::menu_body(ui);
+        if look::menu_row(ui, Some("pencil"), "Rename", None, false).clicked() {
             *renaming = Some((row.id.clone(), row.name.clone()));
             ui.close();
         }
-        if ui.button("Remove bookmark").clicked() {
+        if look::menu_row(ui, Some("trash-2"), "Remove bookmark", None, false).clicked() {
             removing = true;
             ui.close();
         }
@@ -581,13 +613,13 @@ mod tests {
     }
 
     #[test]
-    fn stats_wrap_between_whole_units_on_at_most_two_lines() {
+    fn stats_fill_one_line_with_whole_units() {
         // The card's text width at the sidebar's widest, default and narrowest settings.
         assert_eq!(stats_lines(&parts(), 416.0, measure), ["2h 14m read · 37 pages · 1.8 min/page · ~34 min left"]);
-        assert_eq!(stats_lines(&parts(), 272.0, measure), ["2h 14m read · 37 pages · 1.8 min/page", "~34 min left"]);
-        assert_eq!(stats_lines(&parts(), 170.0, measure), ["2h 14m read · 37 pages", "1.8 min/page · ~34 min left"]);
+        assert_eq!(stats_lines(&parts(), 272.0, measure), ["2h 14m read · 37 pages · 1.8 min/page"]);
+        assert_eq!(stats_lines(&parts(), 170.0, measure), ["2h 14m read · 37 pages"]);
         // Too narrow for all: the units that fit, never a split unit or a lone separator.
-        assert_eq!(stats_lines(&parts(), 80.0, measure), ["2h 14m read", "37 pages"]);
+        assert_eq!(stats_lines(&parts(), 80.0, measure), ["2h 14m read"]);
         assert!(stats_lines(&[], 272.0, measure).is_empty());
     }
 }

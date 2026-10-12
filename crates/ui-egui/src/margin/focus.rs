@@ -30,7 +30,7 @@ pub(crate) fn leave(app: &mut PdfCraftApp) {
 const INTRO_SECONDS: f64 = 2.0;
 /// The pointer this close to the top edge brings the bar back.
 const REVEAL_EDGE: f32 = 8.0;
-const BUTTON: f32 = 30.0;
+const BUTTON: f32 = look::CONTROL_ROW;
 
 /// When this run of full screen started (`since`) and the last frame it was drawn in; a gap in
 /// frames means full screen was left and entered again.
@@ -72,7 +72,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.multiply_opacity(how_shown);
         let (rect, _) = ui.allocate_exact_size(bar.size(), Sense::hover());
         ui.painter().rect_filled(rect, 0.0, t.chrome);
-        ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, t.divider));
+        // A divider only where the theme draws frame edges, as the header and footer do.
+        if look::has_edges(&t) {
+            ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, t.divider));
+        }
         let inner = rect.shrink2(egui::vec2(GAP_LARGE, 0.0));
         let buttons = UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center));
         let right_start = ui

@@ -148,6 +148,14 @@ fn all_sections(app: &PdfCraftApp) -> Vec<Section> {
     all
 }
 
+/// The sheet's width, its filter field's, its fixed body height and its one key column; the Key
+/// context window's first column.
+const SHEET_WIDTH: f32 = 620.0;
+const FILTER_WIDTH: f32 = 240.0;
+const BODY_HEIGHT: f32 = 480.0;
+const KEY_COLUMN: f32 = 200.0;
+const CONTEXT_COLUMN: f32 = 160.0;
+
 fn matches_filter(filter: &str, section: &Section, row: &Row) -> bool {
     let needle = filter.trim().to_lowercase();
     needle.is_empty() || [&section.context, &row.keys, &row.title].iter().any(|text| text.to_lowercase().contains(&needle))
@@ -161,43 +169,53 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(sheet) = app.margin_keys.sheet.as_mut() else { return };
     let mut close = false;
     let mut key_context = false;
-    let modal = crate::margin::look::modal(egui::Id::new("margin-keysheet"), &t).show(ctx, |ui| {
-        ui.set_width(620.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(18.0)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add(egui::TextEdit::singleline(&mut sheet.filter).hint_text("Filter").desired_width(180.0));
-            });
-        });
+    let modal = crate::margin::look::modal(ctx, egui::Id::new("margin-keysheet"), &t).show(ctx, |ui| {
+        ui.set_width(SHEET_WIDTH);
+        close |= crate::margin::look::sheet_header(ui, &t, "Keyboard shortcuts");
         ui.add_space(8.0);
-        egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
-            for section in &sections {
-                let rows: Vec<&Row> = section.rows.iter().filter(|row| matches_filter(&sheet.filter, section, row)).collect();
-                if rows.is_empty() {
-                    continue;
-                }
-                ui.add_space(6.0);
-                ui.label(RichText::new(&section.context).font(theme::semibold(13.0)).color(t.text_muted));
-                egui::Grid::new(("margin-keysheet", &section.context)).num_columns(2).spacing([24.0, 5.0]).min_col_width(150.0).show(ui, |ui| {
-                    for row in rows {
-                        ui.label(RichText::new(&row.keys).font(egui::FontId::monospace(12.5)));
-                        ui.label(&row.title);
+        crate::margin::look::text_field(ui, egui::Id::new("margin-keysheet-filter"), &mut sheet.filter, "Filter", FILTER_WIDTH);
+        ui.add_space(8.0);
+        // A fixed body, so filtering never resizes the sheet and its buttons stay put.
+        egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(BODY_HEIGHT).max_height(BODY_HEIGHT).show(ui, |ui| {
+            let mut any = false;
+            // One key column for every section, so descriptions line up across them.
+            egui::Grid::new("margin-keysheet").num_columns(2).spacing([24.0, 5.0]).min_col_width(KEY_COLUMN).max_col_width(KEY_COLUMN).show(
+                ui,
+                |ui| {
+                    for section in &sections {
+                        let rows: Vec<&Row> = section.rows.iter().filter(|row| matches_filter(&sheet.filter, section, row)).collect();
+                        if rows.is_empty() {
+                            continue;
+                        }
+                        any = true;
+                        ui.label(RichText::new(&section.context).font(theme::semibold(13.0)).color(t.text_muted));
                         ui.end_row();
+                        for row in rows {
+                            ui.add(egui::Label::new(RichText::new(&row.keys).font(egui::FontId::monospace(12.5))).truncate());
+                            ui.label(&row.title);
+                            ui.end_row();
+                        }
                     }
-                });
+                },
+            );
+            if !any {
+                ui.label(RichText::new("No shortcuts match").color(t.text_muted));
             }
         });
         ui.add_space(8.0);
-        if let Some(path) = &keymap_path {
-            ui.label(RichText::new(format!("Change them in {path}")).color(t.text_muted).small());
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::pill_button(ui, "Close", true).clicked() {
-                close = true;
-            }
-            if crate::widgets::pill_button(ui, "Key context…", false).clicked() {
+        let path_line = keymap_path.as_ref().map(|path| format!("Change them in {path}")).unwrap_or_default();
+        ui.add(egui::Label::new(RichText::new(path_line).color(t.text_muted).small()).truncate());
+        ui.add_space(8.0);
+        crate::margin::look::control_row(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if crate::margin::look::button_secondary(ui, crate::margin::look::ButtonSize::Standard, "Key context…").clicked() {
                 key_context = true;
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::margin::look::button_primary(ui, crate::margin::look::ButtonSize::Standard, "Close").clicked() {
+                    close = true;
+                }
+            });
         });
     });
     if close || modal.should_close() {
@@ -236,53 +254,57 @@ pub(crate) fn key_context(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let keys = &app.margin_keys;
     let pending = pretty_keys(keys.pending(), mac);
     let mut open = keys.key_context_open;
-    egui::Window::new("Key context").open(&mut open).default_width(560.0).resizable(true).show(ctx, |ui| {
-        ui.label(RichText::new("Context").font(theme::semibold(13.0)).color(t.text_muted));
-        ui.label(RichText::new(&live).font(egui::FontId::monospace(12.5)));
-        if !pending.is_empty() {
-            ui.label(format!("Waiting for the rest of the chord: {pending}"));
-        }
-        ui.add_space(6.0);
-        ui.label(RichText::new("Last key").font(theme::semibold(13.0)).color(t.text_muted));
-        match &keys.last {
-            None => {
-                ui.label("Press a key.");
-            }
-            Some(last) => {
-                let outcome = match &last.outcome {
-                    Outcome::Command { command, args } if args.is_null() => format!("runs {command}"),
-                    Outcome::Command { command, args } => format!("runs {command} {args}"),
-                    Outcome::Pending => "waits for the next key of a chord".to_owned(),
-                    Outcome::NoMatch => "no binding; the key goes on to the widgets".to_owned(),
-                };
-                ui.label(RichText::new(format!("{}  {outcome}", pretty_keys(&last.typed, mac))).font(egui::FontId::monospace(12.5)));
-                ui.label(RichText::new(format!("in {}", stack_text(&last.stack))).color(t.text_muted).small());
-                if let Some(table) = keys.keymap() {
-                    egui::Grid::new("margin-key-context").num_columns(4).spacing([14.0, 4.0]).striped(true).show(ui, |ui| {
-                        for header in ["Context", "Runs", "Depth", "Where"] {
-                            ui.label(RichText::new(header).strong());
-                        }
-                        ui.end_row();
-                        for binding in table.bindings.iter().filter(|binding| binding.keys.starts_with(&last.typed)) {
-                            ui.label(binding.context_text.as_deref().unwrap_or(EVERYWHERE));
-                            ui.label(binding.command.as_deref().unwrap_or("(unbound)"));
-                            let depth = depth_of(binding.context.as_ref(), &last.stack);
-                            ui.label(depth.map_or_else(|| "doesn't hold".to_owned(), |depth| depth.to_string()));
-                            ui.label(format!("{}:{}", binding.source.file, binding.source.line));
-                            ui.end_row();
-                        }
-                    });
+    egui::Window::new("Key context").open(&mut open).default_size([560.0, 420.0]).collapsible(false).resizable(true).show(ctx, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.label(RichText::new("Context").font(theme::semibold(13.0)).color(t.text_muted));
+            ui.label(RichText::new(&live).font(egui::FontId::monospace(12.5)));
+            // Always there, so the window doesn't jump as a chord starts and ends.
+            let waiting = if pending.is_empty() { String::new() } else { format!("Waiting for the rest of the chord: {pending}") };
+            ui.label(waiting);
+            ui.label(RichText::new("Last key").font(theme::semibold(13.0)).color(t.text_muted));
+            match &keys.last {
+                None => {
+                    ui.label("Press a key.");
+                }
+                Some(last) => {
+                    let outcome = match &last.outcome {
+                        Outcome::Command { command, args } if args.is_null() => format!("runs {command}"),
+                        Outcome::Command { command, args } => format!("runs {command} {args}"),
+                        Outcome::Pending => "waits for the next key of a chord".to_owned(),
+                        Outcome::NoMatch => "no binding; the key goes on to the widgets".to_owned(),
+                    };
+                    ui.label(RichText::new(format!("{}  {outcome}", pretty_keys(&last.typed, mac))).font(egui::FontId::monospace(12.5)));
+                    ui.label(RichText::new(format!("in {}", stack_text(&last.stack))).color(t.text_muted).small());
+                    if let Some(table) = keys.keymap() {
+                        egui::Grid::new("margin-key-context").num_columns(4).spacing([14.0, 4.0]).min_col_width(CONTEXT_COLUMN).striped(true).show(
+                            ui,
+                            |ui| {
+                                for header in ["Context", "Runs", "Depth", "Where"] {
+                                    ui.label(RichText::new(header).strong());
+                                }
+                                ui.end_row();
+                                for binding in table.bindings.iter().filter(|binding| binding.keys.starts_with(&last.typed)) {
+                                    ui.label(binding.context_text.as_deref().unwrap_or(EVERYWHERE));
+                                    ui.label(binding.command.as_deref().unwrap_or("(unbound)"));
+                                    let depth = depth_of(binding.context.as_ref(), &last.stack);
+                                    ui.label(depth.map_or_else(|| "doesn't hold".to_owned(), |depth| depth.to_string()));
+                                    ui.label(format!("{}:{}", binding.source.file, binding.source.line));
+                                    ui.end_row();
+                                }
+                            },
+                        );
+                    }
                 }
             }
-        }
-        let problems = keys.problems();
-        if !problems.is_empty() {
-            ui.add_space(6.0);
-            ui.label(RichText::new("Problems in the config files").font(theme::semibold(13.0)).color(t.text_muted));
-            for problem in problems {
-                ui.label(RichText::new(problem.to_string()).small());
+            let problems = keys.problems();
+            if !problems.is_empty() {
+                ui.add_space(6.0);
+                ui.label(RichText::new("Problems in the config files").font(theme::semibold(13.0)).color(t.text_muted));
+                for problem in problems {
+                    ui.label(RichText::new(problem.to_string()).small());
+                }
             }
-        }
+        });
     });
     app.margin_keys.key_context_open = open;
 }

@@ -10,18 +10,18 @@ use egui::{Align, Layout, RichText, vec2};
 use margin_config::library::MAX_TAG_CHARS;
 use margin_config::library_meta::{Details, DetailsEdit, LookupJob, LookupReport, LookupRequest, parse_year};
 
-use super::super::look::{self, Button, ButtonSize, GAP, GAP_LARGE};
+use super::super::look::{self, Button, ButtonSize, GAP};
 use crate::PdfCraftApp;
 use crate::theme::{self, Tokens};
 
-/// The sheet's width, and its fields' text width.
+/// The sheet's width, and its fields' width.
 const SHEET_WIDTH: f32 = 560.0;
 const FIELD_WIDTH: f32 = 400.0;
 /// The label column's width.
 const LABEL_WIDTH: f32 = 96.0;
-/// The tallest the abstract grows before it scrolls.
-const ABSTRACT_HEIGHT: f32 = 140.0;
-const TITLE_SIZE: f32 = 17.0;
+/// The region under the fields (tags, venue, ISBN, file, abstract) is this tall whatever it
+/// holds, and scrolls past it: a lookup or a new line of tags never resizes the sheet.
+const FACTS_HEIGHT: f32 = 220.0;
 const TEXT_SIZE: f32 = 13.0;
 const NOTE_SIZE: f32 = 12.0;
 /// The id of the field that adds a tag.
@@ -248,34 +248,54 @@ fn looked_up(app: &mut PdfCraftApp, book: i64, report: &LookupReport) {
     });
 }
 
-/// One labelled single-line field.
+/// A label in the label column, left-aligned and centred on a row `height` tall: one cell for
+/// every field, fact, the tags and the abstract, so their labels line up.
+fn label_cell(ui: &mut egui::Ui, t: &Tokens, label: &str, height: f32) -> egui::Response {
+    ui.allocate_ui_with_layout(vec2(LABEL_WIDTH, height), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_size(vec2(LABEL_WIDTH, height));
+        ui.add(egui::Label::new(RichText::new(label).font(theme::regular(TEXT_SIZE)).color(t.text_muted)).truncate())
+    })
+    .inner
+}
+
+/// The height of one line of the sheet's text, for labels beside text rather than a field.
+fn text_line(ui: &egui::Ui) -> f32 {
+    ui.fonts_mut(|fonts| fonts.row_height(&theme::regular(TEXT_SIZE)))
+}
+
+/// One labelled single-line field, on one control row.
 fn field(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut String, hint: &str) {
-    ui.horizontal(|ui| {
+    look::control_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        let label = ui.add_sized(vec2(LABEL_WIDTH, 0.0), egui::Label::new(RichText::new(label).font(theme::regular(TEXT_SIZE)).color(t.text_muted)));
+        let label = label_cell(ui, t, label, look::CONTROL_ROW);
         let id = ui.id().with(label.id);
-        look::input_frame(t, look::input_focused(ui, id)).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
-            let edit = egui::TextEdit::singleline(value).id(id).frame(egui::Frame::NONE).hint_text(hint).desired_width(FIELD_WIDTH);
-            ui.add(edit).labelled_by(label.id);
-        });
+        look::text_field(ui, id, value, hint, FIELD_WIDTH).labelled_by(label.id);
     });
 }
 
 /// One labelled line of text that isn't edited here.
 fn fact(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &str) {
+    let line = text_line(ui);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        ui.add_sized(vec2(LABEL_WIDTH, 0.0), egui::Label::new(RichText::new(label).font(theme::regular(TEXT_SIZE)).color(t.text_muted)));
+        label_cell(ui, t, label, line);
         ui.add(egui::Label::new(RichText::new(value).font(theme::regular(TEXT_SIZE)).color(t.text)).wrap());
     });
 }
 
-/// The tags as chips (a click removes one), then the field that adds one.
+/// The field that adds a tag, then the tags as chips under it (a click removes one).
 fn tags_row(ui: &mut egui::Ui, t: &Tokens, sheet: &mut Sheet) {
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        ui.add_sized(vec2(LABEL_WIDTH, 0.0), egui::Label::new(RichText::new("Tags").font(theme::regular(TEXT_SIZE)).color(t.text_muted)));
+        label_cell(ui, t, "Tags", look::CONTROL_ROW);
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = GAP / 2.0;
+            let id = egui::Id::new(NEW_TAG_ID);
+            let resp = look::text_field(ui, id, &mut sheet.new_tag, "Add a tag", FIELD_WIDTH / 2.0);
+            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                add_tag(sheet);
+                resp.request_focus();
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(GAP / 2.0, GAP / 2.0);
                 let mut removed = None;
@@ -289,23 +309,6 @@ fn tags_row(ui: &mut egui::Ui, t: &Tokens, sheet: &mut Sheet) {
                     sheet.tags.remove(index);
                 }
             });
-            let id = egui::Id::new(NEW_TAG_ID);
-            let resp = look::input_frame(t, look::input_focused(ui, id))
-                .inner_margin(egui::Margin::symmetric(8, 5))
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut sheet.new_tag)
-                            .id(id)
-                            .frame(egui::Frame::NONE)
-                            .hint_text("Add a tag")
-                            .desired_width(FIELD_WIDTH / 2.0),
-                    )
-                })
-                .inner;
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                add_tag(sheet);
-                resp.request_focus();
-            }
         });
     });
 }
@@ -319,52 +322,58 @@ fn add_tag(sheet: &mut Sheet) {
     }
 }
 
+/// The sheet: its header, the five fields, the fixed-height region of tags and facts, the note
+/// line (always there, one line), and the buttons. Its size never changes while it is open.
 fn draw(ctx: &egui::Context, sheet: &mut Sheet, looking_up: bool) -> Option<Action> {
     let t = Tokens::get(ctx);
     let mut action = None;
-    let modal = look::modal(egui::Id::new("margin-book-details"), &t).show(ctx, |ui| {
+    let modal = look::modal(ctx, egui::Id::new("margin-book-details"), &t).show(ctx, |ui| {
         ui.set_width(SHEET_WIDTH);
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Details").font(theme::semibold(TITLE_SIZE)).color(t.text));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if look::button_icon(ui, ButtonSize::Standard, "x", "Close", None).clicked() {
-                    action = Some(Action::Close);
-                }
-            });
-        });
+        if look::sheet_header(ui, &t, "Details") {
+            action = Some(Action::Close);
+        }
         ui.add_space(GAP);
         field(ui, &t, "Title", &mut sheet.form.title, "Title");
         field(ui, &t, "Authors", &mut sheet.form.authors, "Ada Lovelace, Grace Hopper");
         field(ui, &t, "Year", &mut sheet.form.year, "2024");
         field(ui, &t, "DOI", &mut sheet.form.doi, "10.1145/3290605.3300857");
         field(ui, &t, "arXiv", &mut sheet.form.arxiv, "2101.01234");
-        tags_row(ui, &t, sheet);
-        if let Some(venue) = &sheet.loaded.publisher {
-            fact(ui, &t, "Venue", venue);
-        }
-        if let Some(isbn) = &sheet.loaded.isbn {
-            fact(ui, &t, "ISBN", isbn);
-        }
-        fact(ui, &t, "File", &sheet.path);
-        if let Some(text) = &sheet.loaded.abstract_text {
-            ui.label(RichText::new("Abstract").font(theme::regular(TEXT_SIZE)).color(t.text_muted));
-            egui::ScrollArea::vertical().id_salt("margin-details-abstract").max_height(ABSTRACT_HEIGHT).show(ui, |ui| {
-                ui.add(egui::Label::new(RichText::new(text).font(theme::regular(TEXT_SIZE)).color(t.text)).wrap());
+        egui::ScrollArea::vertical()
+            .id_salt("margin-details-facts")
+            .auto_shrink([false, false])
+            .min_scrolled_height(FACTS_HEIGHT)
+            .max_height(FACTS_HEIGHT)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+                tags_row(ui, &t, sheet);
+                if let Some(venue) = &sheet.loaded.publisher {
+                    fact(ui, &t, "Venue", venue);
+                }
+                if let Some(isbn) = &sheet.loaded.isbn {
+                    fact(ui, &t, "ISBN", isbn);
+                }
+                fact(ui, &t, "File", &sheet.path);
+                if let Some(text) = &sheet.loaded.abstract_text {
+                    fact(ui, &t, "Abstract", text);
+                }
             });
-        }
-        if let Some(note) = &sheet.note {
-            ui.add(egui::Label::new(RichText::new(note).font(theme::regular(NOTE_SIZE)).color(t.text_muted)).wrap());
-        }
-        ui.add_space(GAP_LARGE);
-        ui.horizontal(|ui| {
+        let line = ui.fonts_mut(|fonts| fonts.row_height(&theme::regular(NOTE_SIZE)));
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), line), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_min_size(vec2(ui.available_width(), line));
+            if let Some(note) = &sheet.note {
+                ui.add(egui::Label::new(RichText::new(note).font(theme::regular(NOTE_SIZE)).color(t.text_muted)).truncate());
+            }
+        });
+        ui.add_space(GAP);
+        look::control_row(ui, |ui| {
             ui.spacing_mut().item_spacing.x = GAP;
             let has_id = !sheet.form.doi.trim().is_empty() || !sheet.form.arxiv.trim().is_empty();
             let lookup_label = if looking_up { "Looking up\u{2026}" } else { "Look up details" };
             let tip = if has_id { LOOKUP_TIP } else { "Add a DOI or an arXiv id to look this book up" };
-            let lookup =
-                ui.add_enabled_ui(has_id && !looking_up, |ui| Button::secondary(ButtonSize::Standard, lookup_label).icon("search").tip(tip).show(ui));
-            if lookup.inner.clicked() {
+            let lookup = Button::secondary(ButtonSize::Standard, lookup_label).icon("search").tip(tip);
+            let width = lookup.widest(ui, &["Look up details", "Looking up\u{2026}"]);
+            if ui.add_enabled_ui(has_id && !looking_up, |ui| lookup.fixed_width(width).show(ui)).inner.clicked() {
                 action = Some(Action::LookUp);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

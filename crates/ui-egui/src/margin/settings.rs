@@ -46,10 +46,10 @@ const ROW_PAD_Y: f32 = 14.0;
 const ROW_GAP: f32 = 24.0;
 const NAME_GAP: f32 = 4.0;
 /// The tallest control in a row (dropdown, text field), which rows centre their text against.
-const CONTROL_HEIGHT: f32 = 32.0;
-/// A control's width before it was first drawn (rows remember the width it had last frame).
-const CONTROL_WIDTH_GUESS: f32 = 160.0;
-const TITLE_SIZE: f32 = 18.0;
+const CONTROL_HEIGHT: f32 = look::CONTROL_ROW;
+/// Every row's control slot: one width for every row, so a row's text wraps the same on the first
+/// frame as on the next, whatever its control shows (a vault name, a folder count, a language).
+pub(super) const CONTROL_SLOT: f32 = 340.0;
 const NAME_SIZE: f32 = 14.0;
 const DESCRIPTION_SIZE: f32 = 12.5;
 /// A description's line height as a share of its size (the mockup's 1.45 leading).
@@ -62,7 +62,6 @@ const DROPDOWN_PAD_X: f32 = 12.0;
 const CHEVRON_SIZE: f32 = 14.0;
 /// The name field's width and the padding inside its well.
 const NAME_FIELD_WIDTH: f32 = 220.0;
-const FIELD_PAD: egui::Margin = egui::Margin::symmetric(12, 7);
 
 /// Draws the Settings window while `app.dialog` is [`Dialog::Preferences`] in Margin; Done, the
 /// close button, Esc or a click on the scrim closes it.
@@ -72,9 +71,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let width = SHEET_WIDTH.min(screen.width() - 2.0 * SCREEN_INSET).max(0.0) - 2.0 * look::EDGE;
     let chrome_height =
         HEADER_PAD_TOP + HEADER_ROW + HEADER_PAD_BOTTOM + FOOTER_PAD_TOP + look::BUTTON_HEIGHT.max(CONTROL_HEIGHT) + FOOTER_PAD_BOTTOM;
-    let body_room = (screen.height() - 2.0 * SCREEN_INSET - chrome_height).max(MIN_BODY);
+    // The sheet hangs from `sheet_top`, so its body gets what is left under that.
+    let body_room = (screen.height() - look::sheet_top(ctx) - SCREEN_INSET - chrome_height).max(MIN_BODY);
     let mut close = false;
-    let modal = look::modal(egui::Id::new("margin-settings"), &t).frame(look::modal_frame(&t)).show(ctx, |ui| {
+    let mut done = false;
+    let modal = look::modal(ctx, egui::Id::new("margin-settings"), &t).frame(look::modal_frame(&t)).show(ctx, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         close |= header(ui, &t);
@@ -84,23 +85,26 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 body(app, ui, &t);
             });
         });
-        close |= footer(ui);
+        done = footer(ui);
     });
-    if close || modal.should_close() {
+    // Done keeps the template fields' unsaved text; the × and Esc close without it.
+    #[cfg(not(target_arch = "wasm32"))]
+    if done {
+        notes_settings::save_drafts(app, ctx);
+    }
+    if close || done || modal.should_close() {
         app.dialog = None;
     }
 }
 
-/// "Settings" and the close button. True when the button was clicked.
+/// "Settings" and the close button, the shared sheet header. True when the button was clicked.
 fn header(ui: &mut egui::Ui, t: &Tokens) -> bool {
     ui.add_space(HEADER_PAD_TOP);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_ROW), Sense::hover());
     let mut row = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(PAD_X, 0.0))).layout(Layout::left_to_right(Align::Center)));
-    row.label(RichText::new(i18n::t("Settings")).font(theme::semibold(TITLE_SIZE)).color(t.text));
-    let clicked = row
-        .with_layout(Layout::right_to_left(Align::Center), |ui| look::button_icon(ui, ButtonSize::Standard, "x", i18n::t("Close"), None).clicked());
+    let clicked = look::sheet_header(&mut row, t, i18n::t("Settings"));
     ui.add_space(HEADER_PAD_BOTTOM);
-    clicked.inner
+    clicked
 }
 
 /// Done, on the right. True when clicked.
@@ -148,7 +152,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, text, |ui, _| {
         let choices = [(DocLayout::Scroll, "Scroll", "scroll"), (DocLayout::Single, "Single", "single"), (DocLayout::TwoUp, "Two-up", "two_up")];
         let segments = choices.map(|(choice, label, _)| Segment { label: i18n::t(label), selected: layout == choice, tip: None });
-        let picked = look::segmented(ui, &segments).and_then(|i| choices.get(i)).filter(|(choice, _, _)| *choice != layout);
+        let picked = look::segmented_sized(ui, &segments, CONTROL_HEIGHT).and_then(|i| choices.get(i)).filter(|(choice, _, _)| *choice != layout);
         if let Some((_, _, value)) = picked {
             write = Some(("view.layout", value));
         }
@@ -164,7 +168,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let choices =
             [(DocFit::Width, "Width", "width", None), (DocFit::Page, "Page", "page", None), (DocFit::Read, "Reading", "read", Some(reading_tip))];
         let segments = choices.map(|(choice, label, _, tip)| Segment { label: i18n::t(label), selected: fit == choice, tip });
-        let picked = look::segmented(ui, &segments).and_then(|i| choices.get(i)).filter(|(choice, _, _, _)| *choice != fit);
+        let picked = look::segmented_sized(ui, &segments, CONTROL_HEIGHT).and_then(|i| choices.get(i)).filter(|(choice, _, _, _)| *choice != fit);
         if let Some((_, _, value, _)) = picked {
             write = Some(("view.fit", value));
         }
@@ -176,7 +180,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     section(ui, t, "Comments");
     let text =
         RowText { id: "author", name: i18n::t("Your name"), description: Some(i18n::t("Signed on new comments and highlights.")), first: true };
-    row(ui, t, text, |ui, name| name_field(app, ui, t, name));
+    row(ui, t, text, |ui, name| name_field(app, ui, name));
     #[cfg(not(target_arch = "wasm32"))]
     notes_settings::sections(app, ui, t);
 
@@ -216,7 +220,7 @@ struct RowText<'a> {
 fn row(ui: &mut egui::Ui, t: &Tokens, text: RowText<'_>, control: impl FnOnce(&mut egui::Ui, &str)) {
     let id = ui.id().with(("margin-settings-row", text.id));
     let width = ui.available_width();
-    let control_width = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(CONTROL_WIDTH_GUESS);
+    let control_width = CONTROL_SLOT.min(width);
     let text_width = (width - control_width - ROW_GAP).max(0.0);
     let name = ui.painter().layout(text.name.to_owned(), theme::medium(NAME_SIZE), t.text, text_width);
     let description = text.description.map(|description| {
@@ -243,14 +247,13 @@ fn row(ui: &mut egui::Ui, t: &Tokens, text: RowText<'_>, control: impl FnOnce(&m
         column.add_space(NAME_GAP);
         column.add(egui::Label::new(galley).selectable(false));
     }
-    let control_rect = Rect::from_center_size(rect.center(), vec2(width, CONTROL_HEIGHT));
+    let control_rect =
+        Rect::from_min_size(egui::pos2(rect.right() - control_width, rect.center().y - CONTROL_HEIGHT / 2.0), vec2(control_width, CONTROL_HEIGHT));
     let mut right = ui.new_child(UiBuilder::new().id_salt(id).max_rect(control_rect).layout(Layout::right_to_left(Align::Center)));
+    // Controls in a cluster keep a gap between them (the body's spacing is zero).
+    right.spacing_mut().item_spacing.x = look::GAP;
+    right.set_clip_rect(control_rect.expand(look::GAP).intersect(ui.clip_rect()));
     control(&mut right, text.name);
-    let drawn_width = right.min_rect().width();
-    if (drawn_width - control_width).abs() > f32::EPSILON {
-        ui.data_mut(|d| d.insert_temp(id, drawn_width));
-        ui.ctx().request_repaint();
-    }
 }
 
 /// The interface language: Auto (the system's) or one of PdfCraft's languages, as PdfCraft's
@@ -297,21 +300,20 @@ fn field_style(ui: &mut egui::Ui, t: &Tokens) {
     widgets.open.bg_stroke = Stroke::new(look::EDGE, t.accent);
 }
 
-/// The name new comments are signed with, in Margin's input well.
-fn name_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, name: &str) {
+/// The name new comments are signed with, in Margin's one text field (a control tall).
+fn name_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, name: &str) {
     let id = egui::Id::new("margin-settings-author");
-    let inner_width = NAME_FIELD_WIDTH - f32::from(FIELD_PAD.left) - f32::from(FIELD_PAD.right);
-    let field = look::input_frame(t, look::input_focused(ui, id)).inner_margin(FIELD_PAD).show(ui, |ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut app.comment_prefs.author)
-                .id(id)
-                .frame(egui::Frame::NONE)
-                .font(theme::regular(FIELD_TEXT))
-                .desired_width(inner_width)
-                .char_limit(crate::MAX_AUTHOR_CHARS),
-        )
+    look::field_well(ui, id, vec2(NAME_FIELD_WIDTH, CONTROL_HEIGHT), |ui| {
+        let edit = egui::TextEdit::singleline(&mut app.comment_prefs.author)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .margin(Vec2::ZERO)
+            .font(theme::regular(FIELD_TEXT))
+            .desired_width(ui.available_width())
+            .char_limit(crate::MAX_AUTHOR_CHARS);
+        let resp = ui.add(edit);
+        ui.ctx().accesskit_node_builder(resp.id, |node| node.set_label(name));
     });
-    ui.ctx().accesskit_node_builder(field.inner.id, |node| node.set_label(name));
 }
 
 /// Writes one of Margin's document defaults (`view.layout`, `view.fit`) into `settings.jsonc`,

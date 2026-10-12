@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use egui::{Color32, CornerRadius, Rect, Sense, Stroke, pos2, vec2};
 
-use super::look::{self, GAP, GAP_LARGE};
+use super::look;
 use super::obsidian;
 use crate::PdfCraftApp;
 use crate::theme::{self, Tokens};
@@ -108,15 +108,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     {
         view.clear_page_selection(Some(view.current));
     }
-    ui.add_space(GAP_LARGE);
-    ui.horizontal(|ui| {
-        look::section_label(ui, t, "Pages", Some(info.pages.len()));
-        if view.selected.len() > 1 {
-            ui.add_space(GAP);
-            ui.label(egui::RichText::new(format!("{} picked", view.selected.len())).font(theme::medium(LABEL_TEXT)).color(t.accent_text));
+    let picked = (view.selected.len() > 1).then(|| format!("{} picked", view.selected.len()));
+    look::pane_header(ui, t, "Pages", Some(info.pages.len()), |ui| {
+        if let Some(picked) = &picked {
+            ui.label(egui::RichText::new(picked).font(theme::medium(LABEL_TEXT)).color(t.accent_text));
         }
     });
-    ui.add_space(GAP);
 
     let grid = Grid::for_width(ui.available_width());
     let mut rows = Vec::with_capacity(info.pages.len().div_ceil(grid.columns));

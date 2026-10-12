@@ -1205,6 +1205,25 @@ impl DocView {
         }
     }
 
+    /// Margin: the page area now starts at `viewport_min` (chrome was shown or hidden). Scroll so
+    /// the page line drawn at `screen_pos` last frame is drawn at that height again (a point in
+    /// the gap between pages keeps its distance from the page); the sideways scroll stays as it
+    /// was, so leaving focus mode puts the page back where it was. Leaves a jump, zoom or
+    /// destination already pending alone. False when no page was drawn near `screen_pos`.
+    pub(crate) fn hold_screen_point(&mut self, screen_pos: Pos2, viewport_min: Pos2) -> bool {
+        if self.goto.is_some() || self.zoom_anchor.is_some() || self.goto_point.is_some() {
+            return false;
+        }
+        let anchor = self
+            .screen_rects
+            .iter()
+            .filter(|(_, rect)| rect.width() > 0.0 && rect.height() > 0.0)
+            .find(|(_, rect)| rect.expand(self.page_gap()).contains(screen_pos))
+            .map(|(page, rect)| (*page, None, Some((screen_pos.y - rect.top()) / rect.height()), screen_pos - viewport_min));
+        self.goto_point = anchor;
+        anchor.is_some()
+    }
+
     /// Standard zoom steps (as in Acrobat's zoom menu).
     pub fn zoom_step(&mut self, up: bool) {
         const STEPS: [f32; 17] = [0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
@@ -1934,7 +1953,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
+    let overlay_notices = app.flavor == crate::Flavor::Margin;
+    match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), overlay_notices, ui, &t) {
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
@@ -1954,9 +1974,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_h = avail.height();
     let zoom_before_fit = view.zoom;
     view.fit_zoom(info);
-    // Margin keeps the reading line when fit width/page follows a resized window or sidebar.
-    if app.flavor == crate::Flavor::Margin && view.zoom != zoom_before_fit {
-        crate::margin::reading::refitted(view);
+    // Margin keeps the reading line where it is on screen when chrome changes the page area
+    // (focus mode, the sidebar docking, a narrow window): the text at the top of the area both
+    // frames show stays at its height, so hiding chrome only uncovers page and showing it only
+    // covers some. Fit width or page following a resized window or sidebar keeps the line too.
+    let last = view.viewport_screen;
+    let moved = last.width() > 0.0 && (last.min.distance(avail.min) > 0.5 || (last.size() - avail.size()).length() > 0.5);
+    if app.flavor == crate::Flavor::Margin {
+        let line = pos2(last.center().x.clamp(avail.left(), avail.right()), last.top().max(avail.top()) + view.page_gap());
+        let held = moved && view.layout != PageLayout::Single && view.hold_screen_point(line, avail.min);
+        if !held && (view.zoom != zoom_before_fit || moved) {
+            crate::margin::reading::refitted(view);
+        }
     }
 
     // Pinch / ctrl+scroll zoom, anchored on the current page.
@@ -3270,21 +3299,30 @@ enum Notice {
 }
 
 /// The notice bar above the pages: the signature status first (Acrobat's signature bar), then
-/// security, forms and warnings.
+/// security, forms and warnings. In Margin (`overlay`) it floats over the top of the page
+/// instead of pushing it down, and every notice, the signature's too, can be dismissed.
+#[allow(clippy::too_many_arguments)]
 fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
     secured: bool,
     repaired: bool,
     signed: Option<(&str, Color32, &str, String)>,
+    overlay: bool,
     ui: &mut egui::Ui,
     t: &Tokens,
 ) -> Option<Notice> {
     let info = &doc.info;
     let xfa = doc.xfa.as_ref();
+    if overlay && view.notice_dismissed {
+        return None;
+    }
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
-        notice_bar(ui, t, icon, color, crate::i18n::fmt(tl!(template), &[("by", &arg)]), |ui| {
+        notice_bar(ui, t, icon, color, crate::i18n::fmt(tl!(template), &[("by", &arg)]), overlay, |ui| {
+            if overlay && crate::margin::look::close_button(ui, crate::margin::look::ButtonSize::Compact, tl!("Dismiss")).clicked() {
+                view.notice_dismissed = true;
+            }
             if crate::widgets::pill_button(ui, tl!("Signature panel"), false).clicked() {
                 open = true;
             }
@@ -3338,8 +3376,13 @@ fn notices(
         None
     };
     let (icon, text, fields) = msg?;
-    notice_bar(ui, t, icon, t.accent_text, text, |ui| {
-        if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+    notice_bar(ui, t, icon, t.accent_text, text, overlay, |ui| {
+        let dismiss = if overlay {
+            crate::margin::look::close_button(ui, crate::margin::look::ButtonSize::Compact, tl!("Dismiss"))
+        } else {
+            icons::button(ui, "x", 22.0, false, tl!("Dismiss"))
+        };
+        if dismiss.clicked() {
             view.notice_dismissed = true;
         }
         if fields {
@@ -3367,11 +3410,37 @@ fn notices(
 /// wraps there (or, when very little is left, is cut short with the full text on hover) instead
 /// of running under the buttons and past the document area into the side panel (#785). The
 /// buttons are centred on a row of button height, and the message's first line is centred on
-/// the same row; a wrapped message grows the bar downwards.
-fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, buttons: impl FnOnce(&mut egui::Ui)) {
+/// the same row; a wrapped message grows the bar downwards. With `overlay` (Margin) the bar is a
+/// floating card hanging over the top of the page, so it never moves the page.
+fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, overlay: bool, buttons: impl FnOnce(&mut egui::Ui)) {
+    const NOTICE_WIDTH: f32 = 560.0;
+    const NOTICE_INSET: f32 = 12.0;
+    if overlay {
+        let area = ui.available_rect_before_wrap();
+        let width = NOTICE_WIDTH.min(area.width() - 2.0 * NOTICE_INSET).max(0.0);
+        egui::Area::new(ui.id().with("margin-notice"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::CENTER_TOP)
+            .fixed_pos(area.center_top() + vec2(0.0, NOTICE_INSET))
+            .show(ui.ctx(), |ui| {
+                crate::margin::look::floating_frame(t, crate::margin::look::RADIUS_MENU).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                    ui.set_width(width);
+                    notice_row(ui, t, icon, icon_color, text, buttons);
+                });
+            });
+        return;
+    }
+    egui::Frame::NONE
+        .fill(t.accent_soft)
+        .inner_margin(egui::Margin::symmetric(14, 7))
+        .show(ui, |ui| notice_row(ui, t, icon, icon_color, text, buttons));
+}
+
+/// A notice's row: the buttons on the right, then the icon and message in what they leave.
+fn notice_row(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, buttons: impl FnOnce(&mut egui::Ui)) {
     const ROW: f32 = 28.0;
     const ICON: f32 = 16.0;
-    egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
+    {
         let width = ui.available_width();
         ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.set_min_height(ROW);
@@ -3390,7 +3459,7 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
                 });
             });
         });
-    });
+    }
 }
 
 /// The floating quick-action bar at the left edge of the document area.

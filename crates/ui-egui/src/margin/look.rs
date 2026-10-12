@@ -10,7 +10,7 @@
 //! PdfCraft's panels that Margin's sidebar hosts (Bookmarks, Pages, the Highlights list) paint
 //! their rows here when their [`RowLook`] is [`RowLook::Ember`].
 
-use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Vec2, vec2};
+use egui::{Align, Color32, CornerRadius, Layout, Rect, Response, Sense, Stroke, UiBuilder, Vec2, vec2};
 use pdfcraft_engine::commands;
 use serde_json::Value;
 
@@ -24,15 +24,21 @@ use crate::{Flavor, PdfCraftApp, icons};
 pub const GAP: f32 = 8.0;
 pub const GAP_LARGE: f32 = 12.0;
 pub const GAP_SECTION: f32 = 16.0;
-/// Height of one control row (a label and its slider, switch or segmented choice).
+/// The one control height (§6): every bar and row of controls lays its buttons, fields and
+/// dropdowns out at this height and centres its labels on it: the reader's header and footer,
+/// the tab strip, the library's top bar and shelf header, Settings rows and every dialog footer.
+/// Use [`control_row`] to lay a row out at it.
 pub const CONTROL_ROW: f32 = 32.0;
+/// An icon button inside a card or a field (a highlight card's actions, a field's clear ×).
+pub const SMALL_BUTTON: f32 = 24.0;
 /// Space between a list row's edge and its text; section labels line up with it.
 pub const ROW_PAD: f32 = 8.0;
 /// A section label's size and letter spacing (small caps: uppercase, tracked out).
 const LABEL_SIZE: f32 = 11.0;
 const LABEL_TRACKING: f32 = 0.9;
-/// An icon's size within its button.
-const ICON_SHARE: f32 = 0.5;
+/// An icon's size in a button of at least [`CONTROL_ROW`] (and in every smaller button: 14).
+const ICON_LARGE: f32 = 16.0;
+const ICON_SMALL: f32 = 14.0;
 /// The switch (mockup `.sw-t`: 30×18, knob inset 2).
 pub(crate) const SWITCH_SIZE: Vec2 = Vec2::new(30.0, 18.0);
 const SWITCH_KNOB_INSET: f32 = 2.0;
@@ -222,11 +228,311 @@ pub(crate) fn modal_frame(t: &Tokens) -> egui::Frame {
 
 /// The padding inside a modal sheet.
 const MODAL_PAD: i8 = 24;
+/// A sheet's top edge: this share of the window's height down, at least [`SHEET_TOP_MIN`] and at
+/// most [`SHEET_TOP_MAX`]. Sheets hang from it instead of centring, so a sheet whose contents
+/// grow or shrink (a filter, a tab, an error line) only moves its bottom edge.
+const SHEET_TOP_SHARE: f32 = 0.1;
+const SHEET_TOP_MIN: f32 = 24.0;
+const SHEET_TOP_MAX: f32 = 96.0;
+
+/// Where a sheet's top edge sits in a window of `ctx`'s size ([`SHEET_TOP_SHARE`]).
+pub(crate) fn sheet_top(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() * SHEET_TOP_SHARE).clamp(SHEET_TOP_MIN, SHEET_TOP_MAX)
+}
 
 /// A Margin modal under `id`: the scrim over the whole window, then the sheet (floating fill,
-/// edge, M shadow) padded by 24.
-pub(crate) fn modal(id: egui::Id, t: &Tokens) -> egui::Modal {
-    egui::Modal::new(id).backdrop_color(Surfaces::of(t).scrim).frame(modal_frame(t).inner_margin(MODAL_PAD))
+/// edge, M shadow) padded by 24, hanging from [`sheet_top`] so it never recentres as its
+/// contents change.
+pub(crate) fn modal(ctx: &egui::Context, id: egui::Id, t: &Tokens) -> egui::Modal {
+    modal_at(id, t, sheet_top(ctx))
+}
+
+/// [`modal`] with its top edge `top` points below the window's top (a sheet that sizes itself to
+/// the window and centres that size once).
+pub(crate) fn modal_at(id: egui::Id, t: &Tokens, top: f32) -> egui::Modal {
+    let area = egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top.max(0.0)));
+    egui::Modal::new(id).area(area).backdrop_color(Surfaces::of(t).scrim).frame(modal_frame(t).inner_margin(MODAL_PAD))
+}
+
+/// A sheet's title size (every sheet: Settings, Details, the keyboard sheet, Stats, About).
+pub(crate) const SHEET_TITLE: f32 = 18.0;
+
+/// A sheet's header (§6): its title on the left in semibold 18, a close × on the right, on one
+/// [`CONTROL_ROW`]. True when the × was clicked.
+pub(crate) fn sheet_header(ui: &mut egui::Ui, t: &Tokens, title: &str) -> bool {
+    control_row(ui, |ui| {
+        ui.label(egui::RichText::new(title).font(theme::semibold(SHEET_TITLE)).color(t.text));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| close_button(ui, ButtonSize::Standard, crate::i18n::t("Close")).clicked()).inner
+    })
+    .inner
+}
+
+/// The close × of a sheet, card, banner or notice: a square ghost button named `name`.
+pub(crate) fn close_button(ui: &mut egui::Ui, size: ButtonSize, name: &str) -> Response {
+    button_icon(ui, size, "x", name, None)
+}
+
+/// Lays `add` out on one [`CONTROL_ROW`]-tall row across the available width, every item centred
+/// on it, so labels line up with the controls beside them and the row's height never depends on
+/// what is in it.
+pub(crate) fn control_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    bar_row(ui, CONTROL_ROW, add)
+}
+
+/// [`control_row`] at `height` (a bar taller than its controls, such as the 44 pt header).
+pub(crate) fn bar_row<R>(ui: &mut egui::Ui, height: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = vec2(ui.available_width(), height);
+    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_size(size);
+        ui.set_max_height(height);
+        add(ui)
+    })
+}
+
+/// Shows `add` while `shown`, its height growing from and shrinking to nothing over
+/// [`motion::SLIDE`] (clipped meanwhile), so what sits below slides instead of jumping. `id`
+/// keeps one block's animation and its last full height.
+pub(crate) fn collapsible<R>(ui: &mut egui::Ui, id: egui::Id, shown: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    let how = motion::toggle(ui.ctx(), id, shown, motion::SLIDE);
+    if how <= 0.0 {
+        return None;
+    }
+    let height_id = id.with("margin-collapsible-height");
+    let full: Option<f32> = ui.ctx().data(|d| d.get_temp(height_id));
+    let top = ui.cursor().min;
+    let width = ui.available_width();
+    let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_size(top, vec2(width, f32::INFINITY))).layout(*ui.layout()));
+    if how < 1.0 {
+        let visible = full.unwrap_or(0.0) * how;
+        child.set_clip_rect(Rect::from_min_size(top, vec2(width, visible)).intersect(ui.clip_rect()));
+    }
+    let inner = add(&mut child);
+    let measured = child.min_rect().height();
+    if how >= 1.0 || full.is_none() {
+        ui.ctx().data_mut(|d| d.insert_temp(height_id, measured));
+    }
+    let height = if how >= 1.0 { measured } else { full.unwrap_or(measured) * how };
+    ui.allocate_rect(Rect::from_min_size(top, vec2(width, height)), Sense::hover());
+    Some(inner)
+}
+
+/// The width `template` takes in `font`: the slot a changing text (a zoom percent, a count, a
+/// progress) reserves so its neighbours never move ([`reserved_label`]).
+pub(crate) fn template_width(ui: &egui::Ui, template: &str, font: egui::FontId) -> f32 {
+    ui.painter().layout_no_wrap(template.to_owned(), font, Color32::PLACEHOLDER).size().x
+}
+
+/// `text` in a slot as wide as `template` (or as `text`, if that is wider), aligned in it by
+/// `align`, at the row's height: a number that changes ("110%", "Scanning 3 / 66") without
+/// moving what sits beside it.
+pub(crate) fn reserved_label(ui: &mut egui::Ui, text: &str, template: &str, font: egui::FontId, color: Color32, align: Align) -> Response {
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font.clone(), color);
+    let width = template_width(ui, template, font).max(galley.size().x);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, galley.size().y), Sense::hover());
+    let x = match align {
+        Align::Min => rect.left(),
+        Align::Center => rect.center().x - galley.size().x / 2.0,
+        Align::Max => rect.right() - galley.size().x,
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    ui.painter().galley(egui::pos2(x, rect.top()), galley, color);
+    resp
+}
+
+/// A text field's side padding and text size ([`text_field`]).
+const FIELD_PAD_X: f32 = 10.0;
+const FIELD_TEXT: f32 = 13.0;
+
+/// Margin's one text field (§6): a well exactly `width` × [`CONTROL_ROW`], its outline a constant
+/// [`EDGE`] (accent while focused) with the focus ring painted outside it, so focusing never
+/// changes its size. `hint` shows while it is empty.
+pub(crate) fn text_field(ui: &mut egui::Ui, id: egui::Id, text: &mut String, hint: &str, width: f32) -> Response {
+    field_well(ui, id, vec2(width, CONTROL_ROW), |ui| {
+        let edit =
+            egui::TextEdit::singleline(text).id(id).hint_text(hint).font(theme::regular(FIELD_TEXT)).frame(egui::Frame::NONE).margin(Vec2::ZERO);
+        ui.add(edit.desired_width(ui.available_width()))
+    })
+}
+
+/// A search field's magnifier size.
+const SEARCH_ICON: f32 = 14.0;
+
+/// A pane's search field: a [`field_well`] `width` × [`BUTTON_HEIGHT`] with the magnifier, the
+/// text (named `name` for screen readers) and, while there is text, a clear button named
+/// `clear_name` inside it on the right. The well never changes size.
+pub(crate) fn search_field(ui: &mut egui::Ui, id: egui::Id, text: &mut String, hint: &str, name: &str, clear_name: &str, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    field_well(ui, id, vec2(width, BUTTON_HEIGHT), |ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        let (icon, _) = ui.allocate_exact_size(Vec2::splat(SEARCH_ICON), Sense::hover());
+        icons::paint(ui, icon, "search", SEARCH_ICON, t.text_muted);
+        let clear_room = if text.is_empty() { 0.0 } else { SMALL_BUTTON + GAP };
+        let previous = text.clone();
+        let edit = egui::TextEdit::singleline(text)
+            .id(id)
+            .hint_text(hint)
+            .font(theme::regular(FIELD_TEXT))
+            .frame(egui::Frame::NONE)
+            .margin(Vec2::ZERO)
+            .desired_width((ui.available_width() - clear_room).max(0.0));
+        let response = ui.add(edit);
+        let enabled = ui.is_enabled();
+        let current = text.as_str();
+        response.widget_info(|| {
+            let mut info = egui::WidgetInfo::text_edit(enabled, &previous, current, "");
+            info.label = Some(name.to_owned());
+            info
+        });
+        if !text.is_empty() && icon_button(ui, "x", SMALL_BUTTON, false, clear_name, None).clicked() {
+            text.clear();
+        }
+        response
+    })
+}
+
+/// A field's well at `size`, then `add` inside it (padded, left to right, centred), then the focus
+/// ring while the text field `id` has the keyboard focus: for fields with their own icon, count
+/// or buttons.
+pub(crate) fn field_well<R>(ui: &mut egui::Ui, id: egui::Id, size: Vec2, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    paint_input_well(ui, &t, rect, input_focused(ui, id));
+    let mut inner = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(FIELD_PAD_X, 0.0))).layout(Layout::left_to_right(Align::Center)));
+    let out = add(&mut inner);
+    field_focus(ui, &t, rect, input_focused(ui, id));
+    out
+}
+
+/// The focus ring outside a field's well at `rect` while `focused`, painted over the layout so it
+/// never moves it (after an [`input_frame`] or [`paint_input_well`]).
+pub(crate) fn field_focus(ui: &egui::Ui, t: &Tokens, rect: Rect, focused: bool) {
+    if focused {
+        ui.painter().rect_stroke(rect, CornerRadius::same(t.radius), Stroke::new(FOCUS_RING - EDGE, t.accent), egui::StrokeKind::Outside);
+    }
+}
+
+/// A context menu's or dropdown's width bounds (§6): every menu opens at least this wide, and
+/// none grows past the cap with a long file or folder name (its rows truncate).
+const MENU_MIN_WIDTH: f32 = 220.0;
+const MENU_MAX_WIDTH: f32 = 320.0;
+
+/// Call first in every menu, context menu and dropdown body: the shared width bounds.
+pub(crate) fn menu_body(ui: &mut egui::Ui) {
+    ui.set_min_width(MENU_MIN_WIDTH);
+    ui.set_max_width(MENU_MAX_WIDTH);
+}
+
+/// A menu row's height, its icon column and the icon's size.
+const MENU_ROW: f32 = 26.0;
+const MENU_ICON: f32 = 14.0;
+
+/// One menu row (§6): an icon column that is always there (empty when `icon` is `None`), so every
+/// label starts at the same x; the label, truncated to the menu's width; `shortcut` right-aligned
+/// in muted text; a check in the icon column when `checked`. Screen readers and tests see a
+/// button named `label`.
+pub(crate) fn menu_row(ui: &mut egui::Ui, icon: Option<&str>, label: &str, shortcut: Option<&str>, checked: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let enabled = ui.is_enabled();
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(MENU_MIN_WIDTH), MENU_ROW), Sense::click());
+    // Only a checked row reports a toggle state; the rest are plain buttons to screen readers.
+    resp.widget_info(|| {
+        if checked {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, true, label)
+        } else {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
+        }
+    });
+    if enabled {
+        state_fill(ui, &t, rect, &resp, false, t.radius);
+    }
+    let ink = if enabled { t.text } else { t.text_faint };
+    let muted = if enabled { t.text_muted } else { t.text_faint };
+    let icon_rect = Rect::from_min_size(egui::pos2(rect.left() + ROW_PAD, rect.center().y - MENU_ICON / 2.0), Vec2::splat(MENU_ICON));
+    match (checked, icon) {
+        (true, _) => icons::paint(ui, icon_rect, "check", MENU_ICON, t.accent_text),
+        (false, Some(icon)) => icons::paint(ui, icon_rect, icon, MENU_ICON, muted),
+        (false, None) => {}
+    }
+    let text_left = icon_rect.right() + GAP;
+    let mut right = rect.right() - ROW_PAD;
+    if let Some(keys) = shortcut {
+        let keys = ui.painter().layout_no_wrap(keys.to_owned(), theme::regular(MENU_TEXT), muted);
+        right -= keys.size().x;
+        ui.painter().galley(egui::pos2(right, rect.center().y - keys.size().y / 2.0), keys, muted);
+        right -= GAP_LARGE;
+    }
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), theme::regular(MENU_TEXT), ink);
+    job.wrap = egui::text::TextWrapping::truncate_at_width((right - text_left).max(0.0));
+    let galley = ui.painter().layout_job(job);
+    let elided = galley.elided;
+    ui.painter().galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, ink);
+    if elided { resp.on_hover_text(label) } else { resp }
+}
+
+/// A menu row's text size.
+const MENU_TEXT: f32 = 13.0;
+
+/// A submenu row (§6): `icon` in the same column as [`menu_row`]'s icons and the label at the
+/// same x, at the same height, then the arrow. `keep_open` keeps the submenu open while its rows
+/// are clicked (a set of toggles, a field), closing only on a click outside it.
+pub(crate) fn submenu<R>(ui: &mut egui::Ui, icon: &str, label: &str, keep_open: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> Response {
+    use egui::containers::menu::{MenuConfig, SubMenuButton};
+    let t = Tokens::get(ui.ctx());
+    let close = if keep_open { egui::PopupCloseBehavior::CloseOnClickOutside } else { egui::PopupCloseBehavior::CloseOnClick };
+    ui.scope(|ui| {
+        let spacing = ui.spacing_mut();
+        spacing.button_padding.x = ROW_PAD;
+        spacing.icon_spacing = GAP;
+        spacing.interact_size.y = MENU_ROW;
+        let text = egui::RichText::new(label).font(theme::regular(MENU_TEXT));
+        let button = egui::Button::image_and_text(icons::image(icon, MENU_ICON, t.text_muted), text).right_text(SubMenuButton::RIGHT_ARROW);
+        let (resp, _) = SubMenuButton::from_button(button).config(MenuConfig::new().close_behavior(close)).ui(ui, |ui| {
+            menu_body(ui);
+            add(ui)
+        });
+        resp
+    })
+    .inner
+}
+
+/// A banner's padding (§6).
+const BANNER_PAD: i8 = 12;
+
+/// A notice card in the layout (a pane's own notice, such as the Highlights pane's vault card):
+/// the card frame across the available width, `add` on the left and a close × named
+/// `close_name` at the top right. Returns `add`'s result and whether the × was clicked.
+pub(crate) fn banner_card<R>(ui: &mut egui::Ui, close_name: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> (R, bool) {
+    let t = Tokens::get(ui.ctx());
+    let width = ui.available_width();
+    card_frame(&t).inner_margin(BANNER_PAD).show(ui, |ui| banner_body(ui, width, Some(close_name), add)).inner
+}
+
+/// A banner floating over the page (a prompt in an `Area`), exactly `width` wide frame included,
+/// so a changing line (a count, a status) wraps inside it instead of resizing it: the floating
+/// frame, `add` in a column and, with `close_name`, a close × at the top right. Returns `add`'s
+/// result and whether the × was clicked.
+pub(crate) fn floating_banner<R>(ui: &mut egui::Ui, width: f32, close_name: Option<&str>, add: impl FnOnce(&mut egui::Ui) -> R) -> (R, bool) {
+    let t = Tokens::get(ui.ctx());
+    floating_frame(&t, RADIUS_MENU).inner_margin(BANNER_PAD).show(ui, |ui| banner_body(ui, width, close_name, add)).inner
+}
+
+/// A banner's contents `width` wide, frame included: `add` in a column, then the × when it has a
+/// `close_name` (the column keeps the ×'s room either way, so both states wrap alike). The frame's
+/// edge is drawn inside its margin, so only the margin is taken off.
+fn banner_body<R>(ui: &mut egui::Ui, width: f32, close_name: Option<&str>, add: impl FnOnce(&mut egui::Ui) -> R) -> (R, bool) {
+    let inner_width = (width - 2.0 * f32::from(BANNER_PAD)).max(0.0);
+    ui.set_width(inner_width);
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+        let column = (inner_width - BUTTON_HEIGHT - GAP).max(0.0);
+        let inner = ui.allocate_ui_with_layout(vec2(column, 0.0), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(column);
+            add(ui)
+        });
+        let closed = close_name.is_some_and(|name| close_button(ui, ButtonSize::Compact, name).clicked());
+        (inner.inner, closed)
+    })
+    .inner
 }
 
 /// A card's frame (document card, highlight, metric card): card fill, edge, radius 8.
@@ -246,8 +552,11 @@ pub(crate) fn paint_input_well(ui: &egui::Ui, t: &Tokens, rect: Rect, focused: b
     ui.painter().rect(rect, CornerRadius::same(t.radius), t.field, input_stroke(t, focused), egui::StrokeKind::Inside);
 }
 
+/// A field's outline: always [`EDGE`] wide, so focusing never resizes the field (egui counts a
+/// frame's stroke in its size); the accent while focused, with [`field_focus`] painting the rest
+/// of the ring outside it.
 fn input_stroke(t: &Tokens, focused: bool) -> Stroke {
-    if focused { Stroke::new(FOCUS_RING, t.accent) } else { Stroke::new(EDGE, Surfaces::of(t).control_edge) }
+    Stroke::new(EDGE, if focused { t.accent } else { Surfaces::of(t).control_edge })
 }
 
 /// Whether the text field `id` has the keyboard focus (for [`input_frame`], drawn before it).
@@ -345,6 +654,29 @@ pub(crate) fn section_caps(t: &Tokens, title: &str, count: Option<usize>) -> egu
     }
     job
 }
+
+/// A sidebar pane's header (Contents, Highlights, Bookmarks, Find, Pages, Tools and PdfCraft's
+/// panels): its small-caps label and count lined up with the rows' text, centred on one
+/// [`CONTROL_ROW`], and `trailing` laid out right to left at its right edge (compact buttons).
+/// Every pane's title sits at the same height in the same style, so switching tabs never moves
+/// it. The header has no close ×: the header's sidebar button closes the sidebar.
+pub(crate) fn pane_header(ui: &mut egui::Ui, t: &Tokens, title: &str, count: Option<usize>, trailing: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(PANE_HEADER_PAD);
+    control_row(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        section_label(ui, t, title, count);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = PANE_HEADER_BUTTON_GAP;
+            trailing(ui);
+        });
+    });
+    ui.add_space(PANE_HEADER_PAD);
+}
+
+/// The space above and below a [`pane_header`]'s row, and between its trailing buttons (nearly
+/// touching, so neighbouring hover fills read as one toolbar).
+const PANE_HEADER_PAD: f32 = 4.0;
+const PANE_HEADER_BUTTON_GAP: f32 = 2.0;
 
 /// The keys that run `command` (with no arguments) in Margin, as the keyboard sheet writes them.
 pub(crate) fn shortcut(app: &PdfCraftApp, command: &str) -> Option<String> {
@@ -546,8 +878,14 @@ fn paint_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, label: &str,
     }
     focus_ring(ui, &t, rect, &resp, t.radius);
     let tint = if enabled { icon_tint(&t, on, resp.hovered()) } else { t.text_faint };
-    icons::paint(ui, rect, icon, (size * ICON_SHARE).round(), tint);
+    icons::paint(ui, rect, icon, glyph_size(size), tint);
     tooltip(resp, label, shortcut)
+}
+
+/// The icon's size in a square button `size` points wide: [`ICON_LARGE`] from a
+/// [`CONTROL_ROW`] button up, [`ICON_SMALL`] below, so a glyph is one of two sizes everywhere.
+pub(crate) fn glyph_size(size: f32) -> f32 {
+    if size >= CONTROL_ROW - 2.0 { ICON_LARGE } else { ICON_SMALL }
 }
 
 /// A button showing a colour instead of an icon (a comment tool's or a highlight's colour):
@@ -580,12 +918,18 @@ pub(crate) struct ColorDot<'a> {
 /// dot's colour around the current one. Screen readers and tests see a button per colour named
 /// after it; the tooltip adds its keys. Returns the clicked index.
 pub(crate) fn color_dots(ui: &mut egui::Ui, dots: &[ColorDot<'_>]) -> Option<usize> {
+    color_dots_in(ui, dots, COLOR_CELL)
+}
+
+/// [`color_dots`] with `cell`-point cells, for a row of buttons of that height (the selection
+/// bar's), so the dots and the buttons beside them are one height.
+pub(crate) fn color_dots_in(ui: &mut egui::Ui, dots: &[ColorDot<'_>], cell: f32) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let mut clicked = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = COLOR_CELL_GAP;
         for (i, dot) in dots.iter().enumerate() {
-            let (rect, resp) = ui.allocate_exact_size(Vec2::splat(COLOR_CELL), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(Vec2::splat(cell), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), dot.selected, dot.name));
             ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
             focus_ring(ui, &t, rect, &resp, t.radius);
@@ -748,20 +1092,44 @@ impl<'a> Button<'a> {
         Self { shortcut, ..self }
     }
 
-    /// A filter or toggle that is on: the selected fill and edge, the selected label colour, an
-    /// orange check (or icon).
+    /// A filter or toggle that is on: the selected fill and edge and the selected label colour.
+    /// It never adds an icon, so a chip is as wide on as off and its row never reflows.
     pub(crate) fn selected(self, selected: bool) -> Self {
         Self { selected, ..self }
     }
 
-    /// Exactly `width` wide, its content centred and clipped (buttons sharing a row equally).
+    /// The label shortened with "…" to what fits beside the icons in a fixed-width button.
+    fn fitted_galley(&self, ui: &egui::Ui, galley: Option<std::sync::Arc<egui::Galley>>) -> Option<std::sync::Arc<egui::Galley>> {
+        let (Some(width), Some(full)) = (self.fixed_width, galley.as_ref()) else {
+            return galley;
+        };
+        let spec = self.size.spec();
+        let beside_label = self.content_width(Some(full)) - full.size().x;
+        let room = (width - 2.0 * spec.pad_x - beside_label).max(0.0);
+        if full.size().x <= room {
+            return galley;
+        }
+        let mut job = egui::text::LayoutJob::simple_singleline(self.label.to_owned(), theme::medium(spec.text), Color32::PLACEHOLDER);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        Some(ui.painter().layout_job(job))
+    }
+
+    /// Exactly `width` wide, its content centred; a label that does not fit ends in "…"
+    /// (buttons sharing a row equally).
     pub(crate) fn fixed_width(self, width: f32) -> Self {
         Self { fixed_width: Some(width), ..self }
     }
 
-    /// The leading icon: the given one, or a check on a selected secondary filter.
+    /// The leading icon, if one was given (selection is shown by colour, never by an icon).
     fn leading(&self) -> Option<&'a str> {
-        self.icon.or((self.selected && self.kind == ButtonKind::Secondary).then_some("check"))
+        self.icon
+    }
+
+    /// The width of the widest of `labels` as this button (with its icons and padding): a
+    /// [`Button::fixed_width`] for a button whose label changes ("Sort: Recent" / "Sort:
+    /// Progress", "Look up details" / "Looking up…").
+    pub(crate) fn widest(&self, ui: &egui::Ui, labels: &[&str]) -> f32 {
+        labels.iter().map(|&label| Button { label, fixed_width: None, ..*self }.width(ui)).fold(0.0, f32::max)
     }
 
     fn label_galley(&self, ui: &egui::Ui) -> Option<std::sync::Arc<egui::Galley>> {
@@ -794,7 +1162,7 @@ impl<'a> Button<'a> {
         let surfaces = Surfaces::of(&t);
         let spec = self.size.spec();
         let enabled = ui.is_enabled();
-        let galley = self.label_galley(ui);
+        let galley = self.fitted_galley(ui, self.label_galley(ui));
         let (rect, resp) = ui.allocate_exact_size(vec2(self.width_for(galley.as_deref()), spec.height), Sense::click());
         let name = self.name.unwrap_or(self.label);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, self.selected, name));
@@ -904,22 +1272,28 @@ pub(crate) struct Segment<'a> {
 /// The mockup's segmented control (`.seg`): choices in an outlined field well (radius 8, inset 2),
 /// the chosen one on the selected fill with the selected edge and the selected label colour, the
 /// others muted (bright and on the hover fill when hovered). Lays out left to right; returns the
-/// clicked index.
+/// clicked index. The well is [`SEGMENT_HEIGHT`] tall, for compact rows (popovers, panes).
 pub(crate) fn segmented(ui: &mut egui::Ui, segments: &[Segment<'_>]) -> Option<usize> {
+    segmented_sized(ui, segments, SEGMENT_HEIGHT)
+}
+
+/// [`segmented`] with a well `height` tall: [`CONTROL_ROW`] where it sits in a column of
+/// full-height controls (Settings), so it lines up with the dropdowns and buttons around it.
+pub(crate) fn segmented_sized(ui: &mut egui::Ui, segments: &[Segment<'_>], height: f32) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let font = theme::regular(SEGMENT_TEXT);
     // Laid out in the placeholder colour, so each chip paints it in its own state's colour.
     let galleys: Vec<_> = segments.iter().map(|s| ui.painter().layout_no_wrap(s.label.to_owned(), font.clone(), Color32::PLACEHOLDER)).collect();
     let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * SEGMENT_PAD_X).collect();
     let inner_w: f32 = widths.iter().sum::<f32>() + SEGMENT_INSET * (segments.len().saturating_sub(1)) as f32;
-    let size = vec2(inner_w + 2.0 * SEGMENT_INSET, SEGMENT_HEIGHT);
+    let size = vec2(inner_w + 2.0 * SEGMENT_INSET, height);
     let (well, _) = ui.allocate_exact_size(size, Sense::hover());
     let surfaces = Surfaces::of(&t);
     ui.painter().rect(well, CornerRadius::same(RADIUS_CARD), t.field, Stroke::new(EDGE, surfaces.control_edge), egui::StrokeKind::Inside);
     let mut clicked = None;
     let mut x = well.left() + SEGMENT_INSET;
     for (i, ((segment, galley), width)) in segments.iter().zip(galleys).zip(widths).enumerate() {
-        let rect = Rect::from_min_size(egui::pos2(x, well.top() + SEGMENT_INSET), vec2(width, SEGMENT_HEIGHT - 2.0 * SEGMENT_INSET));
+        let rect = Rect::from_min_size(egui::pos2(x, well.top() + SEGMENT_INSET), vec2(width, height - 2.0 * SEGMENT_INSET));
         x += width + SEGMENT_INSET;
         let resp = ui.interact(rect, ui.id().with(("segment", segment.label)), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), segment.selected, segment.label));

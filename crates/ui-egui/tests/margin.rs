@@ -181,8 +181,8 @@ fn contents_footer_and_document_menu_work() {
     h.run_steps(3);
     assert!(h.state().views[0].zoom > zoom);
     click(&mut h, "Document: save, export, print, settings");
-    // Menu rows name their shortcut too (Ctrl+D, or ⌘D on a Mac).
-    h.get_by_label_contains("Document properties…").click();
+    // Menu rows carry the macOS menu bar's titles.
+    h.get_by_label_contains("Document Properties…").click();
     h.run_steps(3);
     assert!(matches!(h.state().dialog, Some(Dialog::Properties(_))));
 }

@@ -1,8 +1,9 @@
 //! Open documents. Every file opens as its own document with its own place, zoom, history and
 //! sidebar tab; this module lets the reader see and switch them: a calm tab strip under the
-//! header while two or more are open (close ×, middle-click to close, drag to reorder, a dot
-//! for unsaved changes), the keymap's `view.tab.next` / `view.tab.prev` / `view.tab.go`, and
-//! the Library's "Open now" row. Closing the last document shows the Library.
+//! header whenever a document is open, one tab included, so opening a second document never
+//! pushes the page down (close ×, middle-click to close, drag to reorder, a dot for unsaved
+//! changes), the keymap's `view.tab.next` / `view.tab.prev` / `view.tab.go`, and the Library's
+//! "Open now" row. Closing the last document shows the Library.
 
 use egui::{Color32, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::DocId;
@@ -21,8 +22,11 @@ const TAB_MAX_WIDTH: f32 = 220.0;
 const TAB_RADIUS: u8 = 6;
 const NAME_SIZE: f32 = 12.5;
 const ICON_SIZE: f32 = 14.0;
-const CLOSE_SIZE: f32 = 18.0;
+/// A tab's close button: an in-field button (`look::SMALL_BUTTON`).
+const CLOSE_SIZE: f32 = look::SMALL_BUTTON;
 const DOT_RADIUS: f32 = 3.5;
+/// An "Open now" chip's longest name, in characters, before it is cut with an ellipsis.
+const CHIP_NAME_CHARS: usize = 32;
 /// The marker drawn where a dragged tab will land.
 const DROP_MARK_WIDTH: f32 = 2.0;
 /// `view.tab.go`'s last index means the last tab, whatever the count (as in browsers).
@@ -115,9 +119,11 @@ fn move_tab(app: &mut PdfCraftApp, from: usize, to: usize) {
     }
 }
 
-/// The strip under the header, while two or more documents are open.
+/// The strip under the header, whenever a document is shown. After a tab is closed the tabs
+/// keep their width while the pointer stays in the strip, so the next × lands under the pointer
+/// (as in browsers); they fit the strip again once it leaves.
 pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    if app.views.len() < 2 || app.active.is_none() {
+    if app.views.is_empty() || app.active.is_none() {
         return;
     }
     let t = Tokens::get(ui.ctx());
@@ -126,14 +132,24 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show_separator_line(look::has_edges(&t))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
+            let frozen_id = egui::Id::new("margin-tabs-frozen-width");
+            let pointer_in = ui.rect_contains_pointer(ui.max_rect());
+            if !pointer_in {
+                ui.data_mut(|d| d.remove::<f32>(frozen_id));
+            }
             let count = app.views.len() as f32;
-            let width = ((ui.available_width() - GAP * (count - 1.0)) / count).clamp(TAB_MIN_WIDTH, TAB_MAX_WIDTH);
+            let fitted = ((ui.available_width() - GAP * (count - 1.0)) / count).clamp(TAB_MIN_WIDTH, TAB_MAX_WIDTH);
+            let width = ui.data(|d| d.get_temp::<f32>(frozen_id)).unwrap_or(fitted);
+            let mut closed = false;
             egui::ScrollArea::horizontal().id_salt("margin_tabs_scroll").auto_shrink([false, true]).show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
-                    tabs(app, ui, &t, width);
+                    closed = tabs(app, ui, &t, width);
                 });
             });
+            if closed && pointer_in {
+                ui.data_mut(|d| d.insert_temp(frozen_id, width));
+            }
         });
 }
 
@@ -146,7 +162,8 @@ struct Picked {
     drag: Option<(usize, bool)>,
 }
 
-fn tabs(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, width: f32) {
+/// The tabs; true when one was closed this frame.
+fn tabs(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, width: f32) -> bool {
     let mut picked = Picked::default();
     let mut rects = Vec::with_capacity(app.views.len());
     for index in 0..app.views.len() {
@@ -172,12 +189,15 @@ fn tabs(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, width: f32) {
     }
     if let Some(index) = picked.close {
         app.request_close_tab(index);
-    } else if let Some((from, true, slot)) = target {
+        return true;
+    }
+    if let Some((from, true, slot)) = target {
         // `slot` counts the gaps with the dragged tab still in place; it leaves its place first.
         move_tab(app, from, if slot > from { slot - 1 } else { slot });
     } else if let Some(index) = picked.show {
         show(app, index);
     }
+    false
 }
 
 /// The gap (0 = before the first tab) nearest `x` among the tabs drawn at `rects`.
@@ -185,7 +205,9 @@ fn drop_slot(rects: &[Rect], x: f32) -> usize {
     rects.iter().position(|rect| x < rect.center().x).unwrap_or(rects.len())
 }
 
-/// One tab: the document's name, its save state and a close button. Returns its response and
+/// One tab: the document's name, its save state and a close button. The name, the save dot
+/// and the × each keep one place whether the tab is hovered or not: the dot sits left of the ×
+/// slot, and the × shows in its slot on the active or hovered tab. Returns its response and
 /// whether its × was pressed.
 fn tab(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, width: f32) -> (egui::Response, bool) {
     let Some(view) = app.views.get(index) else { return (ui.label(""), false) };
@@ -204,14 +226,16 @@ fn tab(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, width: f3
     let painter = ui.painter_at(rect);
     let icon = Rect::from_center_size(rect.left_center() + vec2(GAP + ICON_SIZE / 2.0, 0.0), vec2(ICON_SIZE, ICON_SIZE));
     icons::paint(ui, icon, "file-text", ICON_SIZE, if active { t.accent } else { t.text_muted });
-    let close_rect = Rect::from_center_size(rect.right_center() - vec2(GAP / 2.0 + CLOSE_SIZE / 2.0, 0.0), vec2(CLOSE_SIZE, CLOSE_SIZE));
+    let close_rect = Rect::from_center_size(rect.right_center() - vec2(1.0 + CLOSE_SIZE / 2.0, 0.0), vec2(CLOSE_SIZE, TAB_HEIGHT.min(CLOSE_SIZE)));
+    let dot_center = close_rect.left_center() - vec2(DOT_RADIUS + GAP / 2.0, 0.0);
     let text_left = icon.right() + GAP / 1.5;
-    let text_width = (close_rect.left() - GAP / 2.0 - text_left).max(0.0);
+    let text_width = (dot_center.x - DOT_RADIUS - GAP / 2.0 - text_left).max(0.0);
     let color = if active { look::row_text(t, true, t.text) } else { t.text_muted };
     let mut job = egui::text::LayoutJob::single_section(name.clone(), egui::TextFormat::simple(theme::regular(NAME_SIZE), color));
     job.wrap = egui::text::TextWrapping::truncate_at_width(text_width);
     let galley = ui.painter().layout_job(job);
     painter.galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, color);
+    status_dot(ui, t, dot_center, status);
     let hovered = resp.hovered() || ui.rect_contains_pointer(close_rect);
     let mut closed = false;
     if hovered || active {
@@ -220,14 +244,8 @@ fn tab(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, width: f3
         if close.hovered() {
             ui.painter().rect_filled(close_rect, CornerRadius::same(TAB_RADIUS / 2), t.hover);
         }
-        icons::paint(ui, close_rect.shrink(3.0), "x", ICON_SIZE - 2.0, tint);
+        icons::paint(ui, close_rect, "x", look::glyph_size(CLOSE_SIZE), tint);
         closed = close.on_hover_text("Close").clicked();
-    } else {
-        status_dot(ui, t, close_rect.center(), status);
-    }
-    if let Some(dot_color) = (hovered || active).then(|| dot_color(t, status)).flatten() {
-        // The × covers the dot: keep the save state visible as a small mark before it.
-        painter.circle_filled(close_rect.left_center() - vec2(DOT_RADIUS, 0.0), DOT_RADIUS / 1.5, dot_color);
     }
     let tip = doc.path.clone().unwrap_or_else(|| name.clone());
     let tip = match status_word(status) {
@@ -268,41 +286,54 @@ fn status_dot(ui: &egui::Ui, t: &Tokens, center: egui::Pos2, status: SaveStatus)
 }
 
 /// The Library's "Open now" row: every open document, with its page; a click reads it, the ×
-/// closes it.
+/// closes it. Each chip and its × wrap as one, and the section folds away when the last
+/// document closes instead of jumping the shelf up.
 pub(crate) fn open_now(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    if app.views.is_empty() {
-        return;
-    }
     let mut show_index = None;
     let mut close_index = None;
-    ui.horizontal(|ui| {
-        look::section_label(ui, t, "Open now", Some(app.views.len()));
-    });
-    ui.add_space(GAP);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        for index in 0..app.views.len() {
-            let Some(view) = app.views.get(index) else { continue };
-            let Some(doc) = app.session.get(view.id) else { continue };
-            let pages = doc.info.pages.len();
-            let label = format!("{}   p. {} of {pages}", doc.display_name(), view.current.saturating_add(1).min(pages.max(1)));
-            let tip = doc.path.clone().unwrap_or_else(|| doc.display_name());
-            let resp = look::Button::secondary(look::ButtonSize::Standard, &label).icon("file-text").tip(&tip).show(ui);
-            if resp.clicked() {
-                show_index = Some(index);
+    look::collapsible(ui, egui::Id::new("margin-open-now"), !app.views.is_empty(), |ui| {
+        ui.add(egui::Label::new(look::section_caps(t, "Open now", Some(app.views.len()))).selectable(false));
+        ui.add_space(GAP);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+            for index in 0..app.views.len() {
+                let Some(view) = app.views.get(index) else { continue };
+                let Some(doc) = app.session.get(view.id) else { continue };
+                let pages = doc.info.pages.len();
+                let name = shorten(&doc.display_name(), CHIP_NAME_CHARS);
+                let label = format!("{name}   p. {} of {pages}", view.current.saturating_add(1).min(pages.max(1)));
+                let tip = doc.path.clone().unwrap_or_else(|| doc.display_name());
+                // One unit, so a chip's × never wraps away from it.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = GAP / 2.0;
+                    let resp = look::Button::secondary(look::ButtonSize::Standard, &label).icon("file-text").tip(&tip).show(ui);
+                    if resp.clicked() {
+                        show_index = Some(index);
+                    }
+                    if resp.middle_clicked() || look::icon_button(ui, "x", look::CONTROL_ROW, false, "Close", None).clicked() {
+                        close_index = Some(index);
+                    }
+                });
+                ui.add_space(GAP);
             }
-            if resp.middle_clicked() || look::icon_button(ui, "x", look::BUTTON_HEIGHT, false, "Close", None).clicked() {
-                close_index = Some(index);
-            }
-            ui.add_space(GAP);
-        }
+        });
+        ui.add_space(GAP_LARGE * 2.0);
     });
-    ui.add_space(GAP_LARGE * 2.0);
     if let Some(index) = close_index {
         app.request_close_tab(index);
     } else if let Some(index) = show_index {
         show(app, index);
     }
+}
+
+/// `name` cut to `chars` characters with an ellipsis.
+fn shorten(name: &str, chars: usize) -> String {
+    if name.chars().count() <= chars {
+        return name.to_owned();
+    }
+    let mut short: String = name.chars().take(chars.saturating_sub(1)).collect();
+    short.push('…');
+    short
 }
 
 #[cfg(test)]

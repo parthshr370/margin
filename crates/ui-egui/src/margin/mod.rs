@@ -59,6 +59,20 @@ pub mod window_chrome;
 
 use crate::{PdfCraftApp, RightPanel};
 
+/// Margin's own release version (`apps/margin`'s), which the binary sets at start; the PdfCraft
+/// crates this UI is built from keep the workspace's version.
+static VERSION: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Sets Margin's release version for About Margin; the first value set is kept.
+pub fn set_version(version: &'static str) {
+    VERSION.get_or_init(|| version);
+}
+
+/// Margin's release version, if the binary set it (not in tests).
+pub(crate) fn version() -> Option<&'static str> {
+    VERSION.get().copied()
+}
+
 /// What the reader chrome shows. Whether the sidebar is open and its tab are saved with the app's
 /// state ([`ReaderChrome::to_json`]); a first start takes them from the `ui.sidebar` settings.
 /// The sidebar's width is the resizable panel's own, kept in egui's saved memory.
@@ -386,9 +400,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     }
     // The Library has its own single toolbar (with the app menu), so no reader header over it.
     let library_shown = cfg!(not(target_arch = "wasm32")) && app.active.is_none() && !app.combine_showing();
-    if !focus_mode && !library_shown && header::show(app, ui) {
-        find::row(app, ui);
-    }
+    let find_floats = !focus_mode && !library_shown && header::show(app, ui);
     if !focus_mode && app.active.is_some() {
         footer::show(app, ui);
     }
@@ -417,8 +429,11 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
             scan_prompt::show(app, ui.ctx(), i);
         }
     });
+    if find_floats {
+        find::floating(app, ctx);
+    }
     app.process_pending_edits();
-    let pill_top = if app.active.is_some() { history::show(app, ctx) } else { None };
+    let pill = if app.active.is_some() { history::show(app, ctx) } else { None };
     drop::hint(app, ctx);
     crate::palette::show(app, ctx);
     crate::dialogs::show(app, ctx);
@@ -428,7 +443,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         stats_sheet::show(app, ctx);
     }
     app.show_progress(ctx);
-    toast::show(app, ctx, pill_top);
+    toast::show(app, ctx, pill);
 }
 
 /// The deepest outline entry at or before `page`, in reading order: the section being read.

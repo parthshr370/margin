@@ -187,29 +187,33 @@ fn snippet_job(snippet: &str, t: &Tokens, page: u32, kind: HitKind) -> LayoutJob
     job
 }
 
-/// The text results in place of the shelf.
+/// The text results in place of the shelf, in the library page's own scroll area. The status line
+/// above them is always there (one line, empty once results show), so searching never moves
+/// the results up and down.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &Arc<[usize]>, actions: &mut Vec<Action>) {
     let ctx = ui.ctx().clone();
     search(app, &ctx);
     let state = &mut app.margin_library;
     let by_book = groups(state, order);
     let note = if let Some(err) = &state.text.error {
-        Some(format!("The search failed: {err}"))
+        format!("The search failed: {err}")
     } else if let Some(progress) = state.text.job.as_ref().map(TextJob::progress) {
-        Some(format!("Reading the books' text: {} of {}. Results grow as it goes.", progress.done, progress.total))
+        format!("Reading the books' text: {} of {}. Results grow as it goes.", progress.done, progress.total)
     } else if state.text.search.is_some() {
-        Some("Searching\u{2026}".to_owned())
+        "Searching\u{2026}".to_owned()
     } else if by_book.is_empty() {
-        Some("No page of a book on this shelf has these words.".to_owned())
+        "No page of a book on this shelf has these words.".to_owned()
     } else {
-        None
+        String::new()
     };
-    if let Some(note) = note {
-        ui.label(RichText::new(note).font(theme::regular(NOTE_SIZE)).color(t.text_muted));
-        ui.add_space(GAP);
-    }
+    let line_height = ui.fonts_mut(|fonts| fonts.row_height(&theme::regular(NOTE_SIZE)));
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), line_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_size(vec2(ui.available_width(), line_height));
+        ui.add(egui::Label::new(RichText::new(note).font(theme::regular(NOTE_SIZE)).color(t.text_muted)).truncate());
+    });
+    ui.add_space(GAP);
     let state = &app.margin_library;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("margin-library-text").show(ui, |ui| {
+    ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = GAP / 2.0;
         for (book_index, hits) in &by_book {
             let Some(book) = state.books.get(*book_index) else { continue };
