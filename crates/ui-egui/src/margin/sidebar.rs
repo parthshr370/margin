@@ -141,7 +141,7 @@ fn floating(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id
     let visible = Rect::from_min_max(egui::pos2(full.left(), full.top()), rect.right_bottom());
     egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).show(ctx, |ui| {
         let painter = ui.painter();
-        painter.add(look::SHADOW_M.as_shape(visible, CornerRadius::ZERO));
+        painter.add(t.surfaces.shadow_modal.as_shape(visible, CornerRadius::ZERO));
         // The overlay's own divider line where the theme has frame edges, none in the Black palette.
         let edge = if look::has_edges(t) { egui::Stroke::new(1.0, t.divider) } else { egui::Stroke::NONE };
         painter.rect(visible, CornerRadius::ZERO, t.panel, edge, egui::StrokeKind::Inside);
@@ -272,7 +272,7 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Opti
                         let count_width = look::template_width(ui, &count, theme::regular(META_TEXT));
                         let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
                         let (bar, _) = ui.allocate_exact_size(vec2(bar_width, PROGRESS_BAR_HEIGHT), Sense::hover());
-                        ui.painter().rect_filled(bar, CornerRadius::same(PROGRESS_BAR_RADIUS), look::Surfaces::of(t).track);
+                        ui.painter().rect_filled(bar, CornerRadius::same(PROGRESS_BAR_RADIUS), t.surfaces.track);
                         let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
                         let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
                         ui.painter().rect_filled(fill, CornerRadius::same(PROGRESS_BAR_RADIUS), t.accent);

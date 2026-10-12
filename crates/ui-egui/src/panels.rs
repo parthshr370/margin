@@ -1062,11 +1062,7 @@ fn pages(
                 ui.painter().rect_filled(rect, radius, t.hover);
             }
             if picked {
-                let outline = if ember {
-                    crate::margin::look::edge_stroke(crate::margin::look::Surfaces::of(t).selected_edge)
-                } else {
-                    Stroke::new(1.5, t.accent)
-                };
+                let outline = if ember { crate::margin::look::edge_stroke(t.surfaces.selected_edge) } else { Stroke::new(1.5, t.accent) };
                 if !outline.is_empty() {
                     ui.painter().rect_stroke(rect, radius, outline, egui::StrokeKind::Inside);
                 }

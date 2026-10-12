@@ -1,6 +1,7 @@
 //! Generators: the JSON schemas (`settings`, `keymap`, `commands`, `theme`, `profile`,
-//! `sidecar`), the commented `default-settings.jsonc`, and the files Margin writes into
-//! `<config>` on first run. Nothing in this crate reads a generated file back.
+//! `sidecar`), the commented `default-settings.jsonc` Margin rewrites in `<config>` on every
+//! launch, and the files Margin writes into `<config>` on first run. Nothing in this crate reads a
+//! generated file back.
 
 use schemars::JsonSchema;
 use schemars::generate::SchemaSettings;
@@ -12,7 +13,6 @@ use crate::profile::Profile;
 use crate::registry::{CommandEntry, Registry};
 use crate::settings::Settings;
 use crate::sidecar::Sidecar;
-use crate::theme::Theme;
 
 fn root_schema<T: JsonSchema>() -> Value {
     SchemaSettings::draft2020_12().into_generator().into_root_schema_for::<T>().to_value()
@@ -30,9 +30,9 @@ pub fn settings_schema() -> Value {
     schema
 }
 
-/// `theme.schema.json` (CU-THM-1).
+/// `theme.schema.json` (CU-THM-1): a theme family in Zed's format.
 pub fn theme_schema() -> Value {
-    root_schema::<Theme>()
+    crate::theme::family_schema()
 }
 
 /// `profile.schema.json` (CU-DOC-3).
@@ -146,9 +146,12 @@ fn make_nullable(schema: &mut Value) {
     }
 }
 
+/// The generated defaults inside `<config>`, rewritten on every launch.
+pub const DEFAULT_SETTINGS_FILE: &str = "default-settings.jsonc";
+
 /// The header of `default-settings.jsonc`.
-const DEFAULTS_HEADER: &str = "// default-settings.jsonc: GENERATED from crates/margin-config/src/settings.rs. Do not edit.\n\
-// Copy a key into <config>/settings.jsonc to change it.\n";
+const DEFAULTS_HEADER: &str = "// Margin's default settings. Read-only: Margin rewrites this file on every launch.\n\
+// Every setting with its default and what it does. To change one, copy its key into settings.jsonc.\n";
 
 /// The header of the `settings.jsonc` Margin writes when there is none.
 const FIRST_RUN_SETTINGS_HEADER: &str = "// Margin settings. Margin reloads this file when you save it.\n\
@@ -433,6 +436,15 @@ mod tests {
             (json!({ "notes": { "vault": "relative" } }), true),
             (json!({ "library": { "metadata_lookup": true } }), true),
             (json!({ "library": { "metadata_lookup": "yes" } }), false),
+            (json!({ "theme": "Margin Light" }), true),
+            (json!({ "theme": { "mode": "system" } }), true),
+            (json!({ "theme": { "mode": "light", "light": "Margin Light", "dark": "Margin Dark" } }), true),
+            (json!({ "theme": { "mode": "dusk" } }), false),
+            (json!({ "theme": { "mode": "dark", "accent": "#ff0000" } }), false),
+            (json!({ "theme": 3 }), false),
+            (json!({ "theme_overrides": { "Margin Dark": { "text.accent": "#4b8bf5", "margin.radius": 4, "terminal.ansi.red": "#ff0000" } } }), true),
+            (json!({ "theme_overrides": { "Margin Dark": { "accent": "#4b8bf5" } } }), false),
+            (json!({ "theme_overrides": { "Margin Dark": { "margin.radius": "4" } } }), false),
         ];
         for (fixture, valid) in fixtures {
             assert_eq!(validator.is_valid(&fixture), valid, "schema on {fixture}");
@@ -476,7 +488,34 @@ mod tests {
             assert!(schema.get("title").and_then(Value::as_str).is_some_and(|t| !t.is_empty()), "{schema}");
         }
         let theme = jsonschema_validator(&theme_schema());
-        assert!(theme.is_valid(&json!({ "name": "Margin Dark", "appearance": "dark", "tokens": { "bg": "#0a0a0a" } })));
-        assert!(!theme.is_valid(&json!({ "name": "x", "appearance": "dim", "tokens": {} })));
+        assert!(
+            theme.is_valid(&json!({ "name": "Mine", "themes": [{ "name": "Mine", "appearance": "dark", "style": { "background": "#0a0a0a" } }] }))
+        );
+        assert!(!theme.is_valid(&json!({ "themes": [{ "name": "x", "appearance": "dim" }] })));
+    }
+
+    /// `theme_overrides` colours are checked on load: a bad one is reported at its line and key
+    /// and dropped, the good ones stay.
+    #[test]
+    fn bad_override_colours_are_reported_and_dropped() {
+        let text = "{\n  \"theme_overrides\": {\n    \"Margin Dark\": {\n      \"text.accent\": \"blue\",\n      \"background\": \"#101010\"\n    }\n  }\n}\n";
+        let loaded = Settings::from_user_text(text, "settings.jsonc");
+        assert_eq!(loaded.problems.len(), 1, "{:?}", loaded.problems);
+        assert_eq!((loaded.problems[0].line, loaded.problems[0].key.as_str()), (4, "theme_overrides.Margin Dark.text.accent"));
+        let style = &loaded.settings.theme_overrides["Margin Dark"].0;
+        assert_eq!(style.keys().collect::<Vec<_>>(), ["background"]);
+    }
+
+    /// `theme` takes Zed's two shapes; a partial object keeps the other defaults.
+    #[test]
+    fn theme_setting_takes_a_name_or_modes() {
+        use crate::settings::{ThemeMode, ThemeModes, ThemeSetting};
+        let named = Settings::from_user_text(r#"{ "theme": "Margin Light" }"#, "settings.jsonc");
+        assert_eq!((named.settings.theme, named.problems), (ThemeSetting::Named("Margin Light".into()), vec![]));
+        let modes = Settings::from_user_text(r#"{ "theme": { "mode": "system" } }"#, "settings.jsonc").settings.theme;
+        assert_eq!(modes, ThemeSetting::ByMode(ThemeModes { mode: ThemeMode::System, ..ThemeModes::default() }));
+        assert_eq!(modes.pick(Some(false)), (crate::LIGHT_THEME, crate::Appearance::Light));
+        assert_eq!(modes.pick(Some(true)), (crate::DEFAULT_THEME, crate::Appearance::Dark));
+        assert_eq!(Settings::default().theme.pick(Some(false)).0, crate::DEFAULT_THEME, "the default is dark mode");
     }
 }

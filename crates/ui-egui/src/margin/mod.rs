@@ -8,6 +8,7 @@
 //! Margin's interface text is English for now: these strings are plain literals, not `tl!`, so
 //! PdfCraft's catalogs (which must cover every `tl!` literal) stay complete.
 
+pub(crate) mod config_files;
 pub mod contents;
 pub mod display;
 pub mod drop;
@@ -50,6 +51,7 @@ pub mod stats;
 pub mod stats_sheet;
 pub mod synctex;
 pub mod tabs;
+pub mod themes;
 pub mod toast;
 pub mod tools;
 pub mod trim;
@@ -261,6 +263,8 @@ impl SidebarTab {
 pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
     // Picking a comment tool must not switch the sidebar to Highlights (see `sync`).
     app.comments_panel_closed = true;
+    // Margin wears its own themes, whatever PdfCraft's light/dark preference says.
+    app.theme = crate::theme::ThemeKind::Margin;
 }
 
 /// Run a Margin-only action (the keymap's ids): `view.focus_mode.toggle` (also `view.read_mode`),
@@ -268,10 +272,13 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
 /// "bookmarks" | "find" | "tools"}`, `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
 /// (a page bookmark on the current page), `view.trim.toggle`, the page notes' `note.*` and "Save a
 /// copy with highlights" (`margin::marks`), `reader.export_markdown` (the paper as Markdown),
-/// `app.choose_vault`, and the library's `library.open`, `library.search`, `library.import`,
-/// `library.add_folder` and `app.stats`. Returns `false` for an unknown id or tab.
+/// `app.choose_vault`, the library's `library.open`, `library.search`, `library.import`,
+/// `library.add_folder` and `app.stats`, and the config files' `settings.open`,
+/// `settings.open_default`, `themes.open` and `keymap.open` (`config_files`). Returns `false` for
+/// an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
+        _ if config_files::IDS.contains(&id) => return config_files::run(app, id),
         "view.read_mode" | "view.focus_mode.toggle" => focus::toggle(app),
         "view.sidebar.toggle" => app.margin_chrome.sidebar_open = !app.margin_chrome.sidebar_open,
         "reader.annotate.toggle" => app.margin_chrome.rail_open = !app.margin_chrome.rail_open,

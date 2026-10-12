@@ -659,7 +659,7 @@ fn scan_line(app: &PdfCraftApp, ui: &egui::Ui, t: &Tokens, bar: Rect) {
     let done = if progress.to_read == 0 { 0.0 } else { (progress.done as f32 / progress.to_read as f32).clamp(0.0, 1.0) };
     let track = Rect::from_min_size(pos2(bar.left(), bar.bottom() + GAP), vec2(bar.width(), SCAN_LINE));
     let radius = CornerRadius::same(1);
-    ui.painter().rect_filled(track, radius, look::Surfaces::of(t).track);
+    ui.painter().rect_filled(track, radius, t.surfaces.track);
     ui.painter().rect_filled(Rect::from_min_size(track.min, vec2(track.width() * done, SCAN_LINE)), radius, t.accent);
 }
 
@@ -929,7 +929,7 @@ fn search_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, width: f32
 /// card is one height for every book.
 fn hero_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, meta: &str, actions: &mut Vec<Action>) {
     let Some(book) = app.margin_library.books.get(index).cloned() else { return };
-    let frame = look::card_frame(t).shadow(look::SHADOW_S).inner_margin(HERO_PAD);
+    let frame = look::card_frame(t).shadow(t.surfaces.shadow_card).inner_margin(HERO_PAD);
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_top(|ui| {
@@ -1191,9 +1191,9 @@ fn book_cell(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize,
     let resp = ui.interact(cell, ui.id().with(("book", book.id)), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
     let radius = CornerRadius::same(look::RADIUS_CARD);
-    ui.painter().add(look::SHADOW_S.as_shape(cell, radius));
+    ui.painter().add(t.surfaces.shadow_card.as_shape(cell, radius));
     let lift = super::motion::hover(ui.ctx(), resp.id, resp.hovered());
-    let edge = t.border.lerp_to_gamma(look::Surfaces::of(t).edge_hover, lift);
+    let edge = t.border.lerp_to_gamma(t.surfaces.edge_hover, lift);
     ui.painter().rect(cell, radius, t.card.lerp_to_gamma(t.hover, lift), look::edge_stroke(edge), egui::StrokeKind::Inside);
     look::focus_ring(ui, t, cell, &resp, look::RADIUS_CARD);
     let inner = cell.shrink(CELL_PAD);
@@ -1224,7 +1224,7 @@ fn status_line(ui: &egui::Ui, t: &Tokens, book: &Book, rect: Rect) {
         painter.text(pos2(rect.left(), y), Align2::LEFT_CENTER, "done", font, t.text_muted);
     } else if book.is_reading() {
         let bar = Rect::from_min_size(pos2(rect.left(), y - 1.5), vec2(BAR_WIDTH.min(rect.width() / 2.0), 3.0));
-        painter.rect_filled(bar, CornerRadius::same(2), look::Surfaces::of(t).track);
+        painter.rect_filled(bar, CornerRadius::same(2), t.surfaces.track);
         let fill = Rect::from_min_size(bar.min, vec2(bar.width() * book.progress.clamp(0.0, 1.0) as f32, bar.height()));
         painter.rect_filled(fill, CornerRadius::same(2), t.accent);
         let percent = format!("{}%", (book.progress * 100.0).round() as u32);
@@ -1316,7 +1316,7 @@ fn tag_pills(ui: &egui::Ui, t: &Tokens, names: &[&str], max_width: f32) -> Pills
 
 /// Paints `pills` left to right from `left_top`: a rounded floating chip each, muted text.
 fn paint_pills(ui: &egui::Ui, t: &Tokens, pills: &Pills, left_top: egui::Pos2) {
-    let fill = look::Surfaces::of(t).floating;
+    let fill = t.surfaces.floating;
     let mut x = left_top.x;
     for galley in &pills.galleys {
         let rect = Rect::from_min_size(pos2(x, left_top.y), vec2(galley.size().x + 2.0 * PILL_PAD, PILL_HEIGHT));
@@ -1399,7 +1399,7 @@ fn tags_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, book: &Book, actions: &mu
 /// while it isn't decoded: radius 4, the S shadow and a faint light edge (§2).
 fn paint_cover(app: &mut PdfCraftApp, ui: &egui::Ui, t: &Tokens, rect: Rect, book: &Book) {
     let radius = CornerRadius::same(COVER_RADIUS);
-    ui.painter().add(look::SHADOW_S.as_shape(rect, radius));
+    ui.painter().add(t.surfaces.shadow_card.as_shape(rect, radius));
     match cover_texture(app, ui.ctx(), book) {
         Some(texture) => {
             let size = texture.size_vec2();

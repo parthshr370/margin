@@ -284,7 +284,7 @@ pub(crate) fn progress(app: &PdfCraftApp, ctx: &egui::Context, notice: &crate::w
                     info
                 });
                 let radius = egui::CornerRadius::same((PROGRESS_BAR / 2.0) as u8);
-                ui.painter().rect_filled(track, radius, look::Surfaces::of(&t).track);
+                ui.painter().rect_filled(track, radius, t.surfaces.track);
                 let done = Rect::from_min_size(track.min, egui::vec2(track.width() * shown, track.height()));
                 ui.painter().rect_filled(done, radius, t.accent);
                 if notice.cancellable {

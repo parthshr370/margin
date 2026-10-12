@@ -1,6 +1,7 @@
-//! Margin's keyboard (Margin flavor only): `<config>/settings.jsonc` and `<config>/keymap.jsonc`
-//! loaded through `margin-config`, kept live by [`SettingsWatch`], and every keystroke resolved
-//! against the compiled keymap for the focused context stack.
+//! Margin's keyboard and config files (Margin flavor only): `<config>/settings.jsonc`,
+//! `<config>/keymap.jsonc` and the theme files (`themes.json`, `themes/*.json`) loaded through
+//! `margin-config`, kept live by [`SettingsWatch`], and every keystroke resolved against the
+//! compiled keymap for the focused context stack.
 //!
 //! Hooks (listed in the plan's RESKIN-HOOKS.md): `registry_shortcuts` calls [`dispatch`] first and
 //! keeps PdfCraft's static shortcut only where [`MarginKeys::falls_back`] says the keymap leaves
@@ -25,6 +26,7 @@ use pdfcraft_engine::commands::{self, CommandSpec, Shortcut};
 use serde_json::Value;
 
 use super::settings_watch::SettingsWatch;
+use super::themes::Themes;
 use super::{reading, scroll_step};
 use crate::canvas::{DocView, Fit, PageLayout};
 use crate::{PdfCraftApp, QuickTool};
@@ -63,6 +65,12 @@ pub struct MarginKeys {
     /// Changes whenever the keymap is loaded or reloaded, so what shows its keys (the macOS menu
     /// bar) knows to read them again.
     revision: u64,
+    /// The revision and name of the theme `margin::themes::sync` installed last.
+    pub(crate) applied_theme: Option<(u64, String)>,
+    /// Config files open in the system's editor; off in tests that click "Open settings file".
+    editor_disabled: bool,
+    /// The config file opened last (whether or not an editor was launched).
+    last_opened: Option<PathBuf>,
 }
 
 /// One keystroke and what the keymap made of it.
@@ -88,6 +96,8 @@ struct Loaded {
     /// First keystrokes some binding or unbind uses.
     bound_strokes: HashSet<String>,
     watch: Option<SettingsWatch>,
+    /// Every theme Margin can show, resolved.
+    themes: Themes,
     /// What the files said at the last load; `None` without a config folder.
     files: Option<Files>,
 }
@@ -100,12 +110,14 @@ struct Files {
     settings: LoadedSettings,
     /// The keymap's text, `None` without one, or why it couldn't be read.
     keymap: Result<Option<String>, String>,
+    /// `themes.json` and `themes/*.json`.
+    themes: Vec<margin_config::theme::ThemeSource>,
 }
 
 impl Files {
     fn read(dir: &Path) -> Self {
         let keymap = margin_config::read_capped(&dir.join(margin_config::KEYMAP_FILE), margin_config::MAX_SETTINGS_BYTES);
-        Self { settings: Settings::load(dir), keymap }
+        Self { settings: Settings::load(dir), keymap, themes: margin_config::theme::read_theme_sources(dir) }
     }
 }
 
@@ -139,6 +151,31 @@ impl MarginKeys {
     /// Problems of the last load.
     pub(crate) fn problems(&self) -> &[Problem] {
         self.loaded.as_ref().map_or(&[], |loaded| &loaded.problems)
+    }
+
+    /// Every theme Margin can show: the built-ins until `<config>` is read.
+    pub fn themes(&self) -> &Themes {
+        match &self.loaded {
+            Some(loaded) => &loaded.themes,
+            None => Themes::builtin(),
+        }
+    }
+
+    /// Opens config files without launching the system's editor (tests); the file is still made
+    /// and recorded ([`Self::last_opened_file`]).
+    pub fn disable_editor(&mut self) {
+        self.editor_disabled = true;
+    }
+
+    /// The config file `settings.open`, `themes.open` and the like opened last.
+    pub fn last_opened_file(&self) -> Option<&Path> {
+        self.last_opened.as_deref()
+    }
+
+    /// Records `path` as opened; whether the system's editor should open it.
+    pub(crate) fn note_opened(&mut self, path: &Path) -> bool {
+        self.last_opened = Some(path.to_path_buf());
+        !self.editor_disabled
     }
 
     /// Keys of a chord in progress.
@@ -231,6 +268,7 @@ impl Loaded {
             bound_ids: HashSet::new(),
             bound_strokes: HashSet::new(),
             watch,
+            themes: Themes::builtin().clone(),
             files: None,
         };
         let problems = loaded.reload();
@@ -243,8 +281,12 @@ impl Loaded {
     }
 
     /// After a change event: reloads unless the files say what they said at the last load.
-    /// `None` when nothing changed.
+    /// `None` when nothing changed. The themes folder is watched again first, in case the event
+    /// was its making.
     fn reload_if_changed(&mut self) -> Option<Vec<Problem>> {
+        if let (Some(watch), Some(dir)) = (self.watch.as_mut(), self.dir.as_deref()) {
+            watch.watch_themes(dir);
+        }
         let files = self.dir.as_deref().map(Files::read);
         (files != self.files).then(|| self.apply(files))
     }
@@ -262,6 +304,11 @@ impl Loaded {
                 Err(message) => problems.push(problem(&shown, "", format!("{message}; file ignored"), Severity::Error)),
             }
         }
+        let settings_file = self.dir.as_deref().map(|dir| dir.join(margin_config::SETTINGS_FILE).display().to_string()).unwrap_or_default();
+        let sources = files.as_ref().map_or(&[][..], |files| &files.themes[..]);
+        let (themes, theme_problems) = Themes::load(sources, &self.settings, &settings_file);
+        self.themes = themes;
+        problems.extend(theme_problems);
         let keys = &self.settings.keys;
         self.compiled = self.registry.as_ref().map(|registry| {
             let mut sources = Vec::with_capacity(2);
@@ -325,8 +372,9 @@ fn ensure_loaded(app: &mut PdfCraftApp, ctx: &egui::Context) {
     report(app, &problems, false);
 }
 
-/// First run: the commented `settings.jsonc` and `keymap.jsonc`; every run: the schemas the
-/// files point editors at (rewritten only when they changed).
+/// First run: the commented `settings.jsonc`, `keymap.jsonc` and `themes.json`; every run:
+/// `default-settings.jsonc` and the schemas the files point editors at (rewritten only when
+/// they changed).
 fn write_config_files(dir: &Path, registry: Option<&Registry>) -> Vec<Problem> {
     let mut problems = Vec::new();
     let mut fail = |path: &Path, err: std::io::Error| {
@@ -337,24 +385,27 @@ fn write_config_files(dir: &Path, registry: Option<&Registry>) -> Vec<Problem> {
         fail(&schemas, err);
         return problems;
     }
-    let mut first_run = vec![(dir.join(margin_config::SETTINGS_FILE), margin_config::schema::first_run_settings_jsonc())];
+    let mut first_run = vec![
+        (dir.join(margin_config::SETTINGS_FILE), margin_config::schema::first_run_settings_jsonc()),
+        (dir.join(margin_config::THEMES_FILE), margin_config::theme::first_run_themes_json()),
+    ];
     if let Some(registry) = registry {
         first_run.push((dir.join(margin_config::KEYMAP_FILE), margin_config::schema::first_run_keymap_jsonc(registry)));
     }
     for (path, text) in first_run {
-        let created = std::fs::OpenOptions::new().write(true).create_new(true).open(&path);
-        match created.and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes())) {
-            Ok(()) => log::info!("wrote {}", path.display()),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(err) => fail(&path, err),
+        if let Err(err) = write_if_missing(&path, &text) {
+            fail(&path, err);
         }
     }
-    let generated =
-        [("settings.schema.json", margin_config::schema::settings_schema()), ("keymap.schema.json", margin_config::schema::keymap_schema())];
-    for (name, schema) in generated {
-        let path = schemas.join(name);
-        // A `Value` always serialises; an empty file would only lose editor completion.
-        let text = serde_json::to_string_pretty(&schema).unwrap_or_default();
+    // A `Value` always serialises; an empty file would only lose editor completion.
+    let pretty = |schema: serde_json::Value| serde_json::to_string_pretty(&schema).unwrap_or_default();
+    let generated = [
+        (schemas.join("settings.schema.json"), pretty(margin_config::schema::settings_schema())),
+        (schemas.join("keymap.schema.json"), pretty(margin_config::schema::keymap_schema())),
+        (schemas.join(margin_config::THEME_SCHEMA_FILE), pretty(margin_config::schema::theme_schema())),
+        (dir.join(margin_config::schema::DEFAULT_SETTINGS_FILE), margin_config::schema::default_settings_jsonc()),
+    ];
+    for (path, text) in generated {
         if std::fs::read_to_string(&path).is_ok_and(|old| old == text) {
             continue;
         }
@@ -363,6 +414,19 @@ fn write_config_files(dir: &Path, registry: Option<&Registry>) -> Vec<Problem> {
         }
     }
     problems
+}
+
+/// Writes `text` to `path` unless the file exists: a first-run file never replaces the user's.
+pub(crate) fn write_if_missing(path: &Path, text: &str) -> std::io::Result<()> {
+    let created = std::fs::OpenOptions::new().write(true).create_new(true).open(path);
+    match created.and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes())) {
+        Ok(()) => {
+            log::info!("wrote {}", path.display());
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Logs every problem and shows the first in a notice (a bad value says which file, line and key,
@@ -931,7 +995,10 @@ mod tests {
         for entry in registry.margin_entries() {
             let id = entry.id.as_str();
             assert!(
-                matches!(id, "app.close_layer" | "app.key_context" | "reader.tool.select") || is_view_command(id) || CHROME_COMMANDS.contains(&id),
+                matches!(id, "app.close_layer" | "app.key_context" | "reader.tool.select")
+                    || is_view_command(id)
+                    || CHROME_COMMANDS.contains(&id)
+                    || super::super::config_files::IDS.contains(&id),
                 "{id} is registered but run() ignores it"
             );
         }
@@ -958,6 +1025,7 @@ mod tests {
                 bound_strokes: bindings.iter().filter_map(|b| b.keys.first().cloned()).collect(),
                 compiled: Some(compiled),
                 watch: None,
+                themes: Themes::builtin().clone(),
                 files: None,
             }),
             ..MarginKeys::default()

@@ -11,8 +11,11 @@
 //! [`CompiledKeymap`]; [`resolve::step`] matches a keystroke against it for a context stack.
 //!
 //! Sidecars: [`Sidecar`] is the v1 file format and [`store`] reads and writes it; [`marks`]
-//! merges two writers' highlights, notes and bookmarks and writes them into a PDF copy. Theme
-//! and profile file formats are here too; nothing loads them yet.
+//! merges two writers' highlights, notes and bookmarks and writes them into a PDF copy.
+//!
+//! Themes: [`theme`] reads theme families in Zed's format (`<config>/themes.json`,
+//! `<config>/themes/*.json`), checks their style keys and resolves `extends`. The profile file
+//! format is here too; nothing loads it yet.
 //!
 //! Library and stats (desktop only): [`library`] keeps `<data>/library.sqlite` (books, covers,
 //! collections, tags, bibliographic details) and scans folders as a cancellable job;
@@ -56,7 +59,7 @@ mod sidecar;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stats;
 pub mod store;
-mod theme;
+pub mod theme;
 mod validate;
 #[cfg(test)]
 mod vectors;
@@ -77,10 +80,11 @@ pub use profile::{Profile, ProfileMatch};
 pub use registry::{CommandEntry, CommandId, CommandInfo, Group, MARGIN_NAMESPACES, Registry, Source};
 pub use settings::{
     ExportTarget, FindOptions, Fit, KeymapBase, Keys, Layout, Library, LibrarySort, LibraryView, NoteColor, NoteUpdateMode, Notes, PageColor, Rail,
-    RailSide, Reader, SETTINGS_SCHEMA_URL, SETTINGS_VERSION, Settings, Sidebar, SidebarTab, Stats, SynctexClick, Ui, View,
+    RailSide, Reader, SETTINGS_SCHEMA_URL, SETTINGS_VERSION, Settings, Sidebar, SidebarTab, Stats, SynctexClick, ThemeMode, ThemeModes, ThemeSetting,
+    ThemeStyle, Ui, View,
 };
 pub use sidecar::{
     Bookmark, Highlight, HighlightSource, HighlightStyle, Locator, PageNote, PdfAnnot, Progress, Sidecar, SidecarDoc, SidecarFormat, SidecarObsidian,
     Trim, TrimMargins,
 };
-pub use theme::{Appearance, DEFAULT_THEME, Theme};
+pub use theme::{Appearance, DEFAULT_THEME, LIGHT_THEME, THEME_SCHEMA_FILE, THEMES_DIR, THEMES_FILE};

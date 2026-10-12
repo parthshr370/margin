@@ -13,7 +13,7 @@ use egui::{Align, Align2, CornerRadius, FontId, Galley, Layout, Rect, RichText, 
 use margin_config::library::Book;
 use margin_config::stats::{BookTotal, DayStats, HEAT_LEVELS, Overview, Streaks, civil, day_number, heat_level, weekday};
 
-use super::look::{self, Button, ButtonSize, Surfaces};
+use super::look::{self, Button, ButtonSize};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
@@ -365,7 +365,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, sheet: &mut Sheet,
 fn section_title(ui: &mut egui::Ui, t: &Tokens, title: &str, detail: Option<&str>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = INNER_GAP;
-        ui.label(RichText::new(title).font(theme::semibold(SECTION_TITLE_SIZE)).color(look::Surfaces::of(t).heading));
+        ui.label(RichText::new(title).font(theme::semibold(SECTION_TITLE_SIZE)).color(t.surfaces.heading));
         if let Some(detail) = detail {
             ui.label(RichText::new(detail).font(theme::regular(SMALL_TEXT)).color(t.text_muted));
         }
@@ -596,7 +596,7 @@ fn weekday_gutter(ui: &mut egui::Ui, t: &Tokens, height: f32) {
 /// The heatmap. One tab stop: arrows move the keyboard day, Enter pins its card, Esc closes it;
 /// pointing at a day shows its card, clicking pins it.
 fn calendar(ui: &mut egui::Ui, t: &Tokens, overview: &Overview, grid: &CalendarGrid, cursor: &mut Option<i64>, pinned: &mut bool) {
-    let heat = Surfaces::of(t).heat;
+    let heat = t.surfaces.heat;
     let (rect, resp) = ui.allocate_exact_size(grid.size(), Sense::click());
     let origin = rect.min;
     let painter = ui.painter_at(rect);
@@ -668,7 +668,7 @@ fn placed_month_labels(painter: &egui::Painter, t: &Tokens, grid: &CalendarGrid,
 
 /// "Less", the five levels, "More"; its tooltip says what the colours mean.
 fn legend(ui: &mut egui::Ui, t: &Tokens, busiest: i64) {
-    let heat = Surfaces::of(t).heat;
+    let heat = t.surfaces.heat;
     let painter = ui.painter();
     let less = painter.layout_no_wrap("Less".to_owned(), theme::regular(LABEL_TEXT), t.text_muted);
     let more = painter.layout_no_wrap("More".to_owned(), theme::regular(LABEL_TEXT), t.text_muted);
@@ -763,7 +763,7 @@ fn week_section(ui: &mut egui::Ui, t: &Tokens, overview: &Overview) {
 /// Monday to Sunday: a bar per day with its time above, a dash for a day without reading, an
 /// em dash for a day still to come; today in orange, marked "Today" with a dot.
 fn week_chart(ui: &mut egui::Ui, t: &Tokens, overview: &Overview) {
-    let heat = Surfaces::of(t).heat;
+    let heat = t.surfaces.heat;
     let monday = overview.monday();
     let seconds: Vec<i64> = (0..DAYS_PER_WEEK).map(|offset| overview.seconds_on(monday + offset)).collect();
     let busiest = seconds.iter().copied().max().unwrap_or(0);
@@ -1002,7 +1002,7 @@ fn progress_cell(ui: &egui::Ui, t: &Tokens, cell: Rect, entry: Option<&Book>) {
     ui.painter().galley(pos2(label_left, cell.center().y - label.size().y / 2.0), label, t.text);
     let track = Rect::from_min_size(pos2(label_left - INNER_GAP - PROGRESS_TRACK.x, cell.center().y - PROGRESS_TRACK.y / 2.0), PROGRESS_TRACK);
     let radius = CornerRadius::same(CELL_RADIUS);
-    ui.painter().rect_filled(track, radius, Surfaces::of(t).track);
+    ui.painter().rect_filled(track, radius, t.surfaces.track);
     let fill = Rect::from_min_size(track.min, vec2(track.width() * share as f32, track.height()));
     ui.painter().rect_filled(fill, radius, t.accent);
 }

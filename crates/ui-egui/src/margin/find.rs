@@ -504,7 +504,7 @@ fn hit_row(ui: &mut egui::Ui, t: &Tokens, view: &DocView, info: &DocInfo, i: usi
     let marked = TextFormat {
         font_id: theme::medium(SNIPPET_TEXT),
         color: if current { t.accent } else { t.text },
-        background: t.accent_soft,
+        background: t.surfaces.find_match,
         ..Default::default()
     };
     let mut job = LayoutJob::default();

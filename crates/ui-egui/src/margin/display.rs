@@ -22,12 +22,15 @@ use crate::canvas::{Fit, PageLayout};
 use crate::theme::{self, Tokens};
 use crate::{DocView, Flavor, PdfCraftApp, i18n};
 
+/// The name of the switch that ties the page colour to the theme (screen readers and tests).
+pub const FOLLOW_THEME_LABEL: &str = "Match the theme";
+
 /// A document's page colour choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DisplayState {
     pub color: PageColor,
-    /// Night while the system is dark, Paper while it is light. Picking a mode by hand turns it
-    /// off.
+    /// Night while the theme in use is dark, Paper while it is light. Picking a mode by hand turns
+    /// it off.
     pub follow_system: bool,
 }
 
@@ -38,13 +41,14 @@ impl Default for DisplayState {
 }
 
 impl DisplayState {
-    /// The page colour in effect: the saved one, with the mode following the system when asked
-    /// to and the system says.
-    pub fn effective(&self, system: Option<egui::Theme>) -> PageColor {
-        let mode = match (self.follow_system, system) {
-            (true, Some(egui::Theme::Dark)) => PageMode::Night,
-            (true, Some(egui::Theme::Light)) => PageMode::Paper,
-            _ => self.color.mode,
+    /// The page colour in effect: the saved one, with the mode matching the theme in use (dark
+    /// theme: Night, light theme: Paper) when asked to. The theme itself follows the system when
+    /// `theme.mode` is "system".
+    pub fn effective(&self, theme_dark: bool) -> PageColor {
+        let mode = match (self.follow_system, theme_dark) {
+            (true, true) => PageMode::Night,
+            (true, false) => PageMode::Paper,
+            (false, _) => self.color.mode,
         };
         PageColor { mode, ..self.color }.clamped()
     }
@@ -100,7 +104,7 @@ impl DisplayState {
 /// rendered.
 pub fn page_color_for(app: &PdfCraftApp, index: usize, ctx: &egui::Context) -> Option<PageColor> {
     let view = app.views.get(index).filter(|_| app.flavor == Flavor::Margin)?;
-    Some(view.margin.display.effective(ctx.system_theme()))
+    Some(view.margin.display.effective(Tokens::get(ctx).dark()))
 }
 
 /// Pages within this distance of the current page keep their source pixels for recolouring.
@@ -314,12 +318,8 @@ fn body(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, t: &Tokens) {
     trim_rows(&mut app.views[index], &pages.unwrap_or_default(), ui, t);
     section_divider(ui, t);
     let state = &mut app.views[index].margin.display;
-    let follow_sub = if state.follow_system {
-        i18n::t("Night when the system is dark, Paper when light")
-    } else {
-        i18n::t("Off: the page color stays as you set it")
-    };
-    if switch_row(ui, t, i18n::t("Follow system dark mode"), Some(follow_sub), state.follow_system, true) {
+    let follow_sub = if state.follow_system { "Night with a dark theme, Paper with a light one" } else { "Off: the page color stays as you set it" };
+    if switch_row(ui, t, FOLLOW_THEME_LABEL, Some(follow_sub), state.follow_system, true) {
         state.follow_system = !state.follow_system;
     }
     if let Some(row) = default_row {
@@ -359,7 +359,7 @@ fn section_divider(ui: &mut egui::Ui, t: &Tokens) {
 
 /// Swatches, the mode's description, keep figure hues, brightness, contrast and their reset.
 fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
-    let shown = state.effective(ui.ctx().system_theme());
+    let shown = state.effective(t.dark());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
         let w = (POPOVER_WIDTH - GAP * 4.0) / 5.0;
@@ -588,7 +588,7 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: 
     if hovered > 0.0 {
         painter.rect_filled(rect, CornerRadius::same(SWATCH_RADIUS), t.hover.gamma_multiply(hovered));
     }
-    let surfaces = look::Surfaces::of(t);
+    let surfaces = t.surfaces;
     if picked > 0.0 {
         let stroke = look::edge_stroke(surfaces.selected_edge.gamma_multiply(picked));
         painter.rect(rect, CornerRadius::same(SWATCH_RADIUS), t.selected.gamma_multiply(picked), stroke, egui::StrokeKind::Inside);
@@ -674,11 +674,11 @@ mod tests {
     #[test]
     fn follow_system_drives_the_mode_until_a_pick() {
         let mut s = DisplayState::default();
-        assert_eq!(s.effective(Some(egui::Theme::Light)).mode, PageMode::Paper);
-        assert_eq!(s.effective(Some(egui::Theme::Dark)).mode, PageMode::Night);
+        assert_eq!(s.effective(false).mode, PageMode::Paper);
+        assert_eq!(s.effective(true).mode, PageMode::Night);
         s.pick(PageMode::Sepia);
         assert!(!s.follow_system);
-        assert_eq!(s.effective(Some(egui::Theme::Dark)).mode, PageMode::Sepia);
+        assert_eq!(s.effective(true).mode, PageMode::Sepia);
     }
 
     #[test]

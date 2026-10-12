@@ -10,16 +10,18 @@ pub enum ThemeKind {
     #[default]
     Light,
     Dark,
-    /// Margin's dark reader palette (`Flavor::Margin` shows it where PdfCraft shows Dark).
+    /// Margin's palette (`Flavor::Margin` shows it where PdfCraft shows Light or Dark): a built-in
+    /// or user theme, light or dark ([`Tokens::dark`] says which), resolved in `margin::themes`.
     Margin,
 }
 
 impl ThemeKind {
-    /// What `flavor` shows for this kind: Margin wears its own palette instead of Dark.
+    /// What `flavor` shows for this kind: Margin always wears its own themes, which
+    /// `settings.jsonc` picks.
     pub fn for_flavor(self, flavor: crate::Flavor) -> Self {
-        match (flavor, self) {
-            (crate::Flavor::Margin, ThemeKind::Dark) => ThemeKind::Margin,
-            _ => self,
+        match flavor {
+            crate::Flavor::Margin => ThemeKind::Margin,
+            crate::Flavor::PdfCraft => self,
         }
     }
 }
@@ -77,11 +79,15 @@ pub struct Tokens {
     pub badge_new: Color32,
     pub page_shadow: Color32,
     pub radius: u8,
+    /// Light text on dark surfaces.
+    pub(crate) is_dark: bool,
+    /// Margin's levels, states and text roles beyond the ladder above.
+    pub surfaces: crate::margin::look::Surfaces,
 }
 
 impl Tokens {
     pub fn for_kind(kind: ThemeKind) -> Self {
-        match kind {
+        let mut tokens = match kind {
             ThemeKind::Light => Self {
                 kind,
                 titlebar: Color32::from_rgb(0xE9, 0xE9, 0xEB),
@@ -105,6 +111,8 @@ impl Tokens {
                 badge_new: Color32::from_rgb(0x1B, 0x63, 0xE0),
                 page_shadow: Color32::from_black_alpha(34),
                 radius: 6,
+                is_dark: false,
+                surfaces: Default::default(),
             },
             ThemeKind::Dark => Self {
                 kind,
@@ -129,52 +137,22 @@ impl Tokens {
                 badge_new: Color32::from_rgb(0x3D, 0x7D, 0xEE),
                 page_shadow: Color32::from_black_alpha(120),
                 radius: 6,
+                is_dark: true,
+                surfaces: Default::default(),
             },
-            // The owner's Black palette (plan/R10-SURFACES.md §2 structure, theme lab "Black"):
-            // pure black under the pages, the library and the header/footer strips, #0a0a0a for
-            // permanent side panes, #111111 for cards. Regions part by fill alone: the frame edge
-            // is transparent (no stroke is drawn), and #161616 dividers rule rows and sections.
-            // The floating level, control outlines, scrim and the selected roles are Margin's
-            // own, in `margin::look`. Orange is only a signal: `accent` fills, `accent_text`
-            // colours text and active icons.
-            ThemeKind::Margin => Self {
-                kind,
-                titlebar: Color32::from_rgb(0x00, 0x00, 0x00),
-                chrome: Color32::from_rgb(0x00, 0x00, 0x00),
-                panel: Color32::from_rgb(0x0A, 0x0A, 0x0A),
-                pasteboard: Color32::from_rgb(0x00, 0x00, 0x00),
-                card: Color32::from_rgb(0x11, 0x11, 0x11),
-                border: Color32::TRANSPARENT,
-                divider: Color32::from_rgb(0x16, 0x16, 0x16),
-                text: Color32::from_rgb(0xEE, 0xEE, 0xEE),
-                text_muted: Color32::from_rgb(0x80, 0x80, 0x80),
-                text_faint: Color32::from_rgb(0x5A, 0x5A, 0x5A),
-                icon: Color32::from_rgb(0x8A, 0x8A, 0x8A),
-                // Hover, selected and pressed are three neutral steps; a selected item's label
-                // and icon carry the orange (`margin::look::Surfaces::selected_text`).
-                hover: Color32::from_rgb(0x18, 0x18, 0x18),
-                pressed: Color32::from_rgb(0x26, 0x26, 0x26),
-                selected: Color32::from_rgb(0x1E, 0x1E, 0x1E),
-                accent: Color32::from_rgb(0xFF, 0x5F, 0x1F),
-                accent_text: Color32::from_rgb(0xFF, 0x6A, 0x33),
-                // The accent at 22 % (text selection).
-                accent_soft: Color32::from_rgba_unmultiplied(0xFF, 0x5F, 0x1F, 0x38),
-                field: Color32::from_rgb(0x05, 0x05, 0x05),
-                badge_new: Color32::from_rgb(0xFF, 0x5F, 0x1F),
-                page_shadow: Color32::from_black_alpha(0x78),
-                // A control's corner radius (rows, buttons, inputs).
-                radius: 6,
-            },
-        }
+            ThemeKind::Margin => return crate::margin::themes::margin_dark(),
+        };
+        tokens.surfaces = crate::margin::look::Surfaces::derived(&tokens);
+        tokens
     }
 
     pub fn get(ctx: &egui::Context) -> Self {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
-    /// Light text on dark surfaces (Dark and Margin).
+    /// Light text on dark surfaces.
     pub fn dark(&self) -> bool {
-        matches!(self.kind, ThemeKind::Dark | ThemeKind::Margin)
+        self.is_dark
     }
 }
 
@@ -275,10 +253,17 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 
+/// Installs `kind`'s colours (Margin's: the built-in Margin Dark).
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+    apply_tokens(ctx, &Tokens::for_kind(kind));
+}
+
+/// Installs `t` as the app's colours and egui's style: what every widget reads through
+/// [`Tokens::get`].
+pub fn apply_tokens(ctx: &egui::Context, t: &Tokens) {
     // egui must use the same theme for popup/menu styles as our custom chrome.
-    ctx.set_theme(if kind == ThemeKind::Light { egui::Theme::Light } else { egui::Theme::Dark });
-    let t = Tokens::for_kind(kind);
+    ctx.set_theme(if t.dark() { egui::Theme::Dark } else { egui::Theme::Light });
+    let t = *t;
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.panel;
@@ -308,13 +293,13 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.widgets.active.weak_bg_fill = t.pressed;
     v.widgets.active.bg_fill = t.pressed;
     v.widgets.open.weak_bg_fill = t.hover;
-    if kind == ThemeKind::Margin {
+    if t.kind == ThemeKind::Margin {
         // No egui default stroke colours in Margin: a pressed widget gets no white outline, an
         // open menu button the theme's edge (none in the Black palette), and the text cursor is
-        // the accent.
+        // the focus colour.
         v.widgets.active.bg_stroke = Stroke::NONE;
         v.widgets.open.bg_stroke = crate::margin::look::edge_stroke(t.border);
-        v.text_cursor.stroke = Stroke::new(2.0, t.accent);
+        v.text_cursor.stroke = Stroke::new(2.0, t.surfaces.focus);
         // Windows, menus and popups are Margin's floating level with the theme's edge and a shadow
         // (plan/R10-SURFACES.md §2); a focused text field gets the 2 px accent outline.
         crate::margin::look::style_floating(&mut v, &t);
@@ -380,17 +365,21 @@ mod tests {
     #[test]
     fn text_is_readable_on_every_surface() {
         // #76: the faintest text (hints, zoom level, captions) was 3.3:1 in the light theme.
-        for kind in [ThemeKind::Light, ThemeKind::Dark, ThemeKind::Margin] {
-            let t = Tokens::for_kind(kind);
-            for (name, fg) in [("text", t.text), ("text_muted", t.text_muted), ("text_faint", t.text_faint)] {
+        let palettes = [Tokens::for_kind(ThemeKind::Light), Tokens::for_kind(ThemeKind::Dark), Tokens::for_kind(ThemeKind::Margin)]
+            .into_iter()
+            .chain([crate::margin::themes::margin_light()]);
+        for t in palettes {
+            let surfaces = t.surfaces;
+            for (name, fg) in [("text", t.text), ("text_muted", t.text_muted), ("text_faint", t.text_faint), ("heading", surfaces.heading)] {
                 // Margin's faint grey (#5a5a5a, about 3:1) is the owner's choice for hints, kept
                 // on purpose; its text and muted text still pass.
-                if kind == ThemeKind::Margin && name == "text_faint" {
+                if t.kind == ThemeKind::Margin && name == "text_faint" {
                     continue;
                 }
-                for bg in [t.chrome, t.panel, t.card, t.pasteboard] {
+                for bg in [t.chrome, t.panel, t.card, t.pasteboard, surfaces.floating, surfaces.status_bar] {
                     let r = contrast(fg, bg);
-                    assert!(r >= 4.5, "{kind:?} {name} on {bg:?}: {r:.2}:1, WCAG AA needs 4.5:1");
+                    let label = if t.dark() { "dark" } else { "light" };
+                    assert!(r >= 4.5, "{:?} {label} {name} on {bg:?}: {r:.2}:1, WCAG AA needs 4.5:1", t.kind);
                 }
             }
         }

@@ -76,8 +76,9 @@ impl Settings {
         };
         let defaults: &Value = &DEFAULTS;
         let mut validator = Validator { root: &SCHEMA, fallback: defaults, positions: &parsed.positions, file, problems: Vec::new() };
-        let cleaned = validator.document(user);
+        let mut cleaned = validator.document(user);
         let mut problems = validator.problems;
+        problems.extend(crate::theme::check_overrides(&mut cleaned, &parsed.positions, file));
         // Objects iterate in key order, not file order: report in file order.
         problems.sort_by_key(|problem| (problem.line, problem.col));
         let merged = merge(defaults.clone(), cleaned);
@@ -100,8 +101,9 @@ impl Settings {
         let below = serde_json::to_value(self).unwrap_or(Value::Null);
         let positions = jsonc::Positions::default();
         let mut validator = Validator { root: &SCHEMA, fallback: &below, positions: &positions, file, problems: Vec::new() };
-        let cleaned = validator.document(layer.clone());
+        let mut cleaned = validator.document(layer.clone());
         let mut problems = validator.problems;
+        problems.extend(crate::theme::check_overrides(&mut cleaned, &positions, file));
         match serde_json::from_value(merge(below, cleaned)) {
             Ok(settings) => LoadedSettings { settings, problems },
             Err(err) => {

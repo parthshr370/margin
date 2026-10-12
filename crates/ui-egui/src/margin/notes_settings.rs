@@ -304,10 +304,25 @@ fn text_setting(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, setting: N
         let line = ui.fonts_mut(|fonts| fonts.row_height(&theme::regular(FIELD_TEXT)));
         let height = if rows == 1 { CONTROL_HEIGHT } else { rows as f32 * line + 2.0 * look::GAP };
         look::field_well(ui, input_id, vec2(editor_width, height), |ui| {
-            egui::ScrollArea::vertical().id_salt(input_id.with("scroll")).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
-                let editor =
-                    if rows == 1 { egui::TextEdit::singleline(&mut draft) } else { egui::TextEdit::multiline(&mut draft).desired_rows(rows) };
-                let editor = editor
+            if rows == 1 {
+                // Straight in the well, which centres it: inside a scroll area the line sat at
+                // the well's bottom edge and was cut off.
+                let editor = egui::TextEdit::singleline(&mut draft)
+                    .id(input_id)
+                    .frame(egui::Frame::NONE)
+                    .margin(Vec2::ZERO)
+                    .font(theme::regular(FIELD_TEXT))
+                    .desired_width(ui.available_width());
+                let field = ui.add(editor);
+                ui.ctx().accesskit_node_builder(field.id, |node| node.set_label(setting.name()));
+                return;
+            }
+            // The well's small step above and below the text, so the first line never touches
+            // its top edge; the rows scroll inside that.
+            let text_height = (height - 2.0 * look::GAP).max(line);
+            egui::ScrollArea::vertical().id_salt(input_id.with("scroll")).max_height(text_height).auto_shrink([false, false]).show(ui, |ui| {
+                let editor = egui::TextEdit::multiline(&mut draft)
+                    .desired_rows(rows)
                     .id(input_id)
                     .frame(egui::Frame::NONE)
                     .margin(Vec2::ZERO)

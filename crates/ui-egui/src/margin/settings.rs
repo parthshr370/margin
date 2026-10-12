@@ -7,20 +7,24 @@
 //! before. Pages and Fit are Margin's own document defaults: Margin opens every document from
 //! `settings.jsonc`'s `view` block, so these two rows write `view.layout` and `view.fit` there,
 //! through the same edit "Set as default" in the Display popover uses. PdfCraft's workspace mode
-//! and its page and zoom defaults have no row: Margin never shows them.
+//! and its page and zoom defaults have no row: Margin never shows them. Appearance writes
+//! settings.jsonc's `theme` (`theme_settings`); every other settings.jsonc key is edited in the
+//! file, which Appearance's buttons open.
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align, CornerRadius, Layout, Rect, RichText, Sense, Stroke, UiBuilder, Vec2, vec2};
 use margin_config::{Fit as DocFit, Layout as DocLayout};
 use serde_json::Value;
 
-use super::look::{self, ButtonSize, Segment, Surfaces};
+use super::look::{self, ButtonSize, Segment};
 use crate::theme::{self, Tokens};
 use crate::{Dialog, PdfCraftApp, i18n};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "notes_settings.rs"]
 mod notes_settings;
+#[path = "theme_settings.rs"]
+mod theme_settings;
 
 /// The sheet's width, and its distance from the window's edges when the window is smaller.
 const SHEET_WIDTH: f32 = 680.0;
@@ -197,6 +201,8 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             app.session.set_javascript(!on);
         }
     });
+
+    theme_settings::show(app, ui, t);
 }
 
 /// A section's small-caps label in the section label colour, after the section gap.
@@ -286,7 +292,7 @@ fn language_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, name:
 /// A dropdown's button in Margin's input well: the base fill and the control outline, the
 /// accent while its list is open.
 fn field_style(ui: &mut egui::Ui, t: &Tokens) {
-    let edge = Surfaces::of(t).control_edge;
+    let edge = t.surfaces.control_edge;
     let spacing = ui.spacing_mut();
     spacing.interact_size.y = CONTROL_HEIGHT;
     spacing.button_padding.x = DROPDOWN_PAD_X;

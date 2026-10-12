@@ -20,8 +20,9 @@ pub const MARGIN_COMMANDS: &str = include_str!("../data/commands.jsonc");
 pub const MARGIN_COMMANDS_FILE: &str = "crates/margin-config/data/commands.jsonc";
 
 /// Namespaces Margin may add ids to (CU-CMD-1, ADR-0005), plus `annotation` (the owner's ids for
-/// acting on the selected comment; PdfCraft has no such namespace, its comment ids are `comment.*`).
-pub const MARGIN_NAMESPACES: &[&str] = &["app", "view", "reader", "library", "note", "annotation"];
+/// acting on the selected comment; PdfCraft has no such namespace, its comment ids are `comment.*`)
+/// and `settings`, `themes` and `keymap` (opening Margin's config files; PdfCraft has none).
+pub const MARGIN_NAMESPACES: &[&str] = &["app", "view", "reader", "library", "note", "annotation", "settings", "themes", "keymap"];
 
 /// Longest command id, in bytes (STD-RS-05).
 const MAX_ID_BYTES: usize = 128;
@@ -116,7 +117,7 @@ pub enum Group {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CommandEntry {
-    /// The id; only under app.*, view.*, reader.*, library.* or note.*.
+    /// The id; only under Margin's namespaces ([`MARGIN_NAMESPACES`]).
     pub id: CommandId,
     /// Palette and menu title.
     pub title: String,
