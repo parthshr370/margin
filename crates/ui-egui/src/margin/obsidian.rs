@@ -1100,9 +1100,14 @@ fn autoadd_row(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
     }
 }
 
+/// The width of each of two buttons that share the row's width equally.
+fn half_width(ui: &egui::Ui) -> f32 {
+    ((ui.available_width() - look::GAP) / 2.0).max(0.0)
+}
+
 /// "Copy all" and "Write to note", sharing the row's width equally.
 fn action_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
-    let width = ((ui.available_width() - look::GAP) / 2.0).max(0.0);
+    let width = half_width(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = look::GAP;
         let copy = look::Button::secondary(look::ButtonSize::Compact, "Copy all").icon("copy").fixed_width(width).show(ui);
@@ -1140,19 +1145,19 @@ const TARGETS: [ExportTarget; 5] =
     [ExportTarget::Obsidian, ExportTarget::Markdown, ExportTarget::Logseq, ExportTarget::ReadwiseCsv, ExportTarget::Json];
 /// The name screen readers (and tests) find the export target picker by.
 pub const TARGET_PICKER_NAME: &str = "Highlight export format";
-/// The Export button's label while an export runs, at its widest, so the button keeps one width.
-const EXPORTING_TEMPLATE: &str = "Exporting 000 / 000";
 
-/// The highlight export format (also what Copy all copies) and the Export menu, both compact
-/// dropdown buttons of a fixed width. A running export shows its progress in the Export button
-/// itself, so no row comes and goes in the box.
+/// The highlight export format (also what Copy all copies) and the Export menu, sharing the row's
+/// width equally like the row under them, so the box never grows past a narrow sidebar. A running
+/// export shows its progress in the Export button itself, so no row comes and goes in the box.
 fn export_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
+    let width = half_width(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = look::GAP;
-        let picker = look::Button::secondary(look::ButtonSize::Compact, target_label(notes.target)).trailing("chevron-down").name(TARGET_PICKER_NAME);
-        let labels = TARGETS.map(target_label);
-        let picker_width = picker.widest(ui, &labels);
-        let picker = picker.fixed_width(picker_width).show(ui);
+        let picker = look::Button::secondary(look::ButtonSize::Compact, target_label(notes.target))
+            .trailing("chevron-down")
+            .name(TARGET_PICKER_NAME)
+            .fixed_width(width)
+            .show(ui);
         let mut selected = notes.target;
         look::popover(&picker, egui::Id::new("margin-export-target")).show(|ui| {
             look::menu_body(ui);
@@ -1170,9 +1175,7 @@ fn export_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
             Some((done, total)) => format!("Exporting {done} / {total}"),
             None => "Export".to_owned(),
         };
-        let export = look::Button::secondary(look::ButtonSize::Compact, &label).trailing("chevron-down").name("Export");
-        let export_width = export.widest(ui, &["Export", EXPORTING_TEMPLATE]);
-        let export = export.fixed_width(export_width).show(ui);
+        let export = look::Button::secondary(look::ButtonSize::Compact, &label).trailing("chevron-down").name("Export").fixed_width(width).show(ui);
         egui::Popup::menu(&export).show(|ui| {
             look::menu_body(ui);
             if look::menu_row(ui, Some("file-output"), "Export highlights…", None, false).clicked() {

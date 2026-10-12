@@ -354,6 +354,42 @@ pub(crate) fn text_field(ui: &mut egui::Ui, id: egui::Id, text: &mut String, hin
     })
 }
 
+/// A search field's magnifier size.
+const SEARCH_ICON: f32 = 14.0;
+
+/// A pane's search field: a [`field_well`] `width` × [`BUTTON_HEIGHT`] with the magnifier, the
+/// text (named `name` for screen readers) and, while there is text, a clear button named
+/// `clear_name` inside it on the right. The well never changes size.
+pub(crate) fn search_field(ui: &mut egui::Ui, id: egui::Id, text: &mut String, hint: &str, name: &str, clear_name: &str, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    field_well(ui, id, vec2(width, BUTTON_HEIGHT), |ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        let (icon, _) = ui.allocate_exact_size(Vec2::splat(SEARCH_ICON), Sense::hover());
+        icons::paint(ui, icon, "search", SEARCH_ICON, t.text_muted);
+        let clear_room = if text.is_empty() { 0.0 } else { SMALL_BUTTON + GAP };
+        let previous = text.clone();
+        let edit = egui::TextEdit::singleline(text)
+            .id(id)
+            .hint_text(hint)
+            .font(theme::regular(FIELD_TEXT))
+            .frame(egui::Frame::NONE)
+            .margin(Vec2::ZERO)
+            .desired_width((ui.available_width() - clear_room).max(0.0));
+        let response = ui.add(edit);
+        let enabled = ui.is_enabled();
+        let current = text.as_str();
+        response.widget_info(|| {
+            let mut info = egui::WidgetInfo::text_edit(enabled, &previous, current, "");
+            info.label = Some(name.to_owned());
+            info
+        });
+        if !text.is_empty() && icon_button(ui, "x", SMALL_BUTTON, false, clear_name, None).clicked() {
+            text.clear();
+        }
+        response
+    })
+}
+
 /// A field's well at `size`, then `add` inside it (padded, left to right, centred), then the focus
 /// ring while the text field `id` has the keyboard focus: for fields with their own icon, count
 /// or buttons.
@@ -481,9 +517,10 @@ pub(crate) fn floating_banner<R>(ui: &mut egui::Ui, width: f32, close_name: Opti
 }
 
 /// A banner's contents `width` wide, frame included: `add` in a column, then the × when it has a
-/// `close_name` (the column keeps the ×'s room either way, so both states wrap alike).
+/// `close_name` (the column keeps the ×'s room either way, so both states wrap alike). The frame's
+/// edge is drawn inside its margin, so only the margin is taken off.
 fn banner_body<R>(ui: &mut egui::Ui, width: f32, close_name: Option<&str>, add: impl FnOnce(&mut egui::Ui) -> R) -> (R, bool) {
-    let inner_width = (width - 2.0 * f32::from(BANNER_PAD) - 2.0 * EDGE).max(0.0);
+    let inner_width = (width - 2.0 * f32::from(BANNER_PAD)).max(0.0);
     ui.set_width(inner_width);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
@@ -1061,7 +1098,24 @@ impl<'a> Button<'a> {
         Self { selected, ..self }
     }
 
-    /// Exactly `width` wide, its content centred and clipped (buttons sharing a row equally).
+    /// The label shortened with "…" to what fits beside the icons in a fixed-width button.
+    fn fitted_galley(&self, ui: &egui::Ui, galley: Option<std::sync::Arc<egui::Galley>>) -> Option<std::sync::Arc<egui::Galley>> {
+        let (Some(width), Some(full)) = (self.fixed_width, galley.as_ref()) else {
+            return galley;
+        };
+        let spec = self.size.spec();
+        let beside_label = self.content_width(Some(full)) - full.size().x;
+        let room = (width - 2.0 * spec.pad_x - beside_label).max(0.0);
+        if full.size().x <= room {
+            return galley;
+        }
+        let mut job = egui::text::LayoutJob::simple_singleline(self.label.to_owned(), theme::medium(spec.text), Color32::PLACEHOLDER);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        Some(ui.painter().layout_job(job))
+    }
+
+    /// Exactly `width` wide, its content centred; a label that does not fit ends in "…"
+    /// (buttons sharing a row equally).
     pub(crate) fn fixed_width(self, width: f32) -> Self {
         Self { fixed_width: Some(width), ..self }
     }
@@ -1108,7 +1162,7 @@ impl<'a> Button<'a> {
         let surfaces = Surfaces::of(&t);
         let spec = self.size.spec();
         let enabled = ui.is_enabled();
-        let galley = self.label_galley(ui);
+        let galley = self.fitted_galley(ui, self.label_galley(ui));
         let (rect, resp) = ui.allocate_exact_size(vec2(self.width_for(galley.as_deref()), spec.height), Sense::click());
         let name = self.name.unwrap_or(self.label);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, self.selected, name));

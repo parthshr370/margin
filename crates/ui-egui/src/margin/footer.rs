@@ -293,7 +293,10 @@ struct ZoomKeys {
 fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32], keys: &ZoomKeys) -> Option<(&'static str, Value)> {
     let mut command = None;
     let reads = reading::reads(view);
-    let group = ui.horizontal(|ui| {
+    // Its full height from the start: `ui.horizontal` starts a row at the default control height
+    // and grows it downward, which put the group below the footer's centre line and past the
+    // window's bottom edge.
+    let group = ui.allocate_ui_with_layout(vec2(ui.available_width(), ZOOM_BUTTON), Layout::left_to_right(Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         if look::icon_button(ui, "minus", ZOOM_BUTTON, false, "Zoom out", keys.zoom_out.as_deref()).clicked() {
             command = Some(("view.zoom.out", Value::Null));

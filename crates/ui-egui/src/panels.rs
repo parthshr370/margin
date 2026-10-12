@@ -553,7 +553,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 let search_id = egui::Id::new(("bookmark_search", id.0));
                 let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-                if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
+                if panel == RightPanel::Bookmarks && !info.outline.is_empty() && ember {
+                    // Margin's search well, like the Highlights pane's.
+                    let width = ui.available_width();
+                    let field_id = search_id.with("field");
+                    crate::margin::look::search_field(ui, field_id, &mut bookmark_query, "Search bookmarks", tl!("Search"), tl!("Clear"), width);
+                    ui.data_mut(|d| d.insert_temp(search_id, bookmark_query.clone()));
+                    ui.add_space(crate::margin::look::GAP);
+                } else if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
                     ui.horizontal(|ui| {
                         const CLEAR: f32 = 26.0;
                         let label = ui.label(tl!("Search"));

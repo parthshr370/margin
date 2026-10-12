@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use egui::{Align, Align2, Rect, Sense, vec2};
 use pdfcraft_render::{DocInfo, OutlineItem};
 
-use super::look::{self, ButtonSize, ROW_PAD};
+use super::look::{self, ROW_PAD};
 use super::sidebar::{ROW_HEIGHT, ROW_SPACING, empty};
 use super::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, links, reading};
 use crate::canvas::ViewPlace;
@@ -29,8 +29,6 @@ const TWISTY: f32 = 16.0;
 /// Text sizes: entry titles and their page labels.
 const TITLE_TEXT: f32 = 12.5;
 const LABEL_TEXT: f32 = 11.0;
-/// The action toolbar under the title (§6: 40 high, inset by the small step).
-const TOOLBAR_HEIGHT: f32 = 40.0;
 
 /// One document's Contents list between frames.
 #[derive(Clone, Default)]
@@ -50,7 +48,7 @@ struct Tree {
     own_jump: bool,
 }
 
-/// The pane's actions under its title.
+/// The pane's actions in its header.
 #[derive(Default)]
 struct Links {
     reveal: bool,
@@ -62,18 +60,23 @@ struct Links {
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize) {
     let Some((view, doc)) = app.active_ids().and_then(|(i, id)| Some((app.views.get(i)?, app.session.get(id)?))) else { return };
     let info = &doc.info;
-    look::pane_header(ui, t, "Contents", None, |_| {});
-    if info.outline.is_empty() {
+    let has_outline = !info.outline.is_empty();
+    let current = current_section_at(info, reading::spot(view), view.rotation).unwrap_or_default();
+    let expandable = info.outline.iter().any(|item| !item.children.is_empty());
+    let mut links = Links::default();
+    look::pane_header(ui, t, "Contents", None, |ui| {
+        if has_outline {
+            links = header_links(ui, !current.is_empty(), expandable);
+        }
+    });
+    if !has_outline {
         empty(ui, t, &["This document has no table of contents.", "Pages and Find still get you around."]);
         return;
     }
     let tree_id = egui::Id::new(("margin-contents", view.id.0));
     let mut tree: Tree = ui.data(|d| d.get_temp(tree_id)).unwrap_or_default();
-    let current = current_section_at(info, reading::spot(view), view.rotation).unwrap_or_default();
     let pass = ui.ctx().cumulative_pass_nr();
     let history = (view.back.len(), view.back.last().copied());
-    let expandable = info.outline.iter().any(|item| !item.children.is_empty());
-    let links = links(ui, !current.is_empty(), expandable);
     if let Some(open) = links.all {
         set_all(&info.outline, &mut tree.open, open);
     }
@@ -117,27 +120,21 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     }
 }
 
-/// The toolbar: a compact secondary "Reveal current", then Expand all and Collapse all as
-/// labelled icon buttons, each off when it has nothing to do (no current entry, no entry with
-/// children).
-fn links(ui: &mut egui::Ui, has_current: bool, expandable: bool) -> Links {
+/// The header's buttons, right to left: Collapse all, Expand all and Reveal current, icon buttons
+/// the size of every pane header's, each off when it has nothing to do (no current entry, no
+/// entry with children).
+fn header_links(ui: &mut egui::Ui, has_current: bool, expandable: bool) -> Links {
     let mut links = Links::default();
-    ui.allocate_ui_with_layout(vec2(ui.available_width(), TOOLBAR_HEIGHT), egui::Layout::left_to_right(Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.x = look::GAP;
-        ui.add_space(look::GAP);
-        let reveal = ui.add_enabled_ui(has_current, |ui| {
-            look::Button::secondary(ButtonSize::Compact, "Reveal current").tip("Scroll to the section you are reading").show(ui)
-        });
-        links.reveal = reveal.inner.clicked();
-        ui.add_enabled_ui(expandable, |ui| {
-            if look::button_icon(ui, ButtonSize::Compact, "chevron-down", "Expand all", None).clicked() {
-                links.all = Some(true);
-            }
-            if look::button_icon(ui, ButtonSize::Compact, "chevron-up", "Collapse all", None).clicked() {
-                links.all = Some(false);
-            }
-        });
+    ui.add_enabled_ui(expandable, |ui| {
+        if look::icon_button(ui, "chevron-up", look::BUTTON_HEIGHT, false, "Collapse all", None).clicked() {
+            links.all = Some(false);
+        }
+        if look::icon_button(ui, "chevron-down", look::BUTTON_HEIGHT, false, "Expand all", None).clicked() {
+            links.all = Some(true);
+        }
     });
+    let reveal = ui.add_enabled_ui(has_current, |ui| look::icon_button(ui, "circle-dot", look::BUTTON_HEIGHT, false, "Reveal current", None));
+    links.reveal = reveal.inner.clicked();
     links
 }
 

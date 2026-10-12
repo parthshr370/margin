@@ -463,9 +463,15 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
             Some(key) => format!("Press {key} to bookmark the page you're on."),
             None => "Bookmark the page you're on with the button above.".to_owned(),
         };
-        ui.horizontal(|ui| {
+        // Wrapped within the pane: a hint one line wide would widen the pane's content, and the
+        // headers under it would lay out past the sidebar's edge.
+        let width = (ui.available_width() - 2.0 * ROW_PAD).max(0.0);
+        ui.horizontal_top(|ui| {
             ui.add_space(ROW_PAD);
-            ui.label(egui::RichText::new(hint).font(theme::regular(12.0)).color(t.text_muted));
+            ui.allocate_ui_with_layout(vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(width);
+                ui.add(egui::Label::new(egui::RichText::new(hint).font(theme::regular(12.0)).color(t.text_muted)).wrap());
+            });
         });
     } else {
         let mut renaming: Option<(String, String)> = ui.data(|d| d.get_temp(renaming_id));
