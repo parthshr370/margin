@@ -28,8 +28,6 @@ pub(crate) const INPUT_ID: &str = "find-input";
 const FIELD_MAX_WIDTH: f32 = 460.0;
 const FIELD_MIN_WIDTH: f32 = 320.0;
 const FIELD_HEIGHT: f32 = 30.0;
-/// The row under the header that holds the field in a narrow window.
-const ROW_HEIGHT: f32 = 44.0;
 /// The field's small buttons (Aa, whole words, previous, next, close) and text.
 const FIELD_BUTTON: f32 = 24.0;
 const FIELD_BUTTON_COUNT: f32 = 5.0;
@@ -80,9 +78,10 @@ fn shown_before(tab: SidebarTab) -> SidebarTab {
 }
 
 /// Once per frame, after `margin::sync`: run the search again when its query or options changed
-/// and keep its first pick on the reading page ([`AutoPick`]); show the Find tab when a search
-/// opened (from any entry point) and the earlier tab when it closed while Find still shows. True
-/// when the tab changed.
+/// and keep its first pick on the reading page ([`AutoPick`]). A search opened while the sidebar
+/// shows lists its results on the Find tab there, and the earlier tab comes back when it closes
+/// while Find still shows; it never opens a closed sidebar, so opening Find never moves the page.
+/// True when the tab changed.
 pub(crate) fn sync(app: &mut PdfCraftApp) -> bool {
     let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return false };
     // A new query, or a search with no match picked yet (opened with its query, as
@@ -104,17 +103,17 @@ pub(crate) fn sync(app: &mut PdfCraftApp) -> bool {
     match (finding, chrome.before_find) {
         (true, None) => {
             chrome.before_find = Some((shown_before(chrome.tab), chrome.sidebar_open));
-            chrome.tab = SidebarTab::Find;
-            chrome.sidebar_open = true;
-            true
+            if chrome.sidebar_open {
+                chrome.tab = SidebarTab::Find;
+            }
+            chrome.sidebar_open
         }
-        (false, Some((tab, open))) => {
+        (false, Some((tab, _))) => {
             chrome.before_find = None;
             // A tab picked while finding stays.
             let back = chrome.tab == SidebarTab::Find;
             if back {
                 chrome.tab = tab;
-                chrome.sidebar_open = open;
             }
             back
         }
@@ -168,28 +167,42 @@ struct FieldOutcome {
     step: Option<bool>,
 }
 
-/// The header's centre while finding: the field, `room` wide at most, centred on `center`.
-/// False when there is no room for it (the caller shows [`row`] instead).
-pub(crate) fn in_header(app: &mut PdfCraftApp, ui: &mut egui::Ui, center: egui::Pos2, room: f32) -> bool {
-    if room < FIELD_MIN_WIDTH {
+/// The header's middle while finding: the field, at most [`FIELD_MAX_WIDTH`] wide, centred on
+/// the header when there is room, else filling the space between the button clusters. False
+/// when even that is too narrow (the caller floats it over the page instead, [`floating`]).
+pub(crate) fn in_header(app: &mut PdfCraftApp, ui: &mut egui::Ui, center: egui::Pos2, room: f32, between: (f32, f32)) -> bool {
+    let rect = if room >= FIELD_MIN_WIDTH {
+        Rect::from_center_size(center, vec2(room.min(FIELD_MAX_WIDTH), FIELD_HEIGHT))
+    } else if between.1 - between.0 >= FIELD_MIN_WIDTH {
+        let width = (between.1 - between.0).min(FIELD_MAX_WIDTH);
+        let middle = (between.0 + between.1) / 2.0;
+        Rect::from_center_size(egui::pos2(middle, center.y), vec2(width, FIELD_HEIGHT))
+    } else {
         return false;
-    }
-    let rect = Rect::from_center_size(center, vec2(room.min(FIELD_MAX_WIDTH), FIELD_HEIGHT));
+    };
     show_field(app, ui, rect);
     true
 }
 
-/// The field on a row of its own under the header (a narrow window).
-pub(crate) fn row(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    egui::Panel::top("margin_find_row")
-        .exact_size(ROW_HEIGHT)
-        .show_separator_line(look::has_edges(&t))
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
-        .show(ui, |ui| {
-            let full = ui.max_rect();
-            let rect = Rect::from_center_size(full.center(), vec2(full.width().min(FIELD_MAX_WIDTH), FIELD_HEIGHT));
-            show_field(app, ui, rect);
+/// The field on a floating card over the top of the page (a very narrow window): it never
+/// pushes the page down.
+pub(crate) fn floating(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(view) = app.active.and_then(|i| app.views.get(i)) else { return };
+    if view.find.is_none() {
+        return;
+    }
+    let area = view.viewport_rect();
+    let t = Tokens::get(ctx);
+    let width = area.width().min(FIELD_MAX_WIDTH) - 2.0 * GAP_LARGE;
+    egui::Area::new(egui::Id::new("margin-find-floating"))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::CENTER_TOP)
+        .fixed_pos(area.center_top() + vec2(0.0, GAP_LARGE))
+        .show(ctx, |ui| {
+            look::floating_frame(&t, look::RADIUS_MENU).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(width.max(0.0), FIELD_HEIGHT), egui::Sense::hover());
+                show_field(app, ui, rect);
+            });
         });
 }
 

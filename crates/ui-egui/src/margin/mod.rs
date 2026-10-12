@@ -386,9 +386,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     }
     // The Library has its own single toolbar (with the app menu), so no reader header over it.
     let library_shown = cfg!(not(target_arch = "wasm32")) && app.active.is_none() && !app.combine_showing();
-    if !focus_mode && !library_shown && header::show(app, ui) {
-        find::row(app, ui);
-    }
+    let find_floats = !focus_mode && !library_shown && header::show(app, ui);
     if !focus_mode && app.active.is_some() {
         footer::show(app, ui);
     }
@@ -417,6 +415,9 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
             scan_prompt::show(app, ui.ctx(), i);
         }
     });
+    if find_floats {
+        find::floating(app, ctx);
+    }
     app.process_pending_edits();
     let pill_top = if app.active.is_some() { history::show(app, ctx) } else { None };
     drop::hint(app, ctx);

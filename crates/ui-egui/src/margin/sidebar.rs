@@ -18,7 +18,10 @@ const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 440.0;
 const TAB_HEIGHT: f32 = 32.0;
-const TOP_BUTTON: f32 = 30.0;
+const TOP_BUTTON: f32 = look::CONTROL_ROW;
+/// Once floating, the sidebar docks again only this far past `ui.sidebar.overlay_below_px`, so
+/// a window edge dragged across the threshold doesn't flip it back and forth.
+const DOCK_HYSTERESIS: f32 = 48.0;
 pub(super) const ROW_HEIGHT: f32 = 28.0;
 /// Rows sit nearly touching, so neighbouring hover fills read as one list.
 pub(super) const ROW_SPACING: f32 = 2.0;
@@ -29,18 +32,22 @@ const STATS_SEPARATOR: &str = " · ";
 const META_TEXT: f32 = 11.0;
 /// The page bookmark list scrolls past this height, leaving room for the PDF's bookmarks.
 const PAGE_BOOKMARKS_MAX_HEIGHT: f32 = 220.0;
-const ROW_BUTTON: f32 = 22.0;
+const ROW_BUTTON: f32 = look::SMALL_BUTTON;
 
 /// The sidebar, sliding open and closed with `margin_chrome.sidebar_open` over
-/// [`motion::SLIDE`]: while it moves, its width eases between zero and the width the reader set
-/// and the panes keep their full width, clipped, so nothing reflows inside it. In a window
+/// [`motion::SLIDE`]. The page area changes once per open or close, not on every frame of the
+/// slide: opening docks the panel at its full width at once and slides the panes in inside it;
+/// closing gives the page its room back at once and slides the panes away over it. In a window
 /// narrower than `ui.sidebar.overlay_below_px` it floats over the page instead ([`overlay`]),
 /// and starts closed ([`super::ReaderChrome::start_narrow`]).
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("margin_sidebar");
     let window = ui.ctx().content_rect();
-    let narrow = window.width() < app.margin_keys.settings().ui.sidebar.overlay_below_px as f32;
+    let threshold = app.margin_keys.settings().ui.sidebar.overlay_below_px as f32;
+    let was_narrow = ui.ctx().data(|d| d.get_temp::<bool>(id.with("narrow"))).unwrap_or(false);
+    let narrow = window.width() < if was_narrow { threshold + DOCK_HYSTERESIS } else { threshold };
+    ui.ctx().data_mut(|d| d.insert_temp(id.with("narrow"), narrow));
     app.margin_chrome.start_narrow(narrow);
     let shown = motion::toggle(ui.ctx(), id.with("open"), app.margin_chrome.sidebar_open, motion::SLIDE);
     if shown <= 0.0 {
@@ -51,24 +58,24 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     }
     if shown < 1.0 {
-        // A panel of its own, so the resizable panel keeps the reader's width.
         let width = egui::PanelState::load(ui.ctx(), id).map_or(DEFAULT_WIDTH, |s| s.size().x).clamp(MIN_WIDTH, MAX_WIDTH);
+        if !app.margin_chrome.sidebar_open {
+            // Closing: the page already has its room back; the panes slide away over it.
+            floating(app, ui.ctx(), &t, id, shown, Rect::from_min_max(window.min, egui::pos2(window.left() + width, window.bottom())), false);
+            return;
+        }
+        // Opening: the panel takes its full width now (one re-fit of the page), and the panes
+        // slide in inside it, clipped.
         egui::Panel::left(id.with("sliding"))
-            .exact_size(width * shown)
+            .exact_size(width)
             .resizable(false)
             .show_separator_line(look::has_edges(&t))
             .frame(egui::Frame::NONE.fill(t.panel))
             .show(ui, |ui| {
                 let visible = ui.max_rect();
-                let rect = Rect::from_min_size(egui::pos2(visible.right() - width, visible.top()), vec2(width, visible.height()));
+                let rect = Rect::from_min_size(egui::pos2(visible.left() - (1.0 - shown) * width, visible.top()), vec2(width, visible.height()));
                 let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
                 body.set_clip_rect(visible.intersect(ui.clip_rect()));
-                if !app.margin_chrome.sidebar_open {
-                    // Closing: no clicks and no keyboard focus (its icons fade to faint as it goes).
-                    let opacity = body.opacity();
-                    body.disable();
-                    body.set_opacity(opacity);
-                }
                 sections(app, &mut body, &t);
                 ui.expand_to_include_rect(visible);
             });
@@ -103,9 +110,21 @@ fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id,
     let open = app.margin_chrome.sidebar_open;
     let width = egui::PanelState::load(ctx, id).map_or(DEFAULT_WIDTH, |s| s.size().x).clamp(MIN_WIDTH, MAX_WIDTH).min(window.width());
     let (top, bottom) = (window.top() + super::header::HEIGHT, (window.bottom() - super::footer::HEIGHT).max(window.top() + super::header::HEIGHT));
-    let left = window.left() - (1.0 - shown) * width;
-    let rect = Rect::from_min_max(egui::pos2(left, top), egui::pos2(left + width, bottom));
-    let visible = Rect::from_min_max(egui::pos2(window.left(), top), rect.right_bottom());
+    let visible =
+        floating(app, ctx, t, id, shown, Rect::from_min_max(egui::pos2(window.left(), top), egui::pos2(window.left() + width, bottom)), open);
+    let pressed_outside =
+        ctx.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| p.y > top && p.y < bottom && !visible.contains(p)));
+    if open && pressed_outside && !egui::Popup::is_any_open(ctx) {
+        app.margin_chrome.sidebar_open = false;
+    }
+}
+
+/// The sidebar's sections on a floating card at `full` (its place when fully shown), slid
+/// `1 - shown` of its width off the left edge, with the M shadow; it takes input only while
+/// `open`. Returns the part on screen.
+fn floating(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id, shown: f32, full: Rect, open: bool) -> Rect {
+    let rect = full.translate(vec2(-(1.0 - shown) * full.width(), 0.0));
+    let visible = Rect::from_min_max(egui::pos2(full.left(), full.top()), rect.right_bottom());
     egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).show(ctx, |ui| {
         let painter = ui.painter();
         painter.add(look::SHADOW_M.as_shape(visible, CornerRadius::ZERO));
@@ -122,11 +141,7 @@ fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id,
         // The area covers all of it, so a press on its background never reaches the page.
         ui.expand_to_include_rect(visible);
     });
-    let pressed_outside =
-        ctx.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| p.y > top && p.y < bottom && !visible.contains(p)));
-    if open && pressed_outside && !egui::Popup::is_any_open(ctx) {
-        app.margin_chrome.sidebar_open = false;
-    }
+    visible
 }
 
 /// The sidebar's three parts: buttons and the document card, the pane, the tab strip.

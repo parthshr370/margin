@@ -2,7 +2,7 @@
 //! with its menu and the fit toggle, the reading-progress scrubber (`margin::scrubber`), and the
 //! save status.
 
-use egui::{Align, CornerRadius, Layout, Stroke, vec2};
+use egui::{Align, CornerRadius, Layout, Stroke, Vec2, vec2};
 use serde_json::{Value, json};
 
 use crate::PdfCraftApp;
@@ -11,7 +11,8 @@ use crate::margin::look::{self, GAP, GAP_LARGE};
 use crate::margin::reading;
 use crate::theme::{self, Tokens};
 
-pub const HEIGHT: f32 = 36.0;
+/// Tall enough for one control row (`look::CONTROL_ROW`) with room above and below it.
+pub const HEIGHT: f32 = 40.0;
 /// A zoom stop this close (as a factor) is the zoom shown.
 const ZOOM_MATCH: f32 = 0.005;
 /// The id of the page box, shared with PdfCraft's `view.focus_page_input` (⇧⌘N).
@@ -19,8 +20,13 @@ const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
 const DETAIL_MIN_WIDTH: f32 = 180.0;
 const DETAIL_MAX_WIDTH: f32 = 300.0;
-const ZOOM_BUTTON: f32 = 22.0;
-const FIT_BUTTON: f32 = 24.0;
+/// The zoom group's and fit's buttons: the one control height.
+const ZOOM_BUTTON: f32 = look::CONTROL_ROW;
+const FIT_BUTTON: f32 = look::CONTROL_ROW;
+/// The widest the zoom percent and the page position get: their slots keep this width, so the
+/// controls after them never move on a zoom step, a page turn or a tab switch.
+const PERCENT_TEMPLATE: &str = "0000%";
+const POSITION_TEMPLATE: &str = "(0000 / 0000)";
 /// The page field's text size.
 const PAGE_TEXT: f32 = 11.5;
 /// The page field: room around its text, and its narrowest and widest (a longer label scrolls
@@ -36,6 +42,7 @@ const HINT_TEXT_CHARS: usize = 16;
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
+    let time_left_on = app.margin_keys.settings().reader.time_left;
     let detail = reading_detail(app, index);
     let Some(doc) = app.session.get(id) else { return };
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
@@ -89,13 +96,18 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                         save_command = super::saving::show(ui, &t, &save_line);
                     });
-                    if let Some(detail) = &detail
-                        && ui.available_width() >= DETAIL_MIN_WIDTH + super::scrubber::DETAIL_MIN_WIDTH + GAP_LARGE
-                    {
+                    // With time left on, its slot is kept before a pace is known (empty until
+                    // then), so the scrubber doesn't shrink mid-session.
+                    if time_left_on && ui.available_width() >= DETAIL_MIN_WIDTH + super::scrubber::DETAIL_MIN_WIDTH + GAP_LARGE {
                         let width = (ui.available_width() - super::scrubber::DETAIL_MIN_WIDTH - GAP_LARGE).min(DETAIL_MAX_WIDTH);
                         ui.allocate_ui(vec2(width, HEIGHT), |ui| {
-                            ui.add(egui::Label::new(egui::RichText::new(detail).font(theme::regular(PAGE_TEXT)).color(t.text_muted)).truncate())
-                                .on_hover_text(detail);
+                            ui.set_min_width(width);
+                            let text = detail.clone().unwrap_or_default();
+                            let label =
+                                ui.add(egui::Label::new(egui::RichText::new(&text).font(theme::regular(PAGE_TEXT)).color(t.text_muted)).truncate());
+                            if !text.is_empty() {
+                                label.on_hover_text(text);
+                            }
                         });
                     }
                     ui.add_space(GAP_LARGE);
@@ -165,18 +177,35 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
         select_all(ui.ctx(), id, &view.page_input);
     }
     let font = theme::regular(PAGE_TEXT);
-    // Sized by the current label and the page count, never by what is being typed.
-    let widest =
-        [current.as_str(), &labels.len().to_string()].map(|text| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x);
-    let width = (widest[0].max(widest[1]) + 2.0 * PAGE_FIELD_PAD).clamp(PAGE_FIELD_MIN, PAGE_FIELD_MAX);
-    let edit = egui::TextEdit::singleline(&mut view.page_input)
-        .id(id)
-        .desired_width(width)
-        .char_limit(PAGE_INPUT_CHARS)
-        .horizontal_align(Align::Center)
-        .font(font.clone())
-        .margin(vec2(2.0, 2.0));
-    let field = look::input_frame(t, look::input_focused(ui, id)).show(ui, |ui| ui.add(edit)).inner;
+    // Sized by the document's widest label (worked out once per document) and its page count,
+    // never by the page shown or what is being typed.
+    let widest_id = id.with(("margin-page-widest", view.id.0));
+    let widest = match ui.data(|d| d.get_temp::<f32>(widest_id)) {
+        Some(widest) => widest,
+        None => {
+            let count = labels.len().to_string();
+            let widest = labels
+                .iter()
+                .map(String::as_str)
+                .chain([count.as_str()])
+                .map(|text| ui.painter().layout_no_wrap(text.trim().to_owned(), font.clone(), t.text).size().x)
+                .fold(0.0, f32::max);
+            ui.data_mut(|d| d.insert_temp(widest_id, widest));
+            widest
+        }
+    };
+    let width = (widest + 2.0 * PAGE_FIELD_PAD).clamp(PAGE_FIELD_MIN, PAGE_FIELD_MAX);
+    let field = look::field_well(ui, id, vec2(width, look::CONTROL_ROW), |ui| {
+        let edit = egui::TextEdit::singleline(&mut view.page_input)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .desired_width(ui.available_width())
+            .char_limit(PAGE_INPUT_CHARS)
+            .horizontal_align(Align::Center)
+            .font(font.clone())
+            .margin(Vec2::ZERO);
+        ui.add(edit)
+    });
     ui.ctx().accesskit_node_builder(field.id, |node| node.set_label("Go to page"));
     if field.gained_focus() {
         select_all(ui.ctx(), id, &view.page_input);
@@ -213,7 +242,7 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
     ui.data_mut(|d| d.insert_temp(editing_id, editing));
     let number = (view.current + 1).to_string();
     let position = if current == number { format!("/ {}", labels.len()) } else { format!("({number} / {})", labels.len()) };
-    ui.label(egui::RichText::new(position).font(font).color(t.text_muted));
+    look::reserved_label(ui, &position, POSITION_TEMPLATE, font, t.text_muted, Align::Min);
 }
 
 /// Page `index`'s label, or its 1-based number when it has none.
@@ -258,39 +287,40 @@ struct ZoomKeys {
     fit: Option<String>,
 }
 
-/// `− 100% +` in a control outline, the percent opening the zoom menu, then the fit toggle.
-/// Returns the command to run (Margin's `view.zoom.*` / `view.fit.*`, with its arguments).
+/// `− 100% +` in a control outline, the percent (in a slot as wide as "0000%") opening the zoom
+/// menu, then the fit toggle, every button one control tall. Returns the command to run
+/// (Margin's `view.zoom.*` / `view.fit.*`, with its arguments).
 fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32], keys: &ZoomKeys) -> Option<(&'static str, Value)> {
     let mut command = None;
     let reads = reading::reads(view);
-    let outline = Stroke::new(look::EDGE, look::Surfaces::of(t).control_edge);
-    egui::Frame::NONE.stroke(outline).corner_radius(CornerRadius::same(t.radius)).show(ui, |ui| {
+    let group = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         if look::icon_button(ui, "minus", ZOOM_BUTTON, false, "Zoom out", keys.zoom_out.as_deref()).clicked() {
             command = Some(("view.zoom.out", Value::Null));
         }
         let percent = format!("{:.0}%", view.zoom * 100.0);
-        let menu = look::button_ghost(ui, look::ButtonSize::Compact, &percent);
-        let menu = look::tooltip(menu, "Zoom and fit", None);
+        let button = look::Button::ghost(look::ButtonSize::Standard, &percent).tip("Zoom and fit");
+        let width = button.widest(ui, &[PERCENT_TEMPLATE]);
+        let menu = button.fixed_width(width).show(ui);
         look::popover(&menu, egui::Id::new("margin-zoom-menu")).show(|ui| {
-            ui.set_min_width(170.0);
+            look::menu_body(ui);
             let fits = [
                 ("view.fit.width", !reads && view.fit == Fit::Width, "Fit width"),
                 ("view.fit.page", !reads && view.fit == Fit::Page, "Fit page"),
                 ("view.fit.read", reads, "Fit reading width"),
             ];
             for (id, on, label) in fits {
-                if ui.radio(on, label).clicked() {
+                if look::menu_row(ui, None, label, None, on).clicked() {
                     command = Some((id, Value::Null));
                 }
             }
-            if ui.button("Fit visible content").clicked() {
+            if look::menu_row(ui, Some("crop"), "Fit visible content", None, false).clicked() {
                 command = Some(("view.fit_visible", Value::Null));
             }
             ui.separator();
             for &step in steps {
                 let on = view.fit == Fit::None && !reads && (view.zoom - step as f32 / 100.0).abs() < ZOOM_MATCH;
-                if ui.radio(on, format!("{step}%")).clicked() {
+                if look::menu_row(ui, None, &format!("{step}%"), None, on).clicked() {
                     command = Some(("view.zoom.set", json!({ "percent": step })));
                 }
             }
@@ -299,6 +329,9 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32
             command = Some(("view.zoom.in", Value::Null));
         }
     });
+    // Painted over the group rather than a frame around it, so the outline adds no size.
+    let outline = Stroke::new(look::EDGE, look::Surfaces::of(t).control_edge);
+    ui.painter().rect_stroke(group.response.rect, CornerRadius::same(t.radius), outline, egui::StrokeKind::Inside);
     // `W`: fit width, or back to the reading width.
     let (icon, tip) = if view.fit == Fit::Width { ("maximize-2", "Fit reading width") } else { ("maximize", "Fit width") };
     if look::icon_button(ui, icon, FIT_BUTTON, false, tip, keys.fit.as_deref()).clicked() {

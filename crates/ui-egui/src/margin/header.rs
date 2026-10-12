@@ -124,7 +124,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
             });
             let finding = app.active.and_then(|i| app.views.get(i)).is_some_and(|v| v.find.is_some());
             let room = 2.0 * ((full.center().x - left_end).min(right_start - full.center().x) - TITLE_GAP);
-            if !finding || !crate::margin::find::in_header(app, ui, full.center(), room) {
+            let between = (left_end + TITLE_GAP, right_start - TITLE_GAP);
+            if !finding || !crate::margin::find::in_header(app, ui, full.center(), room, between) {
                 needs_row = finding;
                 title(app, ui, &t, full, left_end, right_start);
             }
