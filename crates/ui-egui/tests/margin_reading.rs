@@ -9,7 +9,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::canvas::Fit;
 use pdfcraft_ui_egui::margin::pagecolor::PageMode;
-use pdfcraft_ui_egui::margin::reading::{self, SaveStatus};
+use pdfcraft_ui_egui::margin::reading::{self, MarksKept, SaveStatus};
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
 const LETTER: (f32, f32) = (612.0, 792.0);
@@ -133,9 +133,24 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     }
 }
 
-/// Run `secs` of app time.
+/// Run `secs` of app time. Each step lets the save worker land a write it was handed: the
+/// worker runs in real time, which app steps don't advance.
 fn wait(h: &mut Harness<'static, PdfCraftApp>, secs: f32) {
-    h.run_steps((secs / STEP_SECS).ceil() as usize);
+    for _ in 0..(secs / STEP_SECS).ceil() as usize {
+        h.run_steps(1);
+        land_saves(h);
+    }
+}
+
+/// Step until no PDF write of the first document is in flight (or 10 s of real time pass).
+fn land_saves(h: &mut Harness<'static, PdfCraftApp>) {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(2);
+    let id = h.state().views[0].id;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().margin_save_pending(id) && std::time::Instant::now() < deadline {
+        std::thread::sleep(POLL);
+        h.run_steps(1);
+    }
 }
 
 fn sidecar_json(place: &Place) -> serde_json::Value {
@@ -162,8 +177,11 @@ fn reopen_restores_page_zoom_page_color_and_trim() {
         app.set_option("page_color", "sepia").unwrap();
         app.set_option("trim", "auto").unwrap();
     }
-    settle(&mut h);
+    // Half a second of app time: `settle` would run as many steps as the renders take, which
+    // on a slow machine is past the second the sidecar waits.
+    h.run_steps((0.5 / STEP_SECS).round() as usize);
     assert!(!place.sidecar().exists(), "waits a second after the last change");
+    settle(&mut h);
     wait(&mut h, 1.5);
     let saved = sidecar_json(&place);
     assert_eq!(saved["format"], "margin-sidecar");
@@ -490,6 +508,7 @@ fn autosave_off_leaves_the_pdf_to_ctrl_s() {
     assert!(h.query_by_label_contains("Unsaved · ").is_some(), "the footer names the key that saves");
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::S);
     h.run_steps(3);
+    land_saves(&mut h);
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: false }, "Ctrl+S still saves");
 }
 
@@ -506,20 +525,22 @@ fn highlight(h: &mut Harness<'static, PdfCraftApp>) {
 }
 
 /// R8 QoL 7: a failed autosave stays visible and offers Save and Save as, the change stays
-/// unsaved until a save works; a read-only file says so and is never written by itself.
+/// unsaved until a save works; a read-only file says so, is never written by itself, and keeps
+/// its highlights beside it with "Save copy…" offered.
 #[cfg(unix)]
 #[test]
 fn the_footer_tells_the_truth_about_saving() {
     use std::os::unix::fs::PermissionsExt as _;
     let place = Place::new("save-fails", "text.pdf", &text_page());
     let docs = place.doc().parent().unwrap().to_path_buf();
+    // Opened writable; the folder turns read-only afterwards, so autosave fails.
+    let mut h = harness(&place);
     std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o555)).unwrap();
     // Root ignores permissions: nothing to show there.
     if std::fs::write(docs.join(".probe"), b"").is_ok() {
         std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
         return;
     }
-    let mut h = harness(&place);
     highlight(&mut h);
     wait(&mut h, 2.0);
     let id = h.state().views[0].id;
@@ -532,6 +553,7 @@ fn the_footer_tells_the_truth_about_saving() {
     std::fs::set_permissions(&docs, std::fs::Permissions::from_mode(0o755)).unwrap();
     h.get_by_label("Save").click();
     h.run_steps(3);
+    land_saves(&mut h);
     assert_eq!(reading::save_status(h.state(), 0), SaveStatus::Saved { autosave: true }, "Save retried");
     assert!(std::fs::read(place.doc()).unwrap().windows(10).any(|w| w == b"/Highlight"));
     drop(h);
@@ -539,12 +561,16 @@ fn the_footer_tells_the_truth_about_saving() {
     let place = Place::new("read-only-file", "text.pdf", &text_page());
     std::fs::set_permissions(place.doc(), std::fs::Permissions::from_mode(0o444)).unwrap();
     let mut h = harness(&place);
-    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: false });
+    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: false, marks: MarksKept::Beside { any: false } });
     h.get_by_label("Read-only");
     highlight(&mut h);
     wait(&mut h, 2.0);
-    assert_eq!(reading::save_status(h.state(), 0), SaveStatus::ReadOnly { dirty: true });
-    h.get_by_label("Save as…");
+    assert_eq!(
+        reading::save_status(h.state(), 0),
+        SaveStatus::ReadOnly { dirty: false, marks: MarksKept::Beside { any: true } },
+        "the highlight went to the sidecar, not into the document"
+    );
+    h.get_by_label("Save copy…");
     assert_eq!(std::fs::read(place.doc()).unwrap(), text_page(), "never written by itself");
     std::fs::set_permissions(place.doc(), std::fs::Permissions::from_mode(0o644)).unwrap();
 }
@@ -576,7 +602,7 @@ fn set_as_default_writes_settings_jsonc_and_keeps_its_comments() {
     assert_eq!(app.views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
 }
 
-/// A folder Margin can't write keeps the sidecar under `<data>/sidecars/<fingerprint>…`.
+/// A folder Margin can't write keeps the sidecar under `<data>/sidecars/<book key>…`.
 #[cfg(unix)]
 #[test]
 fn read_only_folders_keep_the_sidecar_in_the_data_folder() {
@@ -601,5 +627,32 @@ fn read_only_folders_keep_the_sidecar_in_the_data_folder() {
     assert!(told.contains("data folder"), "the fallback is explained: {told:?}");
     drop(h);
     let written = std::fs::read_to_string(&path).unwrap_or_default();
-    assert_eq!(app(&place).views[0].current, 1, "found again by fingerprint: {written}");
+    assert_eq!(app(&place).views[0].current, 1, "found again under the book's key: {written}");
+}
+
+#[test]
+fn disabling_per_document_memory_keeps_bookmarks_but_ignores_and_preserves_view_state() {
+    let place = Place::new("remember-off", "paper.pdf", &paper(5));
+    let mut original = harness(&place);
+    original.state_mut().set_option("page", "3").unwrap();
+    original.state_mut().set_option("zoom", "150").unwrap();
+    reading::toggle_bookmark(&mut original.state_mut().views[0]);
+    settle(&mut original);
+    reading::flush(original.state_mut());
+    let saved = sidecar_json(&place);
+    drop(original);
+    std::fs::write(place.config().join("settings.jsonc"), r#"{ "reader": { "remember_per_document": false } }"#).unwrap();
+    let mut current = harness(&place);
+    assert_eq!(current.state().views[0].current, 0, "the saved page is ignored");
+    assert!(reading::reads(&current.state().views[0]), "global read-fit wins over the saved zoom");
+    assert_eq!(current.state().views[0].margin.bookmarks.len(), 1);
+    current.state_mut().set_option("page", "5").unwrap();
+    current.state_mut().set_option("zoom", "175").unwrap();
+    settle(&mut current);
+    reading::toggle_bookmark(&mut current.state_mut().views[0]);
+    reading::flush(current.state_mut());
+    let rewritten = sidecar_json(&place);
+    assert_eq!(rewritten["progress"], saved["progress"]);
+    assert_eq!(rewritten["settings"], saved["settings"]);
+    assert_eq!(rewritten["bookmarks"].as_array().unwrap().len(), 2);
 }

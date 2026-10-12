@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, TextureOptions, pos2, vec2};
+use pdfcraft_render::Pixels;
 use serde_json::{Map, Value};
 
 use super::figures::{Figures, Frame, Raster};
@@ -105,6 +106,9 @@ pub fn page_color_for(app: &PdfCraftApp, index: usize, ctx: &egui::Context) -> O
 /// Pages within this distance of the current page keep their source pixels for recolouring.
 pub(crate) const SOURCE_NEAR: usize = 2;
 
+/// The colour key of pixels kept as rendered (PdfCraft, and every thumbnail).
+pub(crate) const AS_RENDERED: u64 = 0;
+
 /// One document view's recolouring: the colour in effect, the source pixels of nearby pages and
 /// each page's figures.
 #[derive(Default)]
@@ -132,10 +136,10 @@ impl PageColorCache {
     }
 
     fn key_of(&self, color: Option<PageColor>) -> u64 {
-        color.map_or(0, PageColor::key)
+        color.map_or(AS_RENDERED, PageColor::key)
     }
 
-    /// Identifies the colour textures are recoloured with now (0: as rendered).
+    /// Identifies the colour textures are recoloured with now ([`AS_RENDERED`]: none).
     pub fn key(&self) -> u64 {
         self.key_of(self.color)
     }
@@ -146,18 +150,21 @@ impl PageColorCache {
         Color32::from_rgb(r, g, b)
     }
 
-    /// Turn a rendered raster into a texture image in the current colour. A whole page near
-    /// `current` keeps its source pixels to recolour later; a whole page also settles the page's
-    /// figures when the colour wants them (`margin::figures`). The flag: this page's tiles were
-    /// coloured before its figures were known and are out of date.
-    pub(crate) fn image(&mut self, doc: &pdfcraft_engine::Document, raster: Raster, current: usize) -> (egui::ColorImage, bool) {
-        let Some(color) = self.color else { return (egui::ColorImage::from_rgba_premultiplied(raster.size, &raster.rgba), false) };
+    /// Recolour a rendered raster in the current colour, in place. A whole page near `current`
+    /// keeps its source pixels to recolour later; a whole page also settles the page's figures
+    /// when the colour wants them (`margin::figures`). The flag: this page's tiles were coloured
+    /// before its figures were known and are out of date.
+    pub(crate) fn image(&mut self, doc: &pdfcraft_engine::Document, raster: Raster, current: usize) -> (Pixels, bool) {
+        let Some(color) = self.color else { return (raster.rgba, false) };
         let info = doc.info.pages.get(raster.page);
         let frame = Frame::of(&raster, info);
-        let Raster { page, tile, size, mut rgba, .. } = raster;
+        let Raster { page, tile, size, rgba, .. } = raster;
+        // The words are the pixels' RGBA bytes in memory order (`Pixels`), recoloured as bytes.
+        let mut words = rgba.into_words();
+        let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut words);
         if tile.is_none() {
             if page.abs_diff(current) <= SOURCE_NEAR {
-                self.sources.insert(page, Source { size, rgba: rgba.clone() });
+                self.sources.insert(page, Source { size, rgba: bytes.to_vec() });
             } else {
                 self.sources.remove(&page);
             }
@@ -171,11 +178,11 @@ impl PageColorCache {
         } else {
             self.figures.sync_generation(doc.edit_generation());
             self.figures.learn_page(page, &doc.info, || doc.page_images(page).into_iter().map(|image| image.rect).collect());
-            stale_tiles = self.figures.decide(page, &rgba, size[0], size[1]);
+            stale_tiles = self.figures.decide(page, bytes, size[0], size[1]);
             self.figures.decided(page)
         };
-        color.apply(&mut rgba, size[0], size[1], &frame.all_pixels(figures));
-        (egui::ColorImage::from_rgba_premultiplied(size, &rgba), stale_tiles)
+        color.apply(bytes, size[0], size[1], &frame.all_pixels(figures));
+        (Pixels::from(words), stale_tiles)
     }
 
     /// Recolour `page`'s texture in place from its kept source. False when there is no source,
@@ -201,6 +208,11 @@ impl PageColorCache {
     /// Drop the sources of pages that moved away from `current`.
     pub fn retain_near(&mut self, current: usize) {
         self.sources.retain(|page, _| page.abs_diff(current) <= SOURCE_NEAR);
+    }
+
+    /// Drop every kept source: the view is hidden and its page textures are released.
+    pub(crate) fn forget_sources(&mut self) {
+        self.sources.clear();
     }
 
     /// The pixels `page` was rendered with, if they are kept (it is near the current page).
@@ -700,7 +712,12 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
     fn whole_page(page: usize) -> Raster {
-        Raster { page, tile: None, scale: 1.0, size: [1, 1], rgba: vec![255; 4] }
+        Raster { page, tile: None, scale: 1.0, size: [1, 1], rgba: Pixels::from(vec![u32::MAX]) }
+    }
+
+    /// The first pixel of `rgba`.
+    fn first_pixel(rgba: &Pixels) -> Color32 {
+        Color32::from_rgba_premultiplied(rgba[0], rgba[1], rgba[2], rgba[3])
     }
 
     #[test]
@@ -714,7 +731,7 @@ trailer << /Root 1 0 R >>
         assert!(cache.configure(Some(night)));
         assert!(!cache.configure(Some(night)));
         let (img, _) = cache.image(doc, whole_page(3), 3);
-        assert_eq!(img.pixels[0], Color32::from_rgb(0x14, 0x13, 0x12));
+        assert_eq!(first_pixel(&img), Color32::from_rgb(0x14, 0x13, 0x12));
         let _ = cache.image(doc, whole_page(9), 3);
         assert!(cache.sources.contains_key(&3) && !cache.sources.contains_key(&9));
         cache.retain_near(8);
@@ -722,7 +739,7 @@ trailer << /Root 1 0 R >>
         // PdfCraft: pixels pass through and nothing is kept.
         assert!(cache.configure(None));
         let (img, _) = cache.image(doc, whole_page(0), 0);
-        assert_eq!(img.pixels[0], Color32::WHITE);
+        assert_eq!(first_pixel(&img), Color32::WHITE);
         assert!(cache.sources.is_empty());
     }
 }

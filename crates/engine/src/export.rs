@@ -12,6 +12,8 @@ use crate::Document;
 pub struct Exporter {
     renderer: PageRenderer,
     pages: usize,
+    /// Each page's displayed size in points, for [`Exporter::dpi_used`].
+    sizes: Vec<(f32, f32)>,
 }
 
 /// What an export needs from a document, as plain values that can move to a worker thread.
@@ -20,12 +22,19 @@ pub struct ExportSource {
     pub bytes: std::sync::Arc<Vec<u8>>,
     pub config: pdfcraft_render::RenderConfig,
     pub pages: usize,
+    /// Each page's displayed size in points (after `/Rotate` and `/UserUnit`).
+    pub sizes: Vec<(f32, f32)>,
 }
 
 impl Document {
     /// The current state, for exporting on another thread.
     pub fn export_source(&self) -> ExportSource {
-        ExportSource { bytes: self.display.clone(), config: self.config.clone(), pages: self.info.pages.len() }
+        ExportSource {
+            bytes: self.display.clone(),
+            config: self.config.clone(),
+            pages: self.info.pages.len(),
+            sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
+        }
     }
 }
 
@@ -46,15 +55,29 @@ impl Exporter {
         Self::from_source(doc.export_source())
     }
 
+    /// An exporter that draws a page too large for the renderer's size limits at the largest
+    /// resolution they allow, as the interactive Export does; [`Exporter::dpi_used`] says at what.
+    /// A source whose `config.reject_oversize` is set refuses such pages instead.
     pub fn from_source(src: ExportSource) -> Self {
-        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages }
+        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages, sizes: src.sizes }
+    }
+
+    /// The resolution page `page` is actually exported at when asked for `dpi`: lower than asked
+    /// when the page is too large for the renderer's size limits at that resolution.
+    pub fn dpi_used(&self, page: usize, dpi: f64) -> f64 {
+        let dpi = dpi.clamp(18.0, 1200.0);
+        match self.sizes.get(page) {
+            Some(&(w, h)) => f64::from(pdfcraft_render::effective_scale(w, h, (dpi / 72.0) as f32)) * 72.0,
+            None => dpi,
+        }
     }
 
     fn check(&self, page: usize) -> Result<(), String> {
         if page < self.pages { Ok(()) } else { Err(format!("page {} does not exist", page + 1)) }
     }
 
-    /// Page `page` (0-based) as a PNG at `dpi` (capped by the renderer's size limits).
+    /// Page `page` (0-based) as a PNG at `dpi`, at most the renderer's size limits allow (see
+    /// [`Exporter::dpi_used`]); refused instead when the source asked for `reject_oversize`.
     pub fn png(&mut self, page: usize, dpi: f64) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
@@ -96,6 +119,50 @@ impl Exporter {
         }
         Ok(out)
     }
+}
+
+pub use pdfcraft_export::{MAX_MARKDOWN_TEXT_BYTES, Markdown, MarkdownOptions};
+
+/// The most image bytes one Markdown export holds in memory before they are written out.
+pub const MAX_MARKDOWN_IMAGE_BYTES: usize = 256 << 20;
+/// The most image files one Markdown export writes.
+pub const MAX_MARKDOWN_IMAGES: usize = 10_000;
+
+/// Structured Markdown for `pages` (0-based), with image files returned separately. Pages are
+/// extracted one at a time, and the export stops with an error as soon as their text passes
+/// [`pdfcraft_export::MAX_MARKDOWN_TEXT_BYTES`] or their images pass [`MAX_MARKDOWN_IMAGE_BYTES`]
+/// or [`MAX_MARKDOWN_IMAGES`], before the next page is read.
+pub fn markdown(src: &ExportSource, pages: &[usize], options: &pdfcraft_export::MarkdownOptions<'_>) -> Result<pdfcraft_export::Markdown, String> {
+    let mut session = crate::Session::new();
+    let id = session.open("Markdown export", None, src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
+    let document = session.get(id).ok_or("the export document could not be read")?;
+    let page_count = document.info.pages.len();
+    let mut selected = Vec::with_capacity(pages.len().min(page_count));
+    let (mut text_bytes, mut image_bytes, mut image_count) = (0usize, 0usize, 0usize);
+    for &page in pages {
+        let shown = page.saturating_add(1);
+        if page >= page_count {
+            return Err(format!("page {shown} does not exist"));
+        }
+        let exported = document.export_page(page).ok_or_else(|| format!("page {shown} could not be read"))?;
+        text_bytes = exported.blocks.iter().fold(text_bytes, |sum, block| sum.saturating_add(block.text.len()));
+        image_bytes = exported.images.iter().fold(image_bytes, |sum, image| sum.saturating_add(image.bytes.len()));
+        image_count = image_count.saturating_add(exported.images.len());
+        if text_bytes > pdfcraft_export::MAX_MARKDOWN_TEXT_BYTES {
+            return Err(format!(
+                "By page {shown} the text passes {} MiB; export fewer pages at a time.",
+                pdfcraft_export::MAX_MARKDOWN_TEXT_BYTES >> 20
+            ));
+        }
+        if image_bytes > MAX_MARKDOWN_IMAGE_BYTES || image_count > MAX_MARKDOWN_IMAGES {
+            return Err(format!(
+                "By page {shown} the images pass {} MiB or {MAX_MARKDOWN_IMAGES} files; export fewer pages at a time.",
+                MAX_MARKDOWN_IMAGE_BYTES >> 20
+            ));
+        }
+        selected.push(exported);
+    }
+    pdfcraft_export::markdown(selected, options)
 }
 
 /// Premultiplied RGBA → an image file of `format`.

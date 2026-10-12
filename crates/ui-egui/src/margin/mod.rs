@@ -22,14 +22,22 @@ pub mod keys;
 pub mod keysheet;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod library;
+pub mod links;
 pub mod look;
+pub mod marks;
+#[cfg(target_os = "macos")]
+pub mod menu_bar;
 pub mod motion;
 pub mod obsidian;
 pub mod pagecolor;
 pub mod pages;
 pub mod rail;
 pub mod reading;
+pub mod reload;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod saves;
 pub mod saving;
+pub mod scan_prompt;
 pub mod scroll_step;
 pub mod scrubber;
 pub mod selection;
@@ -40,9 +48,14 @@ pub mod sidebar;
 pub mod stats;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stats_sheet;
+pub mod synctex;
+pub mod tabs;
 pub mod toast;
 pub mod tools;
 pub mod trim;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod welcome;
+pub mod window_chrome;
 
 use crate::{PdfCraftApp, RightPanel};
 
@@ -55,6 +68,8 @@ pub struct ReaderChrome {
     pub tab: SidebarTab,
     /// The annotate rail floats over the page.
     pub rail_open: bool,
+    /// Margin's reader-only layout hides chrome without changing the saved sidebar choice.
+    pub focus_mode: bool,
     /// The right panel the chrome last asked for. When `app.right` differs, a command or option
     /// picked a panel since, and the sidebar follows it.
     synced_right: Option<RightPanel>,
@@ -65,6 +80,9 @@ pub struct ReaderChrome {
     before_find: Option<(SidebarTab, bool)>,
     /// Nothing was restored from a previous run: the first `sync` applies `ui.sidebar`.
     first_start: bool,
+    /// Each document's sidebar tab, kept while another document shows (a search's Find tab is
+    /// kept as the tab it replaced).
+    doc_tabs: std::collections::HashMap<pdfcraft_engine::DocId, SidebarTab>,
     /// The sidebar has been drawn once this run ([`Self::start_narrow`] decided).
     start_seen: bool,
     /// A narrow window closed the sidebar at start, not the reader: it is saved as open, and
@@ -80,10 +98,12 @@ impl Default for ReaderChrome {
             sidebar_open: true,
             tab: SidebarTab::Contents,
             rail_open: true,
+            focus_mode: false,
             synced_right: None,
             synced_doc: None,
             before_find: None,
             first_start: true,
+            doc_tabs: Default::default(),
             start_seen: false,
             closed_for_narrow_start: false,
             notices: toast::Notices::default(),
@@ -169,8 +189,8 @@ impl SidebarTab {
         }
     }
 
-    /// The PdfCraft panel whose state this tab drives (thumbnails render only while Pages is
-    /// shown, the find bar hands its search to the Find tab).
+    /// The PdfCraft panel whose state this tab drives (the find bar hands its search to the Find
+    /// tab).
     pub fn panel(self) -> Option<RightPanel> {
         match self {
             Self::Highlights => Some(RightPanel::Comments),
@@ -229,13 +249,16 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
     app.comments_panel_closed = true;
 }
 
-/// Run a Margin-only action (the keymap's ids): `view.sidebar.toggle`, `view.sidebar.tab` with
-/// `{"tab": "contents" | "highlights" | "pages" | "bookmarks" | "find" | "tools"}`,
-/// `reader.annotate.toggle` (the rail), `reader.bookmark.toggle` (a page bookmark on the current
-/// page), `view.trim.toggle`, and the library's `library.open`, `library.search` and `app.stats`.
-/// Returns `false` for an unknown id or tab.
+/// Run a Margin-only action (the keymap's ids): `view.focus_mode.toggle` (also `view.read_mode`),
+/// `view.sidebar.toggle`, `view.sidebar.tab` with `{"tab": "contents" | "highlights" | "pages" |
+/// "bookmarks" | "find" | "tools"}`, `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
+/// (a page bookmark on the current page), `view.trim.toggle`, the page notes' `note.*` and "Save a
+/// copy with highlights" (`margin::marks`), `reader.export_markdown` (the paper as Markdown),
+/// `app.choose_vault`, and the library's `library.open`, `library.search`, `library.import`,
+/// `library.add_folder` and `app.stats`. Returns `false` for an unknown id or tab.
 pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
     match id {
+        "view.read_mode" | "view.focus_mode.toggle" => focus::toggle(app),
         "view.sidebar.toggle" => app.margin_chrome.sidebar_open = !app.margin_chrome.sidebar_open,
         "reader.annotate.toggle" => app.margin_chrome.rail_open = !app.margin_chrome.rail_open,
         "view.sidebar.tab" => match args.get("tab").and_then(serde_json::Value::as_str).and_then(SidebarTab::from_key) {
@@ -246,8 +269,7 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
         "reader.bookmark.toggle" => {
             let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
             let page = view.current + 1;
-            let message =
-                if reading::toggle_bookmark(view) { format!("Bookmarked page {page}") } else { format!("Removed the bookmark on page {page}") };
+            let message = reading::toggle_bookmark(view).message(page);
             app.notify(message);
         }
         "view.trim.toggle" => {
@@ -255,8 +277,23 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
             reading::toggle_trim(view);
         }
         highlights::DELETE_ID | highlights::COLOR_ID => return highlights::run(app, id, args),
+        marks::NOTE_ADD_ID
+        | marks::NOTE_EDIT_ID
+        | marks::NOTE_DELETE_ID
+        | marks::NOTE_NEXT_ID
+        | marks::NOTE_PREV_ID
+        | marks::NOTE_LIST_ID
+        | marks::SAVE_COPY_ID => return marks::run(app, id),
         #[cfg(not(target_arch = "wasm32"))]
-        "library.open" | "library.search" | "app.stats" => return library::run(app, id),
+        "library.open" | "library.search" | "library.import" | "library.add_folder" | "app.stats" => return library::run(app, id),
+        #[cfg(not(target_arch = "wasm32"))]
+        "app.choose_vault" => welcome::pick_vault(app),
+        // The Highlights panel's Export ▸ "Export paper as Markdown…": asks where, then writes.
+        "reader.export_markdown" => {
+            let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return true };
+            view.comments.notes.request = Some(obsidian::Request::ExportPaper(false));
+        }
+        "view.tab.next" | "view.tab.prev" | "view.tab.go" => return tabs::run(app, id, args),
         _ => return false,
     }
     true
@@ -286,9 +323,8 @@ pub(crate) fn open_tab(app: &mut PdfCraftApp, tab: SidebarTab) {
 /// Commands (`comment.list`, `edit.advanced_search`, `sign.panel`, the control channel's
 /// `panel` option) still set `app.right`: the sidebar switches to the matching tab. Closing a
 /// panel with its own close button closes the sidebar. In turn the sidebar sets `app.right` to
-/// the panel its tab shows, so the canvas renders thumbnails for Pages, and `app.left_open`
-/// while the Tools tab shows a tool's options. An open search shows the Find tab
-/// (`find::sync`).
+/// the panel its tab shows, and `app.left_open` while the Tools tab shows a tool's options. An
+/// open search shows the Find tab (`find::sync`).
 pub(crate) fn sync(app: &mut PdfCraftApp) {
     if app.margin_chrome.first_start {
         let configured = &app.margin_keys.settings().ui.sidebar;
@@ -303,6 +339,8 @@ pub(crate) fn sync(app: &mut PdfCraftApp) {
     let doc = app.active_ids().map(|(_, id)| id);
     let chrome = &mut app.margin_chrome;
     if doc != chrome.synced_doc {
+        // Each document comes back on its own sidebar tab (`tabs`).
+        tabs::switch_sidebar_tab(chrome, &app.views, doc);
         // PdfCraft opens a document on Comments or Bookmarks when it has them; that is not the
         // reader's choice, so the tab stays.
         chrome.synced_doc = doc;
@@ -336,20 +374,22 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         sync(app);
     }
     motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
+    window_chrome::place_traffic_lights(app, ctx);
     let t = crate::theme::Tokens::get(ctx);
     // A click while a popover or menu is open closes it (`look::popover`) and does nothing else:
     // the page must not also clear its selection, follow a link or place a mark.
     let dismissing = egui::Popup::is_any_open(ctx) && ctx.input(|i| i.pointer.any_click());
+    let focus_mode = focus::active(app);
     // The sidebar slides itself in and out (`margin_chrome.sidebar_open`).
-    if app.active.is_some() {
+    if !focus_mode && app.active.is_some() {
         sidebar::show(app, ui);
     }
     // The Library has its own single toolbar (with the app menu), so no reader header over it.
     let library_shown = cfg!(not(target_arch = "wasm32")) && app.active.is_none() && !app.combine_showing();
-    if !library_shown && header::show(app, ui) {
+    if !focus_mode && !library_shown && header::show(app, ui) {
         find::row(app, ui);
     }
-    if app.active.is_some() {
+    if !focus_mode && app.active.is_some() {
         footer::show(app, ui);
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| match app.active {
@@ -369,7 +409,12 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 ui.set_opacity(opacity);
             }
             crate::canvas::document_area(app, i, ui);
+            marks::paint(app, ui, i);
+            if !dismissing {
+                synctex::inverse_click(app, ui.ctx(), i);
+            }
             selection::show(app, ui.ctx(), i, ui.clip_rect());
+            scan_prompt::show(app, ui.ctx(), i);
         }
     });
     app.process_pending_edits();
@@ -436,7 +481,7 @@ mod tests {
     use pdfcraft_render::OutlineItem;
 
     fn item(title: &str, page: Option<usize>, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page, children, open: false }
+        OutlineItem { title: title.into(), page, view: pdfcraft_render::DestView::Top, children, open: false }
     }
 
     #[test]

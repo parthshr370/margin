@@ -4,8 +4,8 @@
 //! (default on) turns it off. The document card shows a book's summary; the Stats sheet
 //! (`app.stats`, `stats_sheet.rs`) shows the calendar.
 //!
-//! A book is the library's fingerprint for its path (`library::opened`), so its stats survive
-//! annotations saved into the PDF.
+//! A book is the library's stable key for it (`library::opened`), so its stats survive a move, a
+//! rename, a copy and annotations saved into the PDF.
 
 use std::collections::HashMap;
 use std::path::Path;

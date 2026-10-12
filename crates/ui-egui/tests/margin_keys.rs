@@ -121,15 +121,19 @@ fn question_mark_opens_the_keyboard_sheet() {
 fn a_saved_keymap_applies_without_a_restart() {
     let dir = config_dir("reload");
     let mut h = harness(&dir);
-    std::fs::write(dir.join("keymap.jsonc"), "[ { \"context\": \"App\", \"bindings\": { \"ctrl-p\": \"view.palette\" } } ]").unwrap();
+    // Cmd+P on macOS, Ctrl+P elsewhere: the key egui's COMMAND modifier presses.
+    std::fs::write(dir.join("keymap.jsonc"), "[ { \"context\": \"App\", \"bindings\": { \"secondary-p\": \"view.palette\" } } ]").unwrap();
+    let stroke = margin_config::canonical("secondary-p", margin_config::Os::current()).unwrap();
     step_until(&mut h, "the keymap reload", |app| {
-        app.margin_keys.keymap().is_some_and(|k| k.bindings.iter().any(|b| b.keys == ["ctrl-p"] && b.command.as_deref() == Some("view.palette")))
+        app.margin_keys
+            .keymap()
+            .is_some_and(|k| k.bindings.iter().any(|b| b.keys == [stroke.as_str()] && b.command.as_deref() == Some("view.palette")))
     });
     h.run_steps(2);
     assert!(!h.state().palette_open);
     h.key_press_modifiers(Modifiers::COMMAND, Key::P);
     h.run_steps(2);
-    assert!(h.state().palette_open, "Ctrl+P opens the palette");
+    assert!(h.state().palette_open, "Cmd/Ctrl+P opens the palette");
     assert!(h.state().dialog.is_none(), "and no longer prints");
     std::fs::remove_dir_all(&dir).ok();
 }

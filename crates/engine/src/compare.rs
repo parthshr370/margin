@@ -150,41 +150,41 @@ impl OfficeFormat {
 }
 
 impl crate::Document {
-    /// The pages as paragraphs and images (for Word, HTML and RTF export).
+    /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
+    /// form XObjects draw.
     pub fn export_pages(&self) -> Vec<pdfcraft_export::Page> {
-        let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };
-        self.info
-            .pages
-            .iter()
-            .enumerate()
-            .map(|(i, info)| {
-                let blocks = pdfcraft_edit::text_blocks(cos, i)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|b| !b.text.trim().is_empty())
-                    .map(|b| {
-                        let f = b.base_font.to_ascii_lowercase();
-                        pdfcraft_export::Block {
-                            text: b.text,
-                            rect: b.rect,
-                            size: b.size,
-                            bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
-                            italic: f.contains("italic") || f.contains("oblique"),
-                        }
-                    })
-                    .collect();
-                let images = self
-                    .page_images(i)
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(k, im)| {
-                        let (ext, bytes) = self.page_image_file(i, k).ok()?;
-                        Some(pdfcraft_export::Image { ext: if ext == "jpg" { "jpg" } else { "png" }, bytes, rect: im.rect })
-                    })
-                    .collect();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images }
+        (0..self.info.pages.len()).filter_map(|i| self.export_page(i)).collect()
+    }
+
+    /// Page `i` (0-based) as paragraphs and images; `None` past the last page or without an editor.
+    pub fn export_page(&self, i: usize) -> Option<pdfcraft_export::Page> {
+        let cos = &self.editor.as_ref()?.cos;
+        let info = self.info.pages.get(i)?;
+        let blocks = pdfcraft_edit::reading_blocks(cos, i)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|b| !b.text.trim().is_empty())
+            .map(|b| {
+                let f = b.base_font.to_ascii_lowercase();
+                pdfcraft_export::Block {
+                    text: b.text,
+                    rect: b.rect,
+                    size: b.size,
+                    bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
+                    italic: f.contains("italic") || f.contains("oblique"),
+                    color: b.color,
+                }
             })
-            .collect()
+            .collect();
+        let images = pdfcraft_edit::reading_images(cos, i)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|im| {
+                let (ext, bytes) = pdfcraft_create::image_file(cos, im.object?).ok()?;
+                Some(pdfcraft_export::Image { ext: if ext == "jpg" { "jpg" } else { "png" }, bytes, rect: im.rect })
+            })
+            .collect();
+        Some(pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images })
     }
 
     /// The document as a Word, HTML or RTF file.

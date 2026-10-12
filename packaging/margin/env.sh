@@ -24,8 +24,18 @@ export PDFCRAFT_VERSION
 export MARGIN_APP_ID=io.github.parthshr370.Margin
 export MARGIN_ASSETS="$ROOT/apps/margin/assets"
 
-# packaging/env.sh's licence and readme files plus NOTICE (the PdfCraft attribution).
+# packaging/env.sh's licence and readme files, NOTICE (the PdfCraft attribution) and
+# ATTRIBUTION.md, which credits the bundled OCR models (required: their licence asks for it).
 copy_margin_docs() {
   copy_docs "$1"
   if [ -f "$ROOT/NOTICE" ]; then cp "$ROOT/NOTICE" "$1/"; fi
+  cp "$ROOT/ATTRIBUTION.md" "$1/"
+}
+
+# Fetch and verify the attributed models and their CC-BY-SA licence texts even for
+# --skip-build: packaging must never produce a build without text recognition.
+copy_margin_models() {
+  (cd "$ROOT" && cargo xtask models)
+  mkdir -p "$1"
+  cp "$ROOT"/assets/models/*.rten "$ROOT"/assets/models/*.LICENCE.txt "$1/"
 }

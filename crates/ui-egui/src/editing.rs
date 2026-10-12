@@ -30,6 +30,10 @@ pub enum SaveTarget {
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
+        // Margin keeps text marks of a PDF it can't write in the document's sidecar.
+        if let Some(kept) = crate::margin::marks::take_edit(self, &edit) {
+            return kept;
+        }
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
         match self.session.apply(id, edit.clone()) {
@@ -52,6 +56,14 @@ impl PdfCraftApp {
                     }
                     Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
                     Edit::DeletePages { .. } => view.select_pages(&[]),
+                    // A stroke drawn with the pen stays unselected, so the selection box and
+                    // author popup don't sit over the next stroke (#429).
+                    Edit::AddAnnotation(a)
+                        if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
+                            && self.quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+                    {
+                        view.comments.selected = None;
+                    }
                     Edit::AddAnnotation(a) => {
                         // Select the new comment (appended last among the page's comments).
                         let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
@@ -80,7 +92,8 @@ impl PdfCraftApp {
                 true
             }
             Err(e) => {
-                self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::action_label(&label)), ("e", &e.to_string())]);
+                let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
+                self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::action_label(&label)), ("e", &message)]);
                 false
             }
         }
@@ -138,7 +151,7 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::Save) => {
                 self.save_active(SaveTarget::InPlace);
             }
-            Some(crate::canvas::ViewAction::Extract) => self.dialog = Some(crate::Dialog::Extract),
+            Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
@@ -262,21 +275,89 @@ impl PdfCraftApp {
     /// brought forward first, so the commit and any field scripts act on that document.
     pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
         let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        // Added text the standard fonts can't draw can't be saved: show it rather than drop it.
+        // Its page is brought into view, so the text, the warning and Discard are on screen.
+        let blocked = self.views.get_mut(i).and_then(|v| {
+            let c = v.content.blocked()?;
+            v.content.hold_blocked();
+            if let Some(page) = v.content.draft.as_ref().map(|d| d.page) {
+                v.go_to_page(page);
+            }
+            Some(c)
+        });
+        if let Some(c) = blocked {
+            self.active = Some(i);
+            self.notify(crate::content_ui::undrawable_message(c));
+            return false;
+        }
+        let typing = self
+            .views
+            .get(i)
+            .is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some() || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty()));
         if self.active != Some(i) {
-            let typing = self.views.get(i).is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some());
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing()
+        self.commit_form_typing() && self.commit_open_fill_text(id)
+    }
+
+    /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
+    /// the file (and can be flattened) instead of being left on the screen.
+    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let Some(tb) = self.views[i].fill_text.clone() else { return true };
+        let text = tb.text.trim().to_string();
+        if text.is_empty() {
+            if let Some(view) = self.views.get_mut(i) {
+                view.fill_text = None;
+            }
+            return true;
+        }
+        let author = self.comment_prefs.author.clone();
+        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, &author);
+        if self.apply_edit(edit) {
+            if let Some(view) = self.views.get_mut(i) {
+                view.fill_text = None;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// When the preference is on, bake Fill & Sign marks before the bytes are written.
+    /// Returns false when the document is not allowed to change (nothing is written).
+    fn flatten_fill_sign_for_save(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        if !self.flatten_fill_sign_on_save {
+            return true;
+        }
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        if let Err(e) = self.session.apply(id, Edit::FlattenFillSign) {
+            self.notify_error(e);
+            return false;
+        }
+        let after = self.session.get(id).map(|d| d.edit_generation());
+        if before != after
+            && let Some(doc) = self.session.get(id)
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.document_changed(&doc.info);
+        }
+        true
     }
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty || v.pending_edit.is_some() || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+        doc.dirty
+            || v.pending_edit.is_some()
+            || v.content.blocked().is_some()
+            || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+            || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+            || v.line_editor.as_ref().map_or_else(|| false, |ed| ed.has_unsaved_text())
     }
 
     /// Save the active document. Returns `true` if it was written.
@@ -316,13 +397,26 @@ impl PdfCraftApp {
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
-                        if app.save_doc_to(id, &dest.to_string_lossy()) {
-                            after(app);
+                        if !app.commit_typing_in(id) {
+                            return;
+                        }
+                        if app.flavor == crate::Flavor::Margin && app.session.get(id).is_some_and(|doc| !doc.is_signed()) {
+                            app.queue_margin_save(id, dest.to_string_lossy().into_owned(), Some(Box::new(after)));
+                        } else {
+                            app.wait_margin_saves();
+                            if app.save_doc_to(id, &dest.to_string_lossy()) {
+                                after(app);
+                            }
                         }
                     });
                     return false;
                 }
             };
+            if self.flavor == crate::Flavor::Margin && self.session.get(id).is_some_and(|doc| !doc.is_signed()) {
+                self.queue_margin_save(id, destination, Some(Box::new(after)));
+                return false;
+            }
+            self.wait_margin_saves();
             let saved = self.save_doc_to(id, &destination);
             if saved {
                 after(self);
@@ -331,7 +425,10 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (target, path);
+            let _ = path;
+            if !self.flatten_fill_sign_for_save(id) {
+                return false;
+            }
             let bytes = match self.session.save_bytes(id) {
                 Ok(b) => b,
                 Err(e) => {
@@ -339,15 +436,31 @@ impl PdfCraftApp {
                     return false;
                 }
             };
-            match download(&name, &bytes) {
+            // An embedding page that asked for saves (`?host=parent`) gets the bytes; otherwise
+            // the browser downloads them.
+            let to_host = self.host_save.is_some();
+            let delivered = match &self.host_save {
+                Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As)),
+                None => download(&name, &bytes),
+            };
+            match delivered {
                 Ok(()) => {
                     let _ = self.session.mark_saved(id, bytes, None);
-                    if let Some(doc) = self.session.get(id) {
-                        self.views[index].document_changed(&doc.info);
+                    if let Some(doc) = self.session.get(id)
+                        && let Some(view) = self.views.get_mut(index)
+                    {
+                        view.document_changed(&doc.info);
                     }
-                    self.notify_fmt("Downloaded {name}", &[("name", &name)]);
+                    // The host reports where the file went (and any failure) itself.
+                    if !to_host {
+                        self.notify_fmt("Downloaded {name}", &[("name", &name)]);
+                    }
                     after(self);
                     true
+                }
+                Err(e) if to_host => {
+                    self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e)]);
+                    false
                 }
                 Err(e) => {
                     self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
@@ -362,7 +475,7 @@ impl PdfCraftApp {
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str) -> bool {
         // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
         // if another tab is active by then.
-        if !self.commit_typing_in(id) {
+        if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
             return false;
         }
         let Some(name) = self.session.get(id).map(|d| d.name.clone()) else {
@@ -382,6 +495,7 @@ impl PdfCraftApp {
         }
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
+                crate::margin::reading::saved_pdf(self, id);
                 self.forget_recovery(id);
                 if let Some(doc) = self.session.get(id)
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
@@ -428,12 +542,13 @@ impl PdfCraftApp {
     /// File ▸ Revert (after the confirmation).
     pub fn revert_active(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        self.wait_margin_saves();
         match self.session.revert(id) {
             Ok(()) => {
-                if let Some(i) = self.active
-                    && let Some(d) = self.session.get(id)
+                if let Some(d) = self.session.get(id)
+                    && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
                 {
-                    let view = &mut self.views[i];
                     view.document_changed(&d.info);
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
@@ -512,16 +627,38 @@ impl PdfCraftApp {
         }
     }
 
+    /// Request a normal application exit, preserving every unsaved document until answered.
+    /// Returns false while the existing save/discard/cancel prompt needs a decision.
+    pub(crate) fn request_quit(&mut self, ctx: &egui::Context) -> bool {
+        if self.first_dirty().is_some() {
+            self.close_request = Some(CloseRequest::Quit);
+            ctx.request_repaint();
+            false
+        } else {
+            self.shutdown_recovery();
+            self.quit(ctx);
+            true
+        }
+    }
+
     fn quit(&mut self, ctx: &egui::Context) {
         self.allow_quit = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    /// Publish whether any document has unsaved work, for the browser's reload warning (#812).
+    pub(crate) fn sync_unsaved_flag(&self) {
+        self.unsaved_flag.store(self.first_dirty().is_some(), std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Intercept window close while documents have unsaved changes.
     pub(crate) fn guard_quit(&mut self, ctx: &egui::Context) {
+        self.sync_unsaved_flag();
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.wait_margin_saves();
         // `first_dirty` counts text typed into a field as an unsaved change.
         if !self.allow_quit && self.first_dirty().is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -545,6 +682,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::MoveAnnotation { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
+        | Edit::FillAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         Edit::Batch { edits, .. } => {
             let mut pages = edits.iter().map(comment_page);
@@ -650,6 +788,10 @@ impl PdfCraftApp {
                 let grand = parent_of(&parent);
                 let at = parent[parent.len() - 1] + 1;
                 Edit::MoveBookmark { from: path, to_parent: grand, index: at }
+            }
+            A::FromStructure => {
+                self.right = Some(crate::RightPanel::Bookmarks);
+                Edit::BookmarksFromStructure
             }
         };
         self.apply_edit(edit);
@@ -853,6 +995,52 @@ mod revert_draft_tests {
         let form = app.session.get(app.views[index].id).unwrap().form.clone();
         crate::forms_ui::commit(&mut app.views[index], &form);
         assert!(app.views[index].forms.committed.is_some() && app.views[index].pending_edit.is_some());
+    }
+
+    #[test]
+    fn control_quit_prompts_for_uncommitted_typing_and_cancel_retains_it() {
+        for queued in [false, true] {
+            let mut app = app();
+            let id = app.views[0].id;
+            app.open_bytes("other.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            if queued {
+                queue_draft(&mut app, 0, "Unsaved typing");
+            } else {
+                app.views[0].forms.focus = Some(focus("Unsaved typing"));
+            }
+            assert!(!app.session.get(id).unwrap().dirty);
+            assert_eq!(app.active, Some(1));
+            let ctx = egui::Context::default();
+            assert!(!app.request_quit(&ctx));
+            assert_eq!(app.close_request, Some(CloseRequest::Quit));
+            assert!(!app.allow_quit);
+            app.resolve_close(&ctx, None);
+            assert!(app.close_request.is_none());
+            assert_eq!(app.views.len(), 2);
+            assert!(app.has_unsaved_work(0));
+            assert_eq!(app.views[0].id, id);
+            assert!(!app.session.get(id).unwrap().dirty);
+            if queued {
+                assert!(
+                    matches!(&app.views[0].pending_edit, Some(Edit::SetFieldValue { value: FieldValue::Text(text), .. }) if text == "Unsaved typing")
+                );
+            } else {
+                assert_eq!(app.views[0].forms.focus.as_ref().unwrap().text, "Unsaved typing");
+            }
+        }
+    }
+
+    #[test]
+    fn unsaved_flag_follows_dirty_state() {
+        use std::sync::atomic::Ordering;
+        // `guard_quit` runs every frame, also on the web, where no close request ever arrives.
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.guard_quit(&ctx);
+        assert!(!app.unsaved_flag.load(Ordering::Relaxed));
+        assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Changed".into()) }));
+        app.guard_quit(&ctx);
+        assert!(app.unsaved_flag.load(Ordering::Relaxed));
     }
 
     #[test]

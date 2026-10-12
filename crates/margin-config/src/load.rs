@@ -111,20 +111,15 @@ impl Settings {
         }
     }
 
-    /// The value at a dotted key (`view.zoom_steps`, or a whole block such as `view`). Map keys
-    /// that contain dots (`ui.rail.tool_options.comment.ink`) are matched whole.
+    /// The value at a dotted key (`view.zoom_steps`, or a whole block such as `view`).
     pub fn get(&self, key: &str) -> Option<Value> {
         let mut node = serde_json::to_value(self).ok()?;
-        let mut rest = key;
-        while !rest.is_empty() {
+        if key.is_empty() {
+            return Some(node);
+        }
+        for segment in key.split('.') {
             let Value::Object(mut map) = node else { return None };
-            // Longest matching key first, so `comment.ink` beats `comment`.
-            let cut = std::iter::once(rest.len())
-                .chain(rest.match_indices('.').map(|(at, _)| at).collect::<Vec<_>>().into_iter().rev())
-                .find(|&cut| rest.get(..cut).is_some_and(|name| map.contains_key(name)))?;
-            let name = rest.get(..cut)?;
-            node = map.remove(name)?;
-            rest = rest.get(cut..).map_or("", |tail| tail.strip_prefix('.').unwrap_or(tail));
+            node = map.remove(segment)?;
         }
         Some(node)
     }
@@ -186,15 +181,15 @@ mod tests {
     #[test]
     fn user_values_replace_arrays_and_merge_objects() {
         let loaded = Settings::from_user_text(
-            r#"{ "view": { "zoom_steps": [80, 100, 120] }, "ui": { "rail": { "tool_options": { "comment.ink": { "color": "red", "width": 1.5 } } } } }"#,
+            r#"{ "view": { "zoom_steps": [80, 100, 120] }, "ui": { "rail": { "items": ["edit.undo"], "side": "left" } } }"#,
             "settings.jsonc",
         );
         assert_eq!(loaded.problems, []);
         assert_eq!(loaded.settings.view.zoom_steps, [80, 100, 120]);
         assert_eq!(loaded.settings.view.zoom, 100, "untouched keys keep their default");
-        let rail = &loaded.settings.ui.rail.tool_options;
-        assert_eq!(rail["comment.ink"].width, Some(1.5));
-        assert_eq!(rail["comment.highlight"].color, "yellow", "other tools keep their defaults");
+        assert_eq!(loaded.settings.ui.rail.items, ["edit.undo"]);
+        assert_eq!(loaded.settings.ui.rail.side, crate::RailSide::Left);
+        assert_eq!(loaded.settings.ui.sidebar, Settings::default().ui.sidebar, "other nested blocks keep their defaults");
     }
 
     #[test]
@@ -236,7 +231,7 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.get("view.zoom"), Some(json!(100)));
         assert_eq!(settings.get("view.zoom_steps").and_then(|v| v.as_array().map(Vec::len)), Some(12));
-        assert_eq!(settings.get("ui.rail.tool_options.comment.ink.width"), Some(json!(2.0)));
+        assert_eq!(settings.get("ui.rail.side"), Some(json!("right")));
         assert_eq!(settings.get("view.nope"), None);
         assert_eq!(settings.get("view.zoom.deeper"), None);
         assert!(settings.get("").is_some_and(|v| v.is_object()));
@@ -260,5 +255,33 @@ mod tests {
         assert_eq!(loaded.settings.view.page_color, crate::PageColor::Sepia, "the user's value, not the default");
         assert_eq!(loaded.problems.len(), 2, "{:?}", loaded.problems);
         assert_eq!(user.with_layer(&json!(3), "x").settings, user);
+    }
+
+    #[test]
+    fn legacy_and_unknown_keys_warn_without_losing_supported_values() {
+        let text = r#"{
+            "perf": { "render_threads": 8, "tile_px": 1024 },
+            "reader": { "start": "session", "find": { "regex": true, "case": true }, "back_stack": 3 },
+            "ui": { "rail": { "tool_options": { "comment.ink": { "width": 2 } }, "side": "left" } },
+            "keys": { "base": "sioyek", "chord_timeout_ms": 1500 },
+            "view": { "gamma": 1.5, "white_threshold": 0.8, "zoom": 150, "page_gap_px": 0 }
+        }"#;
+        let loaded = Settings::from_user_text(text, "legacy.jsonc");
+        assert_eq!(loaded.settings.reader.back_stack, 3);
+        assert!(loaded.settings.reader.find.case);
+        assert_eq!(loaded.settings.ui.rail.side, crate::RailSide::Left);
+        assert_eq!(loaded.settings.keys.base, crate::KeymapBase::Margin);
+        assert_eq!(loaded.settings.keys.chord_timeout_ms, 1500);
+        assert_eq!(loaded.settings.view.zoom, 150);
+        assert_eq!(loaded.settings.view.page_gap_px, 0);
+        let warned: Vec<&str> = loaded.problems.iter().map(|problem| problem.key.as_str()).collect();
+        assert_eq!(warned, ["perf", "reader.start", "reader.find.regex", "ui.rail.tool_options", "keys.base", "view.gamma", "view.white_threshold"]);
+        assert!(loaded.problems.iter().all(|problem| problem.severity == Severity::Warning));
+
+        let layer = json!({ "perf": {}, "view": { "dewatermark": 0.8, "page_gap_px": 24 } });
+        let layered = loaded.settings.with_layer(&layer, "sidecar");
+        assert_eq!(layered.settings.view.zoom, 150, "valid lower settings survive a legacy document layer");
+        assert_eq!(layered.settings.view.page_gap_px, 24);
+        assert_eq!(layered.problems.len(), 2);
     }
 }

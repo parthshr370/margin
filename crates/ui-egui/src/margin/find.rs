@@ -368,6 +368,9 @@ pub(crate) fn results(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, inde
     let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
     status(ui, t, &lines);
     if n == 0 {
+        if !query.is_empty() && searched >= pages {
+            super::scan_prompt::find(ui, app, index);
+        }
         return;
     }
     let go = list(ui, t, view, info);

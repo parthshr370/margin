@@ -103,6 +103,37 @@ fn bar_open(h: &Harness<'static, PdfCraftApp>) -> bool {
     h.query_by_label("Copy callout").is_some()
 }
 
+#[test]
+fn selection_popover_setting_hides_only_the_bar_and_applies_live() {
+    let vault = Vault::new("popover-setting", TEXT_FIXTURE);
+    let config = vault.0.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    let settings = config.join(margin_config::SETTINGS_FILE);
+    // The vault lives in settings.jsonc too; each rewrite keeps it, so notes (and the bar's Copy
+    // callout) stay on.
+    let vault_dir = vault.0.join("vault");
+    let with_popover =
+        |shown: bool| serde_json::json!({ "reader": { "selection_popover": shown }, "notes": { "vault": vault_dir.to_string_lossy() } }).to_string();
+    std::fs::write(&settings, with_popover(false)).unwrap();
+    let mut h = harness(&vault);
+    select(&mut h);
+    assert!(!bar_open(&h), "disabled selections do not open the bar");
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick brown"));
+    assert!(marks(&h).is_empty());
+
+    std::fs::write(&settings, with_popover(true)).unwrap();
+    h.state_mut().margin_keys.set_config_dir(config.clone());
+    h.run_steps(4);
+    assert!(bar_open(&h), "reenabling exposes actions for the retained selection");
+
+    std::fs::write(&settings, with_popover(false)).unwrap();
+    h.state_mut().margin_keys.set_config_dir(config);
+    h.run_steps(4);
+    assert!(!bar_open(&h), "disabling hides an already open bar");
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick brown"));
+    assert!(marks(&h).is_empty());
+}
+
 fn is_red(color: Option<[f32; 3]>) -> bool {
     color.is_some_and(|c| (c[0] - 0xea as f32 / 255.0).abs() < 0.01 && (c[1] - 0x52 as f32 / 255.0).abs() < 0.01)
 }

@@ -263,7 +263,8 @@ fn a_highlight_becomes_an_underline_and_back() {
     h.get_by_label_contains("Red highlight, p. 1: quick brown").click_secondary();
     h.run_steps(3);
     h.get_by_label("Change to underline").click();
-    h.run_steps(3);
+    // The card quotes the page's text layer, which the edit makes the renderer read again.
+    settle(&mut h);
     let made = marks(&h);
     assert_eq!((made.len(), made[0].0.as_str()), (1, "Underline"), "{made:?}");
     h.get_by_label_contains("Red underline, p. 1: quick brown");

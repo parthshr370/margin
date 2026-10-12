@@ -11,6 +11,21 @@ use crate::margin::look::{self, GAP_LARGE};
 use crate::margin::motion;
 use crate::theme::Tokens;
 
+/// Whether Margin's reader chrome is hidden.
+pub(crate) fn active(app: &PdfCraftApp) -> bool {
+    app.margin_chrome.focus_mode
+}
+
+/// Toggle Margin's reader-only layout without changing PdfCraft's full-screen state.
+pub(crate) fn toggle(app: &mut PdfCraftApp) {
+    app.margin_chrome.focus_mode = !app.margin_chrome.focus_mode;
+}
+
+/// Leave Margin's reader-only layout.
+pub(crate) fn leave(app: &mut PdfCraftApp) {
+    app.margin_chrome.focus_mode = false;
+}
+
 /// How long the bar stays after entering full screen, in seconds.
 const INTRO_SECONDS: f64 = 2.0;
 /// The pointer this close to the top edge brings the bar back.

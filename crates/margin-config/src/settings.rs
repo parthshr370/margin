@@ -1,14 +1,13 @@
 //! `Settings`: the one source of truth for settings keys, types, ranges, defaults and descriptions
 //! (CU-SET-4). Each field's doc comment is its description in the schema and its `//` comment in
-//! `default-settings.jsonc`. The keys here are the ones M1 and M2 read (`view`, `reader`,
-//! `ui.rail`, `keys`, `perf`); later tasks add the rest of CUSTOMIZATION §1.
+//! `default-settings.jsonc`. Only settings with a runtime reader belong here.
 //!
 //! `x-margin-scope` tags each top-level block `[doc]` or `[app]` (CU-SET-3); a key inherits its
 //! block's scope unless it carries its own tag.
 
-use std::collections::BTreeMap;
+use std::path::PathBuf;
 
-use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The settings format version written by this build (CU-VAL-4).
@@ -24,7 +23,7 @@ pub struct Settings {
     /// editor completion; Margin writes this folder on start
     #[serde(rename = "$schema")]
     pub schema: String,
-    /// settings format version; migrations key off it (CU-VAL-4)
+    /// settings format version supported by this build
     #[schemars(range(min = 1, max = 1))]
     pub version: u32,
     /// how a document is shown
@@ -39,15 +38,15 @@ pub struct Settings {
     /// keymap behaviour; bindings live in keymap.jsonc
     #[schemars(extend("x-margin-scope" = "app"))]
     pub keys: Keys,
-    /// rendering and cache budgets; semantics live in PERF-AND-IPC.md
-    #[schemars(extend("x-margin-scope" = "app"))]
-    pub perf: Perf,
     /// the library: folders scanned for PDFs and how the shelves show
     #[schemars(extend("x-margin-scope" = "app"))]
     pub library: Library,
     /// reading statistics in stats.sqlite
     #[schemars(extend("x-margin-scope" = "app"))]
     pub stats: Stats,
+    /// reading notes, highlights, snapshots and their export format
+    #[schemars(extend("x-margin-scope" = "app"))]
+    pub notes: Notes,
 }
 
 impl Default for Settings {
@@ -59,9 +58,9 @@ impl Default for Settings {
             reader: Reader::default(),
             ui: Ui::default(),
             keys: Keys::default(),
-            perf: Perf::default(),
             library: Library::default(),
             stats: Stats::default(),
+            notes: Notes::default(),
         }
     }
 }
@@ -94,7 +93,7 @@ pub enum Fit {
     Zoom,
 }
 
-/// The page colour mode (PERF-O2 `ImageOps`).
+/// The page colour mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PageColor {
@@ -140,27 +139,12 @@ pub struct View {
     pub follow_system: bool,
     /// ink and mono: photos the page embeds (and photo-like areas of scans) keep their colours as in night instead of two-tone; vector drawings stay two-tone
     pub keep_figures: bool,
-    /// percent; 70..115 (ImageOps.brightness = value / 100)
+    /// percent; 70..115
     #[schemars(range(min = 70, max = 115))]
     pub brightness: u32,
-    /// percent; 70..160, around mid-grey (ImageOps.contrast = value / 100)
+    /// percent; 70..160, around mid-grey
     #[schemars(range(min = 70, max = 160))]
     pub contrast: u32,
-    /// 0.5..2.0; above 1 darkens faded scans
-    #[schemars(range(min = 0.5, max = 2.0))]
-    pub gamma: f64,
-    /// percent; 0 = greyscale; 0..100
-    #[schemars(range(max = 100))]
-    pub saturation: u32,
-    /// mono cut-off, 0..1, used only by mono; lower keeps more ink
-    #[schemars(range(min = 0.0, max = 1.0))]
-    pub mono_threshold: f64,
-    /// 0 = off, else 0.5..1: brighter pixels become white (scan cleanup)
-    #[schemars(schema_with = "white_threshold_schema")]
-    pub white_threshold: f64,
-    /// 0 = off, else 0.5..0.95: light grey, low-chroma pixels become white
-    #[schemars(schema_with = "dewatermark_schema")]
-    pub dewatermark: f64,
     /// j/k and arrow step in scroll layout
     #[schemars(range(min = 1, max = 2000))]
     pub scroll_line_px: u32,
@@ -192,45 +176,12 @@ impl Default for View {
             keep_figures: true,
             brightness: 100,
             contrast: 100,
-            gamma: 1.0,
-            saturation: 100,
-            mono_threshold: 0.5,
-            white_threshold: 0.0,
-            dewatermark: 0.0,
             scroll_line_px: 80,
             scroll_screen: 0.85,
             overlap_marker: true,
             smooth_scroll: true,
         }
     }
-}
-
-/// `0` (off) or a number in `min..=max`.
-fn off_or_range(min: f64, max: f64) -> Schema {
-    json_schema!({
-        "type": "number",
-        "anyOf": [{ "const": 0 }, { "minimum": min, "maximum": max }]
-    })
-}
-
-fn white_threshold_schema(_: &mut SchemaGenerator) -> Schema {
-    off_or_range(0.5, 1.0)
-}
-
-fn dewatermark_schema(_: &mut SchemaGenerator) -> Schema {
-    off_or_range(0.5, 0.95)
-}
-
-/// What Margin shows on start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Start {
-    /// Reopen the last file at its page.
-    LastDocument,
-    /// The recent list; the library once it exists.
-    Home,
-    /// Every file open at last quit (FEATURES F-open-16, P2).
-    Session,
 }
 
 /// Find options.
@@ -241,8 +192,6 @@ pub struct FindOptions {
     pub case: bool,
     /// match whole words only
     pub whole_word: bool,
-    /// regular expressions; needs an engine change
-    pub regex: bool,
 }
 
 /// The reader block (`[app]`).
@@ -251,8 +200,6 @@ pub struct FindOptions {
 pub struct Reader {
     /// store view changes in the sidecar and reopen at the same page
     pub remember_per_document: bool,
-    /// "last_document" (reopen the last file at its page) | "home" (recent list; the library once it exists) | "session" (every file open at last quit, FEATURES F-open-16, P2)
-    pub start: Start,
     /// jumps kept for reader.back / reader.forward
     #[schemars(range(max = 10000))]
     pub back_stack: u32,
@@ -262,19 +209,23 @@ pub struct Reader {
     pub link_preview: bool,
     /// show the colour/note menu when text is selected
     pub selection_popover: bool,
-    /// footer shows section and time left from your reading speed
+    /// footer estimates the time left in the document from your recorded reading pace
     pub time_left: bool,
-    /// reload when the file changes on disk; page, zoom and colour kept
+    /// reload when the file changes on disk (a LaTeX build); place, zoom, page colour and history kept. Unsaved edits are never dropped: Margin asks
     pub reload_on_change: bool,
-    /// wait after the last disk change (Okular uses 750)
+    /// wait this long after the last disk change before reloading (Okular uses 750)
     #[schemars(range(max = 60000))]
     pub reload_debounce_ms: u32,
+    /// SyncTeX inverse search: the editor command opening a source line, run without a shell; {file}, {line}, {column} are filled in, quotes group words. "" = off. E.g. "code -g {file}:{line}", "zed {file}:{line}", "nvim --server /tmp/nvim.sock --remote-send '<C-\\><C-N>:e {file}<CR>:{line}<CR>'"
+    pub synctex_editor: String,
+    /// which click on a page runs reader.synctex_editor (secondary = Cmd on macOS, Ctrl elsewhere)
+    pub synctex_click: SynctexClick,
     /// writable PDFs: edits are saved incrementally about 1 s after the last change; false = Ctrl+S only. Never writes on open. Sidecars always autosave.
     pub autosave: bool,
     /// undo depth per document
     #[schemars(range(max = 10000))]
     pub undo_steps: u32,
-    /// find options; regex needs an engine change
+    /// initial find options
     pub find: FindOptions,
 }
 
@@ -282,7 +233,6 @@ impl Default for Reader {
     fn default() -> Self {
         Self {
             remember_per_document: true,
-            start: Start::LastDocument,
             back_stack: 100,
             back_pill: true,
             link_preview: true,
@@ -290,6 +240,8 @@ impl Default for Reader {
             time_left: true,
             reload_on_change: true,
             reload_debounce_ms: 750,
+            synctex_editor: String::new(),
+            synctex_click: SynctexClick::SecondaryClick,
             autosave: true,
             undo_steps: 100,
             find: FindOptions::default(),
@@ -297,8 +249,19 @@ impl Default for Reader {
     }
 }
 
-/// The UI block (`[app]`): the sidebar, the rail and motion so far; the rest of CUSTOMIZATION §1
-/// `ui` lands with the tasks that read it.
+/// The click that runs SyncTeX inverse search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SynctexClick {
+    /// Cmd+click on macOS, Ctrl+click elsewhere.
+    SecondaryClick,
+    /// Cmd+Shift+click on macOS (Skim's), Ctrl+Shift+click elsewhere.
+    SecondaryShiftClick,
+    /// Alt+click (Option+click on macOS).
+    AltClick,
+}
+
+/// App chrome and motion.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ui {
@@ -359,38 +322,15 @@ pub enum RailSide {
     Right,
 }
 
-/// Options of one rail tool (CU-UI-2). Every field has a default because each settings layer is
-/// partial and deep-merges (CU-SET-2).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct ToolOptions {
-    /// a notes.colors id
-    pub color: String,
-    /// stroke width in pt, for width tools
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 0.25, max = 20.0))]
-    pub width: Option<f64>,
-}
-
-/// The colour of a tool with no options: `notes.default_color`'s default (CUSTOMIZATION §1).
-const DEFAULT_TOOL_COLOR: &str = "yellow";
-
-impl Default for ToolOptions {
-    fn default() -> Self {
-        Self { color: DEFAULT_TOOL_COLOR.to_owned(), width: None }
-    }
-}
-
 /// The annotate rail (CU-UI-1, CU-UI-2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Rail {
-    /// command ids; "|" = divider
+    /// command ids; "|" = divider; unknown ids are skipped
+    #[schemars(length(max = 64))]
     pub items: Vec<String>,
     /// "left" | "right"
     pub side: RailSide,
-    /// per tool: color = notes.colors id, width in pt (mockup:1698)
-    pub tool_options: BTreeMap<String, ToolOptions>,
 }
 
 /// The mockup's default rail (`RAIL_DEF`).
@@ -408,23 +348,9 @@ const DEFAULT_RAIL: [&str; 11] = [
     "edit.redo",
 ];
 
-/// Default stroke of the pen tool, in pt (mockup:1698).
-const DEFAULT_INK_WIDTH_PT: f64 = 2.0;
-
 impl Default for Rail {
     fn default() -> Self {
-        let tool = |color: &str, width: Option<f64>| ToolOptions { color: color.to_owned(), width };
-        Self {
-            items: DEFAULT_RAIL.iter().map(|&id| id.to_owned()).collect(),
-            side: RailSide::Right,
-            tool_options: BTreeMap::from([
-                ("comment.highlight".to_owned(), tool("yellow", None)),
-                ("comment.underline".to_owned(), tool("red", None)),
-                ("comment.note".to_owned(), tool("note", None)),
-                ("comment.ink".to_owned(), tool("yellow", Some(DEFAULT_INK_WIDTH_PT))),
-                ("comment.freetext".to_owned(), tool("yellow", None)),
-            ]),
-        }
+        Self { items: DEFAULT_RAIL.iter().map(|&id| id.to_owned()).collect(), side: RailSide::Right }
     }
 }
 
@@ -434,10 +360,6 @@ impl Default for Rail {
 pub enum KeymapBase {
     /// The built-in keymap only.
     Margin,
-    /// Margin plus the Okular keys; not shipped yet, so the built-in keymap alone.
-    Okular,
-    /// Margin plus the vim-like Sioyek keys; not shipped yet, so the built-in keymap alone.
-    Sioyek,
     /// Only the user's keymap file (PdfCraft's own shortcuts still work for ids it leaves unbound).
     None,
 }
@@ -446,7 +368,7 @@ pub enum KeymapBase {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Keys {
-    /// "margin" | "none" (only keymap.jsonc); "okular" and "sioyek" are not shipped yet and act as "margin"
+    /// "margin" | "none" (only keymap.jsonc)
     pub base: KeymapBase,
     /// wait for the next key of a chord (Zed uses 1 s)
     #[schemars(range(min = 100, max = 10000))]
@@ -501,6 +423,10 @@ pub struct Library {
     pub view: LibraryView,
     /// "recent" | "title" | "author" | "progress" | "added"
     pub sort: LibrarySort,
+    /// look up the details (title, authors, year, venue, abstract) of books with a DOI or arXiv id
+    /// online, on their own, after each scan: their ids go to api.crossref.org and export.arxiv.org.
+    /// Off: nothing leaves this computer unless you click "Look up details" in a book's details
+    pub metadata_lookup: bool,
 }
 
 /// The stats block (`[app]`).
@@ -517,56 +443,103 @@ impl Default for Stats {
     }
 }
 
-/// The tile image format (PERF-R6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TileFormat {
-    /// Lossless WebP.
-    Webp,
-    /// PNG, the fallback.
-    Png,
-}
-
-/// The perf block (`[app]`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// A named highlight colour in the notes palette. A colour without a name is ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-pub struct Perf {
-    /// 0 = clamp(cores - 2, 2, 8)
-    #[schemars(range(max = 64))]
-    pub render_threads: u32,
-    /// device px; used only when a page's long side exceeds 4096 px, else one tile per page
-    #[schemars(range(min = 256, max = 4096))]
-    pub tile_px: u32,
-    /// "webp" | "png"
-    pub tile_format: TileFormat,
-    /// 0 = clamp(RAM / 32, 128, 512)
-    #[schemars(range(max = 65536))]
-    pub ram_cache_mb: u32,
-    /// thumbnails and covers only; no disk tile cache
-    #[schemars(range(max = 65536))]
-    pub disk_cache_mb: u32,
-    /// glyph and line boxes
-    #[schemars(range(max = 65536))]
-    pub text_cache_mb: u32,
-    /// ahead in the scroll direction; half that behind
-    #[schemars(range(max = 10))]
-    pub prefetch_screens: u32,
-    /// thumbnail width in CSS px, rendered at device pixel ratio
-    #[schemars(range(min = 32, max = 1024))]
-    pub thumb_px: u32,
+pub struct NoteColor {
+    /// The colour name used by Margin commands.
+    #[schemars(length(min = 1, max = 64))]
+    pub name: String,
+    /// Red, green and blue channels, each from 0 to 255.
+    pub rgb: [u8; 3],
 }
 
-impl Default for Perf {
+/// Where notes are exported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportTarget {
+    /// Obsidian Markdown with `obsidian://` links.
+    #[default]
+    Obsidian,
+    /// Plain Markdown.
+    Markdown,
+    /// Logseq Markdown.
+    Logseq,
+    /// Readwise CSV.
+    ReadwiseCsv,
+    /// JSON.
+    Json,
+}
+
+/// How an existing note is changed by an export.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteUpdateMode {
+    /// Replace Margin-managed content in the note.
+    #[default]
+    Update,
+    /// Add new content to the end of the note.
+    Append,
+}
+
+/// Margin's Obsidian and notes export settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Notes {
+    /// The Obsidian vault folder, as a full path; `null` or `""` turns vault notes off. A relative
+    /// path is not used: the notes panel says why.
+    #[serde(deserialize_with = "deserialize_vault")]
+    pub vault: Option<PathBuf>,
+    /// Vault-relative reading-note path. Common placeholders: `title`, `title-slug`, `authors`,
+    /// `year`, `doi`, `arxiv`, `citekey`, `tags`, `date`, `progress`, `page`, `color`,
+    /// `color-name`, `text`, `note` and `link`. Values are slugged for paths and substituted once
+    /// as literals; unknown or missing placeholders become empty.
+    pub note_template: String,
+    /// YAML front matter template. It accepts the common placeholders and `source`; values are
+    /// JSON/YAML-quoted and escaped before one-pass literal substitution. Unknown or missing
+    /// values are empty.
+    pub front_matter_template: String,
+    /// Optional note header template. It accepts the common placeholders plus `source` and
+    /// `callout`; substitutions are one-pass literals, and unknown or missing values are empty.
+    pub header_template: String,
+    /// Highlight template. It accepts the common placeholders plus `source` and `callout`;
+    /// `{{callout}}` is the safely formatted callout. Substitution is one-pass and unknown or
+    /// missing values are empty.
+    pub highlight_template: String,
+    /// Named RGB palette; the first colour is the default.
+    #[schemars(length(min = 1, max = 64))]
+    pub colors: Vec<NoteColor>,
+    /// Default format for note exports.
+    pub export_target: ExportTarget,
+    /// Folder under the vault where snapshots are stored.
+    pub snapshot_folder: String,
+    /// How exports change an existing note.
+    pub update_mode: NoteUpdateMode,
+}
+
+fn deserialize_vault<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let vault = Option::<PathBuf>::deserialize(deserializer)?;
+    Ok(vault.filter(|path| !path.as_os_str().is_empty()))
+}
+
+const DEFAULT_NOTE_COLORS: [(&str, [u8; 3]); 4] =
+    [("Yellow", [0xff, 0xd0, 0x00]), ("Red", [0xea, 0x52, 0x52]), ("Note", [0x08, 0x6d, 0xdd]), ("Important", [0xbb, 0x61, 0xe5])];
+
+impl Default for Notes {
     fn default() -> Self {
         Self {
-            render_threads: 0,
-            tile_px: 1024,
-            tile_format: TileFormat::Webp,
-            ram_cache_mb: 0,
-            disk_cache_mb: 512,
-            text_cache_mb: 64,
-            prefetch_screens: 1,
-            thumb_px: 160,
+            vault: None,
+            note_template: "reading/{{title-slug}}.md".to_owned(),
+            front_matter_template: "---\nsource: \"{{source}}\"\n---\n\n".to_owned(),
+            header_template: String::new(),
+            highlight_template: "{{callout}}".to_owned(),
+            colors: DEFAULT_NOTE_COLORS.iter().map(|(name, rgb)| NoteColor { name: (*name).to_owned(), rgb: *rgb }).collect(),
+            export_target: ExportTarget::Obsidian,
+            snapshot_folder: "attachments".to_owned(),
+            update_mode: NoteUpdateMode::Update,
         }
     }
 }

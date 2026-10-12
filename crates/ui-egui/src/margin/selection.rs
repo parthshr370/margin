@@ -7,7 +7,8 @@
 //! restyle that same mark (`StyleAnnotation`), so a choice never duplicates it, and Underline
 //! turns it from a highlight into an underline and back (`highlights::change_kind`). The bar
 //! follows the selection as the page scrolls, stays inside the reading area and hides while its
-//! text is scrolled out of view, without closing.
+//! text is scrolled out of view, without closing. On a PDF Margin doesn't write, the mark is a
+//! highlight kept in the sidecar instead (`margin::marks`), restyled the same way.
 //!
 //! It is an [`egui::Area`], not an egui popup: `margin::ui` keeps a click that closes a popup
 //! from reaching the page, and a click on the page has to close this bar and start a new
@@ -17,10 +18,12 @@
 use std::ops::Range;
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, vec2};
+use margin_config::HighlightStyle;
 use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape};
 use serde_json::Value;
 
 use super::highlights::NOT_ALLOWED;
+use super::marks::{self, Pick};
 use super::{SidebarTab, highlights, look, obsidian};
 use crate::PdfCraftApp;
 use crate::canvas::DocView;
@@ -58,8 +61,16 @@ struct Bar {
     /// The selected lines' boxes in page view space: the bar's anchor. Kept, because a mark
     /// makes the page re-read its text.
     lines: Vec<[f32; 4]>,
-    /// The comment index (on `page`) of the mark this bar wrote, if it wrote one.
-    mark: Option<usize>,
+    /// The mark this bar wrote, if it wrote one.
+    mark: Option<BarMark>,
+}
+
+/// The mark a bar wrote: a PDF comment (its index on the bar's page) or a highlight kept in the
+/// sidecar (`margin::marks`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BarMark {
+    Pdf(usize),
+    Sidecar(String),
 }
 
 impl SelectionBar {
@@ -87,6 +98,9 @@ enum Action {
 /// area). Called after the page is drawn, so the selection and the page positions are this
 /// frame's.
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) {
+    if !app.margin_keys.settings().reader.selection_popover {
+        return;
+    }
     let Some(view) = app.views.get_mut(i) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     track(view, &doc.info, ctx);
@@ -108,12 +122,15 @@ fn track(view: &mut DocView, info: &pdfcraft_render::DocInfo, ctx: &egui::Contex
         state.open = None;
     }
     // An undone mark is no longer this bar's.
-    if let Some(bar) = state.open.as_mut()
-        && let Some(index) = bar.mark
-        && !info.annotations.iter().any(|a| a.page == bar.page && a.index == index && obsidian::is_markup(a))
-    {
+    let gone = match state.open.as_ref().and_then(|bar| bar.mark.as_ref().map(|mark| (bar.page, mark))) {
+        Some((page, BarMark::Pdf(index))) => !info.annotations.iter().any(|a| a.page == page && a.index == *index && obsidian::is_markup(a)),
+        Some((_, BarMark::Sidecar(id))) => view.margin.marks.highlight(id).is_none(),
+        None => false,
+    };
+    if gone && let Some(bar) = view.margin.selection.open.as_mut() {
         bar.mark = None;
     }
+    let state = &mut view.margin.selection;
     let dragging = ctx.input(|input| input.pointer.primary_down());
     match selection {
         Some(current) => {
@@ -163,10 +180,20 @@ fn draw(app: &PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) -> Opt
     let bar = view.margin.selection.open.as_ref()?;
     let (pos, pivot) = placement(view, bar, viewport)?;
     let doc = app.session.get(view.id)?;
-    let mark = bar.mark.and_then(|index| doc.info.annotations.iter().find(|a| a.page == bar.page && a.index == index));
-    let mark_color = mark.and_then(|a| a.color).and_then(|rgb| app.notes.color_named(rgb)).map(|c| c.name.as_str());
-    let underlined = mark.is_some_and(|a| a.subtype == "Underline");
-    let can_mark = doc.allows_annotation();
+    let (mark_rgb, underlined) = match &bar.mark {
+        Some(BarMark::Pdf(index)) => {
+            let mark = doc.info.annotations.iter().find(|a| a.page == bar.page && a.index == *index);
+            (mark.and_then(|a| a.color), mark.is_some_and(|a| a.subtype == "Underline"))
+        }
+        Some(BarMark::Sidecar(id)) => {
+            let mark = view.margin.marks.highlight(id);
+            (mark.map(|h| marks::shown_rgb(&app.notes, h)), mark.is_some_and(|h| h.style == HighlightStyle::Underline))
+        }
+        None => (None, false),
+    };
+    let mark_color = mark_rgb.and_then(|rgb| app.notes.color_named(rgb)).map(|c| c.name.as_str());
+    let beside = view.margin.marks.beside().is_some();
+    let can_mark = doc.allows_annotation() || beside;
     let notes = &view.comments.notes;
     let t = Tokens::get(ctx);
     let mut clicked = None;
@@ -229,6 +256,7 @@ fn draw(app: &PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) -> Opt
                         let open_reason = match (&notes.note, can_mark) {
                             (Err(why), _) => Some(why.as_str()),
                             (Ok(_), false) => Some(NOT_ALLOWED),
+                            (Ok(_), true) if beside => Some(highlights::BESIDE_OPEN_TIP),
                             (Ok(_), true) => None,
                         };
                         let label = open_reason.map_or("Open in Obsidian: highlight and add to the reading note", |why| why);
@@ -268,25 +296,40 @@ fn run(app: &mut PdfCraftApp, ctx: &egui::Context, i: usize, action: Action) {
         }
         Action::Underline => toggle_underline(app, i),
         Action::Comment => {
-            let Some(index) = ensure_mark(app, i) else { return };
+            let Some(mark) = ensure_mark(app, i) else { return };
             let Some(page) = bar(app, i).map(|bar| bar.page) else { return };
             let Some(view) = app.views.get_mut(i) else { return };
-            let contents = app
-                .session
-                .get(view.id)
-                .and_then(|doc| doc.info.annotations.iter().find(|a| a.page == page && a.index == index).and_then(|a| a.contents.clone()))
-                .unwrap_or_default();
-            view.comments.selected = Some((page, index));
-            view.comments.reveal = true;
-            view.comments.editing = Some((page, index, contents));
+            match mark {
+                BarMark::Pdf(index) => {
+                    let contents = app
+                        .session
+                        .get(view.id)
+                        .and_then(|doc| doc.info.annotations.iter().find(|a| a.page == page && a.index == index).and_then(|a| a.contents.clone()))
+                        .unwrap_or_default();
+                    view.comments.selected = Some((page, index));
+                    view.comments.reveal = true;
+                    view.comments.editing = Some((page, index, contents));
+                }
+                BarMark::Sidecar(id) => {
+                    let note = view.margin.marks.highlight(&id).and_then(|h| h.note.clone()).unwrap_or_default();
+                    view.margin.marks.selected = Some(Pick::Highlight(id.clone()));
+                    view.margin.marks.editing = Some((Pick::Highlight(id), note));
+                }
+            }
             close(app, i);
             super::open_tab(app, SidebarTab::Highlights);
         }
         Action::CopyCallout => {
-            let Some((page, text, mark)) = bar(app, i).map(|bar| (bar.page, bar.text.clone(), bar.mark)) else { return };
-            let color = mark.and_then(|index| {
-                let doc = app.session.get(app.views.get(i)?.id)?;
-                doc.info.annotations.iter().find(|a| a.page == page && a.index == index).and_then(|a| a.color)
+            let Some((page, text, mark)) = bar(app, i).map(|bar| (bar.page, bar.text.clone(), bar.mark.clone())) else { return };
+            let color = mark.and_then(|mark| {
+                let view = app.views.get(i)?;
+                match mark {
+                    BarMark::Pdf(index) => {
+                        let doc = app.session.get(view.id)?;
+                        doc.info.annotations.iter().find(|a| a.page == page && a.index == index).and_then(|a| a.color)
+                    }
+                    BarMark::Sidecar(id) => view.margin.marks.highlight(&id).map(|h| marks::shown_rgb(&app.notes, h)),
+                }
             });
             match obsidian::selection_callout(app, i, page, &text, color) {
                 Ok(callout) => {
@@ -298,7 +341,7 @@ fn run(app: &mut PdfCraftApp, ctx: &egui::Context, i: usize, action: Action) {
             }
         }
         Action::OpenInObsidian => {
-            let Some(index) = ensure_mark(app, i) else { return };
+            let Some(BarMark::Pdf(index)) = ensure_mark(app, i) else { return };
             let Some(page) = bar(app, i).map(|bar| bar.page) else { return };
             if let Some(view) = app.views.get_mut(i) {
                 view.comments.notes.ask(ctx, obsidian::Request::Open(Some((page, index))));
@@ -337,15 +380,16 @@ fn close(app: &mut PdfCraftApp, i: usize) {
 /// Highlight the selection in `color`, or restyle the bar's mark.
 fn color_mark(app: &mut PdfCraftApp, i: usize, color: [f64; 3]) {
     let Some(bar) = bar(app, i) else { return };
-    match bar.mark {
-        Some(index) => {
-            let page = bar.page;
-            if app.session.get(app.views[i].id).is_some_and(|doc| !doc.allows_annotation()) {
+    let page = bar.page;
+    match bar.mark.clone() {
+        Some(BarMark::Pdf(index)) => {
+            if app.views.get(i).and_then(|view| app.session.get(view.id)).is_some_and(|doc| !doc.allows_annotation()) {
                 app.notify(NOT_ALLOWED);
                 return;
             }
-            app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None });
+            app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
         }
+        Some(BarMark::Sidecar(id)) => marks::recolor(app, i, &id, color),
         None => {
             mark(app, i, Markup::Highlight, Some(color));
         }
@@ -355,10 +399,19 @@ fn color_mark(app: &mut PdfCraftApp, i: usize, color: [f64; 3]) {
 /// The bar's Underline: underline the selection, or turn the bar's mark from a highlight into an
 /// underline or back (`highlights::change_kind`, one undo step); the bar keeps the new mark.
 fn toggle_underline(app: &mut PdfCraftApp, i: usize) {
-    let Some((page, mark_index)) = bar(app, i).map(|bar| (bar.page, bar.mark)) else { return };
-    let Some(index) = mark_index else {
-        mark(app, i, Markup::Underline, None);
-        return;
+    let Some((page, bar_mark)) = bar(app, i).map(|bar| (bar.page, bar.mark.clone())) else { return };
+    let index = match bar_mark {
+        None => {
+            mark(app, i, Markup::Underline, None);
+            return;
+        }
+        Some(BarMark::Sidecar(id)) => {
+            let underlined = app.views.get(i).and_then(|view| view.margin.marks.highlight(&id)).is_some_and(|h| h.style == HighlightStyle::Underline);
+            let style = if underlined { HighlightStyle::Highlight } else { HighlightStyle::Underline };
+            marks::restyle(app, i, &id, style);
+            return;
+        }
+        Some(BarMark::Pdf(index)) => index,
     };
     let underlined = app
         .views
@@ -368,44 +421,59 @@ fn toggle_underline(app: &mut PdfCraftApp, i: usize) {
     let kind = if underlined { Markup::Highlight } else { Markup::Underline };
     let Some(new) = highlights::change_kind(app, i, page, index, kind) else { return };
     if let Some(bar) = app.views.get_mut(i).and_then(|view| view.margin.selection.open.as_mut()) {
-        bar.mark = Some(new);
+        bar.mark = Some(BarMark::Pdf(new));
     }
 }
 
 /// The bar's mark, highlighting the selection in the tool's colour first when there is none.
-fn ensure_mark(app: &mut PdfCraftApp, i: usize) -> Option<usize> {
-    match bar(app, i)?.mark {
-        Some(index) => Some(index),
+fn ensure_mark(app: &mut PdfCraftApp, i: usize) -> Option<BarMark> {
+    match bar(app, i)?.mark.clone() {
+        Some(mark) => Some(mark),
         None => mark(app, i, Markup::Highlight, None),
     }
 }
 
 /// Mark the bar's selection as `kind`, in `color` or the tool's own: one `AddAnnotation` on the
-/// undo stack. The page's selection gives way to the mark; the bar keeps it, so later colours
-/// restyle it. Returns the mark's comment index.
-fn mark(app: &mut PdfCraftApp, i: usize, kind: Markup, color: Option<[f64; 3]>) -> Option<usize> {
+/// undo stack, or one sidecar highlight when the PDF keeps its marks beside it
+/// (`margin::marks`). The page's selection gives way to the mark; the bar keeps it, so later
+/// colours restyle it. Returns the mark.
+fn mark(app: &mut PdfCraftApp, i: usize, kind: Markup, color: Option<[f64; 3]>) -> Option<BarMark> {
     let view = app.views.get(i)?;
     let doc = app.session.get(view.id)?;
-    if !doc.allows_annotation() {
-        app.notify(NOT_ALLOWED);
-        return None;
-    }
-    let (page, quads) = view.selection_quads(&doc.info)?;
     let tool = if kind == Markup::Underline { CommentTool::Underline } else { CommentTool::Highlight };
     let mut style = app.comment_prefs.style(tool);
     if let Some(color) = color {
         style.color = color;
     }
-    let author = app.comment_prefs.author.clone();
-    if !app.apply_edit(Edit::AddAnnotation(NewAnnotation { page, shape: Shape::TextMarkup { kind, quads }, style, contents: String::new(), author }))
-    {
-        return None;
-    }
+    let made = if view.margin.marks.beside().is_some() {
+        let bar = view.margin.selection.open.as_ref()?;
+        let new = marks::NewMark {
+            page: bar.page,
+            quads: bar.lines.iter().map(|line| marks::rect_quad(*line)).collect(),
+            text: Some(bar.text.clone()),
+            kind,
+            rgb: style.color,
+            note: String::new(),
+        };
+        BarMark::Sidecar(marks::add(app, i, new)?)
+    } else {
+        if !doc.allows_annotation() {
+            app.notify(NOT_ALLOWED);
+            return None;
+        }
+        let (page, quads) = view.selection_quads(&doc.info)?;
+        let author = app.comment_prefs.author.clone();
+        let shape = Shape::TextMarkup { kind, quads };
+        if !app.apply_edit(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: String::new(), author })) {
+            return None;
+        }
+        let view = app.views.get(i)?;
+        BarMark::Pdf(view.comments.selected.filter(|(selected_page, _)| *selected_page == page).map(|(_, index)| index)?)
+    };
     let view = app.views.get_mut(i)?;
-    let index = view.comments.selected.filter(|(selected_page, _)| *selected_page == page).map(|(_, index)| index)?;
     view.clear_selection();
     if let Some(bar) = view.margin.selection.open.as_mut() {
-        bar.mark = Some(index);
+        bar.mark = Some(made.clone());
     }
-    Some(index)
+    Some(made)
 }

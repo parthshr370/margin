@@ -1,8 +1,10 @@
 //! Margin: a reader-first PDF app. It is PdfCraft's interface with `Flavor::Margin`, which swaps
 //! the Acrobat-style chrome for a reader layout (`crates/ui-egui/src/margin`).
 //!
-//! Usage: `margin [--control FILE] [--key value…] [files…]`. The `--key value` options are
-//! PdfCraft's (`apps/pdfcraft/src/main.rs`); `--control` enables the opt-in UI control channel.
+//! Usage: `margin [--control FILE] [--forward-search FILE.tex:LINE[:COLUMN]] [--key value…] [files…]`.
+//! The `--key value` options are PdfCraft's (`apps/pdfcraft/src/main.rs`); `--control` enables
+//! the opt-in UI control channel. `--forward-search` (SyncTeX) shows that source line in the one
+//! PDF given; a Margin already running takes it and this launch exits.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -64,6 +66,7 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut options: Vec<(String, String)> = Vec::new();
     let mut control_file: Option<String> = None;
+    let mut forward_search: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -72,6 +75,7 @@ fn main() -> eframe::Result {
                 return Ok(());
             }
             "--control" => control_file = args.next(),
+            "--forward-search" => forward_search = args.next(),
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
@@ -79,12 +83,32 @@ fn main() -> eframe::Result {
             _ => files.push(path_from_arg(arg)),
         }
     }
+    let forward = match forward_search.map(|location| forward_request(&location, &files)).transpose() {
+        Ok(forward) => forward,
+        Err(e) => {
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("margin: {e}\n"));
+            std::process::exit(2);
+        }
+    };
+    if let Some(request) = &forward {
+        match pdfcraft_ui_egui::margin::synctex::hand_off_to_running(request) {
+            Ok(pdfcraft_ui_egui::margin::synctex::HandOff::Sent) => return Ok(()),
+            Ok(pdfcraft_ui_egui::margin::synctex::HandOff::NotRunning) => {}
+            Err(e) => log::warn!("forward search: handing off to the running Margin failed ({e}); opening here"),
+        }
+    }
+    // macOS: the content runs under a transparent title bar and Margin places the traffic lights
+    // in its header row (`margin::window_chrome`).
+    let integrated = cfg!(target_os = "macos");
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Margin")
         .with_inner_size(WINDOW_SIZE)
         .with_min_inner_size(MIN_WINDOW_SIZE)
         .with_drag_and_drop(true)
         .with_app_id(APP_ID);
+    if integrated {
+        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
     match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
         Ok(icon) => viewport = viewport.with_icon(icon),
         Err(e) => log::warn!("app icon: {e}"),
@@ -113,9 +137,11 @@ fn main() -> eframe::Result {
             if let Some(json) = cc.storage.and_then(|s| s.get_string(STORAGE_KEY)) {
                 app.restore(&json);
             }
+            app.integrated_titlebar = integrated;
             #[cfg(target_os = "macos")]
             {
                 app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+                pdfcraft_ui_egui::margin::menu_bar::install(&mut app, &cc.egui_ctx);
             }
             if let Some(file) = &control_file {
                 let client = app.attach_control(&cc.egui_ctx);
@@ -124,6 +150,13 @@ fn main() -> eframe::Result {
                     Ok(port) => log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})"),
                     Err(e) => log::error!("--control {file}: {e}"),
                 }
+            }
+            match pdfcraft_ui_egui::margin::synctex::serve(&mut app, &cc.egui_ctx) {
+                Ok(()) => {}
+                Err(e) => log::info!("forward search inbox not served: {e}"),
+            }
+            if let Some(request) = forward {
+                app.margin_synctex.forward(request);
             }
             if let Some(dir) = settings_dir() {
                 app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir.join("recovery")));
@@ -140,6 +173,12 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+/// `--forward-search`'s request: its `FILE.tex:LINE[:COLUMN]` and the one PDF named.
+fn forward_request(location: &str, files: &[String]) -> Result<pdfcraft_ui_egui::margin::synctex::ForwardRequest, String> {
+    let [pdf] = files else { return Err("--forward-search needs exactly one PDF: margin --forward-search FILE.tex:LINE paper.pdf".into()) };
+    pdfcraft_ui_egui::margin::synctex::ForwardRequest::parse(location, pdf)
 }
 
 // The helpers below are copied from `apps/pdfcraft/src/main.rs`, where they are tested; keep them

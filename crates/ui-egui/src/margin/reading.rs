@@ -20,8 +20,8 @@ use serde_json::{Map, Value};
 
 use super::display::{DisplayState, SOURCE_NEAR};
 use super::trim::{Margins, Trim};
-use crate::canvas::{Fit, GAP, PT, PageLayout, SIDE};
-use crate::{DocView, Flavor, PdfCraftApp, SaveTarget};
+use crate::canvas::{Fit, PT, PageLayout, SIDE};
+use crate::{DocView, Flavor, PdfCraftApp};
 
 /// Sidecar writes and autosaves wait this long after the last change.
 pub const DEBOUNCE_SECS: f64 = 1.0;
@@ -41,7 +41,11 @@ const MAX_ZOOM_PERCENT: f32 = MAX_ZOOM * PERCENT;
 const X_RANGE: std::ops::RangeInclusive<f32> = -1.0..=2.0;
 const PERCENT: f32 = 100.0;
 /// Page bookmarks kept per document (the sidecar is untrusted input).
-const MAX_BOOKMARKS: usize = 10_000;
+pub const MAX_BOOKMARKS: usize = 10_000;
+/// The longest bookmark name kept, in characters.
+const MAX_BOOKMARK_NAME: usize = 200;
+/// The width share a bookmark keeps when the sideways place isn't known: the page's middle.
+const CENTRE: f32 = 0.5;
 /// The `format` of a PDF's sidecar.
 const DOC_FORMAT: &str = "pdf";
 /// The `[doc]` keys "Set as default" copies, per Display popover row.
@@ -58,6 +62,10 @@ pub struct DocReading {
     pub bookmarks: Vec<Bookmark>,
     /// The page text the Highlights tab's cards quote.
     pub(crate) quotes: super::highlights::Quotes,
+    /// The Highlights tab's search, filters and laid-out list.
+    pub(crate) list: super::highlights::List,
+    /// Highlights and page notes kept in the sidecar (`margin::marks`).
+    pub(crate) marks: super::marks::Marks,
     /// A new search's first match, kept on the reading page (`margin::find`).
     pub(crate) find_pick: Option<super::find::AutoPick>,
     /// The horizontal half of a pending `goto`: the share of the page's width to put at the
@@ -76,6 +84,10 @@ pub struct DocReading {
     autosave: Autosave,
     /// The page count the trim boxes were learned for.
     pages: usize,
+    reader_defaults: Option<(u32, margin_config::FindOptions)>,
+    restored_place: bool,
+    #[cfg(test)]
+    snapshots_built: std::cell::Cell<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -102,6 +114,9 @@ struct Autosave {
 struct SidecarFile {
     document: PathBuf,
     data: Option<PathBuf>,
+    /// The library's key for the book (`library::opened`): the name of its sidecar in `<data>`
+    /// and the sidecar's `doc.book_id` when it has none yet. `None` without a library.
+    book_id: Option<String>,
     /// The file as read (or new): highlights, notes and fields from newer versions survive.
     file: Sidecar,
     /// Where it was found or last written.
@@ -122,10 +137,13 @@ struct Snapshot {
     at: f32,
     /// Share of the page's width at the window's centre, when known.
     x: Option<f32>,
-    /// The `[doc]` settings layer (`settings.view`).
-    view: Map<String, Value>,
+    /// The `[doc]` settings layer (`settings.view`), as [`view_layer`] writes it.
+    view: ViewState,
+    remember: bool,
     trim: TrimRecord,
     bookmarks: Vec<Bookmark>,
+    /// `Marks::generation`: sidecar highlights, page notes and tombstones.
+    marks: u64,
     auto_add: bool,
 }
 
@@ -138,6 +156,43 @@ struct TrimRecord {
     even: Margins,
 }
 
+/// What the `[doc]` settings layer records, without its JSON: equal states write equal layers,
+/// so frames compare it without allocating.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ViewState {
+    display: DisplayState,
+    layout: PageLayout,
+    cover: bool,
+    fit: &'static str,
+    /// Only a zoom fit records its zoom; the others recompute it from the window.
+    zoom: Option<u32>,
+    read_width: Option<u32>,
+    trim: bool,
+    page_gap: Option<u32>,
+}
+
+impl ViewState {
+    fn of(view: &DocView) -> Self {
+        let fit = match (view.fit, view.margin.read_fit.is_some()) {
+            (Fit::None, true) => "read",
+            (Fit::Width, _) => "width",
+            (Fit::Page, _) => "page",
+            (Fit::Height | Fit::None, _) => "zoom",
+        };
+        Self {
+            display: view.margin.display,
+            layout: view.layout,
+            cover: view.cover,
+            fit,
+            zoom: (fit == "zoom").then(|| (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32),
+            // Fit "read" is only the same fit with the width it was picked at.
+            read_width: view.margin.read_fit.map(|read| read.width_px.round() as u32),
+            trim: view.margin.trim.on,
+            page_gap: view.page_gap_px,
+        }
+    }
+}
+
 impl TrimRecord {
     fn of(trim: &Trim) -> Self {
         Self { manual: trim.manual, separate: trim.separate, odd: trim.odd, even: trim.even }
@@ -145,15 +200,19 @@ impl TrimRecord {
 }
 
 impl Snapshot {
-    fn same(&self, other: &Self) -> bool {
-        let near = |a: f32, b: f32| (a - b).abs() <= SAME_PLACE;
-        self.page == other.page
-            && near(self.at, other.at)
-            && self.x.zip(other.x).is_none_or(|(a, b)| near(a, b))
-            && self.view == other.view
-            && self.trim == other.trim
-            && self.bookmarks == other.bookmarks
-            && self.auto_add == other.auto_add
+    fn matches(&self, view: &DocView, auto_add: bool, remember: bool) -> bool {
+        let Spot { page, y, x } = spot(view);
+        let near = |left: f32, right: f32| (left - right).abs() <= SAME_PLACE;
+        self.remember == remember
+            && (!remember
+                || (self.page == page
+                    && near(self.at, y)
+                    && self.x.zip(x).is_none_or(|(left, right)| near(left, right))
+                    && self.view == ViewState::of(view)))
+            && self.trim == TrimRecord::of(&view.margin.trim)
+            && self.bookmarks == view.margin.bookmarks
+            && self.marks == view.margin.marks.generation()
+            && self.auto_add == auto_add
     }
 }
 
@@ -183,11 +242,22 @@ pub enum SaveStatus {
     /// Autosave couldn't write this change: still in the document, unsaved.
     Failed,
     /// Can't be changed or saved in place: PdfCraft opened it read-only
-    /// (`Document::read_only_reason`) or the file itself is read-only.
-    ReadOnly { dirty: bool },
+    /// (`Document::read_only_reason`) or the file or its folder is read-only.
+    ReadOnly { dirty: bool, marks: MarksKept },
     /// Signed: Margin never writes it unasked; Save adds an incremental update, which keeps the
     /// signatures valid.
-    Signed { dirty: bool },
+    Signed { dirty: bool, marks: MarksKept },
+}
+
+/// Where the text marks of a PDF Margin doesn't write go (`margin::marks`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarksKept {
+    /// Into the PDF, like any edit: nothing is kept beside it.
+    InPdf,
+    /// Into its sidecar; `any`: the sidecar holds highlights or notes a copy can take.
+    Beside { any: bool },
+    /// Nowhere: its sidecar was written by a newer Margin or can't be read.
+    Refused,
 }
 
 /// The Display popover rows "Set as default" belongs to.
@@ -205,11 +275,21 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     }
     let defaults = app.margin_keys.settings_for_open();
     let data = app.margin_keys.data_dir();
+    let remember = defaults.reader.remember_per_document;
+    let undo_limit = defaults.reader.undo_steps as usize;
+    let find_defaults = defaults.reader.find;
+    #[cfg(not(target_arch = "wasm32"))]
+    let book_id = super::library::book_key(app, index);
+    #[cfg(target_arch = "wasm32")]
+    let book_id: Option<String> = None;
     let Some(view) = app.views.get_mut(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let document = doc.path.as_ref().map(PathBuf::from);
     let found = match &document {
-        Some(path) => store::find(path, &store::fingerprint(&doc.bytes), data.as_deref()),
+        Some(path) => {
+            let fingerprint = store::fingerprint(&doc.bytes);
+            store::find_any(path, &[book_id.as_deref().unwrap_or(&fingerprint), &fingerprint], data.as_deref())
+        }
         None => Found::Missing,
     };
     let (file, path, locked) = match found {
@@ -217,8 +297,14 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
         Found::Sidecar { sidecar, path } => (*sidecar, Some(path), None),
         Found::Locked { path, reason } => (Sidecar::new(), Some(path), Some(reason)),
     };
-    let settings = match (&file.settings, &path) {
-        (Some(layer), Some(path)) => {
+    // A sidecar from a newer Margin is never written, but the highlights and notes this
+    // version can read still show, read-only.
+    let newer = match (&locked, &path) {
+        (Some(_), Some(path)) => store::read(path).ok().flatten(),
+        _ => None,
+    };
+    let settings = match (&file.settings, &path, remember) {
+        (Some(layer), Some(path), true) => {
             let loaded = defaults.with_layer(layer, &path.display().to_string());
             loaded.problems.iter().for_each(|problem| log::warn!("{problem}"));
             loaded.settings
@@ -227,22 +313,32 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     };
     let pages = doc.info.pages.len();
     apply_view_settings(view, &settings.view, file.trim.as_ref(), &doc.info);
-    if let Some(spot) = file.progress.as_ref().and_then(|progress| spot_of(progress, pages)) {
+    view.find_defaults = Some(find_defaults);
+    view.margin.reader_defaults = Some((settings.reader.undo_steps, find_defaults));
+    if remember && let Some(spot) = file.progress.as_ref().and_then(|progress| spot_of(progress, pages)) {
+        view.margin.restored_place = true;
         view.current = spot.page;
         view.page_input = (spot.page + 1).to_string();
         go(view, spot);
     }
     let generation = doc.edit_generation();
+    let beside = document.as_deref().and_then(|path| super::marks::beside_reason(doc, path));
+    let refused = match (&document, &locked) {
+        (None, _) => Some("it has no file yet".to_owned()),
+        (Some(_), Some(reason)) => Some(format!("its sidecar can't be changed: {}", reason.trim_end_matches("; it is not changed"))),
+        (Some(_), None) => None,
+    };
     let reading = &mut view.margin;
+    reading.marks = super::marks::Marks::load(newer.as_ref().or(Some(&file)), beside, refused);
     reading.bookmarks = file.bookmarks.iter().take(MAX_BOOKMARKS).cloned().collect();
     reading.bookmarks.sort_by_key(|bookmark| bookmark_page(bookmark).unwrap_or(usize::MAX));
-    let file_read_only = doc.path.as_ref().and_then(|path| std::fs::metadata(path).ok()).is_some_and(|meta| meta.permissions().readonly());
+    let file_read_only = document.as_deref().is_some_and(super::marks::path_unwritable);
     reading.autosave = Autosave { opened: generation, seen: generation, file_read_only, ..Autosave::default() };
     reading.pages = pages;
     reading.history.exact = true;
     let auto_add = file.obsidian.as_ref().is_some_and(|obsidian| obsidian.auto_add);
     let notice = locked.as_ref().map(|reason| format!("This document's reading state won't be saved: {reason}"));
-    reading.sidecar = document.map(|document| SidecarFile { document, data, file, path, locked, saved: None, pending: None });
+    reading.sidecar = document.map(|document| SidecarFile { document, data, book_id, file, path, locked, saved: None, pending: None });
     // The sidecar is where autoadd is remembered: an open document follows it.
     if let Some(path) = doc.path.clone() {
         if auto_add {
@@ -251,6 +347,11 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
             app.notes.autoadd.remove(&path);
         }
     }
+    let id = view.id;
+    super::history::set_depth(view, settings.reader.back_stack);
+    if let Err(error) = app.session.set_undo_limit(id, undo_limit) {
+        log::warn!("Couldn't apply undo depth: {error}");
+    }
     if let Some(notice) = notice {
         app.notify(notice);
     }
@@ -258,9 +359,22 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     super::library::opened(app, index);
 }
 
+/// The `doc.book_id` in the document's sidecar, when it has one.
+pub(crate) fn sidecar_book_id(view: &DocView) -> Option<String> {
+    view.margin.sidecar.as_ref().and_then(|file| file.file.doc.as_ref()).map(|doc| doc.book_id.clone()).filter(|id| !id.is_empty())
+}
+
+/// The library listed the document as the book with key `book_id`: its sidecar goes under that
+/// key in `<data>` from now on.
+pub(crate) fn set_book_id(view: &mut DocView, book_id: String) {
+    if let Some(file) = view.margin.sidecar.as_mut() {
+        file.book_id = Some(book_id);
+    }
+}
+
 /// Whether the document's sidecar had a reading position to restore.
 pub(crate) fn has_saved_place(view: &DocView) -> bool {
-    view.margin.sidecar.as_ref().is_some_and(|file| file.file.progress.is_some())
+    view.margin.restored_place
 }
 
 /// Whether fit "read" holds the zoom.
@@ -324,6 +438,7 @@ pub fn set_trim_option(view: &mut DocView, value: &str) -> Result<(), String> {
 
 /// Show `view` as the `[doc]` settings `settings` and the sidecar's trim block say.
 fn apply_view_settings(view: &mut DocView, settings: &margin_config::View, trim: Option<&margin_config::Trim>, info: &DocInfo) {
+    view.page_gap_px = Some(settings.page_gap_px);
     view.margin.display = DisplayState::from_settings(settings);
     let mut trim_state = Trim::default();
     trim_state.on = settings.trim;
@@ -378,7 +493,7 @@ fn follow_read_fit(view: &mut DocView, info: &DocInfo) -> bool {
     // Two-up fits the spread: two pages and the gap between them, as `DocView::fit_zoom` lays
     // out a row (a cover shown alone is one page of such a row).
     let per_row = if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
-    let page_room = ((window - 2.0 * SIDE - GAP * (per_row - 1.0)) / per_row).max(1.0);
+    let page_room = ((window - 2.0 * SIDE - view.page_gap() * (per_row - 1.0)) / per_row).max(1.0);
     let zoom = (read.width_px.min(page_room) / (widest * PT)).clamp(MIN_ZOOM, MAX_ZOOM);
     let moved = (zoom - view.zoom).abs() > view.zoom * READ_ZOOM_STEP;
     if moved {
@@ -401,7 +516,7 @@ pub fn spot(view: &DocView) -> Spot {
         return Spot { page, y: y.clamp(0.0, 1.0), x: view.margin.goto_x };
     }
     let viewport = view.viewport_rect();
-    let probe = pos2(viewport.center().x, viewport.top() + GAP);
+    let probe = pos2(viewport.center().x, viewport.top() + view.page_gap());
     let rects = view.visible_page_rects();
     // The first page with some of it below the probe line; a probe in the gap picks the next page.
     let hit = rects.iter().find(|(_, rect)| rect.bottom() > probe.y).or(rects.first());
@@ -442,27 +557,87 @@ pub fn bookmark_page(bookmark: &Bookmark) -> Option<usize> {
     }
 }
 
-/// `reader.bookmark.toggle`: bookmark the current page, or remove its bookmark. True when added.
-pub fn toggle_bookmark(view: &mut DocView) -> bool {
+/// What `reader.bookmark.toggle` did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BookmarkToggle {
+    Added,
+    Removed,
+    /// Not added: the document has [`MAX_BOOKMARKS`] already.
+    Full,
+}
+
+impl BookmarkToggle {
+    /// What to tell the reader about page `page_number` (1-based).
+    pub fn message(self, page_number: usize) -> String {
+        match self {
+            Self::Added => format!("Bookmarked page {page_number}"),
+            Self::Removed => format!("Removed the bookmark on page {page_number}"),
+            Self::Full => format!("Can't bookmark page {page_number}: this document already has {MAX_BOOKMARKS} bookmarks"),
+        }
+    }
+}
+
+/// `reader.bookmark.toggle`: bookmark the current page at the reading spot, or remove its
+/// bookmark.
+pub fn toggle_bookmark(view: &mut DocView) -> BookmarkToggle {
     let page = view.current;
-    let bookmarks = &mut view.margin.bookmarks;
-    if let Some(i) = bookmarks.iter().position(|bookmark| bookmark_page(bookmark) == Some(page)) {
-        bookmarks.remove(i);
-        return false;
+    if let Some(id) = view.margin.bookmarks.iter().find(|bookmark| bookmark_page(bookmark) == Some(page)).map(|b| b.id.clone()) {
+        remove_bookmark(view, &id);
+        return BookmarkToggle::Removed;
     }
-    if bookmarks.len() >= MAX_BOOKMARKS {
-        return false;
+    if view.margin.bookmarks.len() >= MAX_BOOKMARKS {
+        return BookmarkToggle::Full;
     }
+    // The exact spot when the window's top is on this page; else the page's top.
+    let here = spot(view);
+    let at = if here.page == page { [f64::from(here.x.unwrap_or(CENTRE)), f64::from(here.y)] } else { [f64::from(CENTRE), 0.0] };
     let bookmark = Bookmark {
         id: store::new_ulid(),
-        locator: Locator::Pdf { page: u32::try_from(page).unwrap_or(u32::MAX), quads: Vec::new(), at: None },
+        locator: Locator::Pdf { page: u32::try_from(page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some(at) },
         name: String::new(),
+        modified: None,
         created: store::now_rfc3339(),
         extra: Map::new(),
     };
-    let at = bookmarks.partition_point(|other| bookmark_page(other).is_some_and(|p| p < page));
-    bookmarks.insert(at, bookmark);
-    true
+    let bookmarks = &mut view.margin.bookmarks;
+    let index = bookmarks.partition_point(|other| bookmark_page(other).is_some_and(|p| p < page));
+    bookmarks.insert(index, bookmark);
+    BookmarkToggle::Added
+}
+
+/// Remove bookmark `id`, leaving a tombstone so another writer's copy doesn't bring it back.
+pub fn remove_bookmark(view: &mut DocView, id: &str) {
+    let reading = &mut view.margin;
+    let before = reading.bookmarks.len();
+    reading.bookmarks.retain(|bookmark| bookmark.id != id);
+    if reading.bookmarks.len() != before {
+        reading.marks.bookmark_removed(id);
+    }
+}
+
+/// Name bookmark `id` `name` ("" shows its section again).
+pub fn rename_bookmark(view: &mut DocView, id: &str, name: &str) {
+    let name: String = name.trim().chars().take(MAX_BOOKMARK_NAME).collect();
+    if let Some(bookmark) = view.margin.bookmarks.iter_mut().find(|bookmark| bookmark.id == id && bookmark.name != name) {
+        bookmark.name = name;
+        bookmark.modified = Some(store::now_rfc3339());
+    }
+}
+
+/// Go to bookmark `id`: the spot it was added at, or its page's top for one without.
+pub fn go_to_bookmark(view: &mut DocView, id: &str) {
+    let Some(bookmark) = view.margin.bookmarks.iter().find(|bookmark| bookmark.id == id) else { return };
+    let Some(page) = bookmark_page(bookmark).filter(|page| *page < view.margin.pages) else { return };
+    let at = match bookmark.locator {
+        Locator::Pdf { at: Some([x, y]), .. } if x.is_finite() && y.is_finite() => Some((x as f32, y as f32)),
+        _ => None,
+    };
+    let here = view.here();
+    view.remember(here);
+    view.current = page;
+    view.page_input = (page + 1).to_string();
+    let (x, y) = at.map_or((None, 0.0), |(x, y)| (Some(x).filter(|x| X_RANGE.contains(x)), y.clamp(0.0, 1.0)));
+    go(view, Spot { page, y, x });
 }
 
 /// `view.trim.toggle`: trim on or off, keeping the reader's place.
@@ -472,38 +647,45 @@ pub fn toggle_trim(view: &mut DocView) {
     go(view, spot);
 }
 
-/// The `[doc]` settings layer of `view` as shown now (`settings.view` in the sidecar).
-fn view_layer(view: &DocView) -> Map<String, Value> {
-    let mut layer = view.margin.display.settings_values();
-    let layout = match view.layout {
+/// The `[doc]` settings layer of a view state (`settings.view` in the sidecar).
+fn view_layer(state: &ViewState) -> Map<String, Value> {
+    let mut layer = state.display.settings_values();
+    let layout = match state.layout {
         PageLayout::Continuous => "scroll",
         PageLayout::Single => "single",
         PageLayout::TwoUp => "two_up",
     };
-    let fit = match (view.fit, view.margin.read_fit.is_some()) {
-        (Fit::None, true) => "read",
-        (Fit::Width, _) => "width",
-        (Fit::Page, _) => "page",
-        (Fit::Height | Fit::None, _) => "zoom",
-    };
     layer.insert("layout".into(), layout.into());
-    layer.insert("cover_alone".into(), view.cover.into());
-    layer.insert("fit".into(), fit.into());
-    if fit == "zoom" {
-        let percent = (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32;
+    layer.insert("cover_alone".into(), state.cover.into());
+    layer.insert("fit".into(), state.fit.into());
+    if let Some(percent) = state.zoom {
         layer.insert("zoom".into(), percent.into());
     }
-    // Fit "read" is only the same fit with the width it was picked at.
-    if let Some(read) = view.margin.read_fit {
-        layer.insert("reading_width_px".into(), (read.width_px.round() as u32).into());
+    if let Some(width) = state.read_width {
+        layer.insert("reading_width_px".into(), width.into());
     }
-    layer.insert("trim".into(), view.margin.trim.on.into());
+    layer.insert("trim".into(), state.trim.into());
+    if let Some(gap) = state.page_gap {
+        layer.insert("page_gap_px".into(), gap.into());
+    }
     layer
 }
 
-fn snapshot(view: &DocView, auto_add: bool) -> Snapshot {
+fn snapshot(view: &DocView, auto_add: bool, remember: bool) -> Snapshot {
+    #[cfg(test)]
+    view.margin.snapshots_built.set(view.margin.snapshots_built.get().saturating_add(1));
     let Spot { page, y, x } = spot(view);
-    Snapshot { page, at: y, x, view: view_layer(view), trim: TrimRecord::of(&view.margin.trim), bookmarks: view.margin.bookmarks.clone(), auto_add }
+    Snapshot {
+        page,
+        at: y,
+        x,
+        view: ViewState::of(view),
+        remember,
+        trim: TrimRecord::of(&view.margin.trim),
+        bookmarks: view.margin.bookmarks.clone(),
+        marks: view.margin.marks.generation(),
+        auto_add,
+    }
 }
 
 /// Every frame, after renders arrive: keep places, write sidecars and autosave (Margin only).
@@ -514,6 +696,18 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let closing = ctx.input(|i| i.viewport().close_requested());
     let autosave_on = app.margin_keys.settings().reader.autosave;
+    let remember = app.margin_keys.settings().reader.remember_per_document;
+    let undo_limit = app.margin_keys.settings().reader.undo_steps as usize;
+    let find_defaults = app.margin_keys.settings().reader.find;
+    for view in &mut app.views {
+        if view.margin.reader_defaults != Some((undo_limit as u32, find_defaults)) {
+            view.margin.reader_defaults = Some((undo_limit as u32, find_defaults));
+            view.find_defaults = Some(find_defaults);
+            if let Err(error) = app.session.set_undo_limit(view.id, undo_limit) {
+                log::warn!("Couldn't apply undo depth: {error}");
+            }
+        }
+    }
     let mut save = Vec::new();
     let mut notices = Vec::new();
     let mut wake: Option<f64> = None;
@@ -541,7 +735,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             go(view, spot);
         }
         let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-        match sidecar_step(view, doc, auto_add, now, closing) {
+        match sidecar_step(view, doc, auto_add, remember, now, closing) {
             Step::Idle => {}
             Step::WakeAt(at) => wake = Some(wake.map_or(at, |w| w.min(at))),
             Step::Tell(message) => notices.push(message),
@@ -552,7 +746,14 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             state.seen = generation;
             state.changed_at = now;
         }
-        if autosave_on && autosave_possible(doc, state) && doc.dirty && generation != state.opened && state.failed != Some(generation) {
+        // A change on disk waits to be compared with these edits, or for the reader's answer
+        // (`margin::reload`): saving now would write over the other program's version.
+        let held = app.margin_reload.holds(view.id);
+        if autosave_on && autosave_possible(doc, state) && doc.dirty && generation != state.opened && state.failed != Some(generation) && !held {
+            #[cfg(not(target_arch = "wasm32"))]
+            if app.margin_saves.contains(view.id) {
+                continue;
+            }
             let ready = view.pending_edit.is_none() && view.forms.focus.is_none();
             if ready && now - state.changed_at >= DEBOUNCE_SECS {
                 save.push((index, generation));
@@ -563,12 +764,16 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
     }
     for (index, generation) in save {
-        // PdfCraft's Save: incremental, atomic, and it clears the recovery entry.
-        if !app.save_view(index, SaveTarget::InPlace)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((id, path)) =
+            app.views.get(index).and_then(|view| app.session.get(view.id)).and_then(|doc| doc.path.clone().map(|path| (doc.id, path)))
+            && !app.queue_margin_save(id, path, None)
             && let Some(view) = app.views.get_mut(index)
         {
             view.margin.autosave.failed = Some(generation);
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (index, generation);
     }
     for message in notices {
         app.notify(message);
@@ -596,11 +801,21 @@ pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
     let Some(view) = app.views.get(index) else { return SaveStatus::Saved { autosave: autosave_on } };
     let Some(doc) = app.session.get(view.id) else { return SaveStatus::Saved { autosave: autosave_on } };
     let state = &view.margin.autosave;
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.margin_save_pending(doc.id) {
+        return SaveStatus::Saving;
+    }
+    let marks = &view.margin.marks;
+    let kept = match (marks.beside(), marks.refused()) {
+        (_, Some(_)) => MarksKept::Refused,
+        (Some(_), None) => MarksKept::Beside { any: marks.has_marks() },
+        (None, None) => MarksKept::InPdf,
+    };
     if doc.read_only_reason.is_some() || state.file_read_only {
-        return SaveStatus::ReadOnly { dirty: doc.dirty };
+        return SaveStatus::ReadOnly { dirty: doc.dirty, marks: kept };
     }
     if doc.is_signed() {
-        return SaveStatus::Signed { dirty: doc.dirty };
+        return SaveStatus::Signed { dirty: doc.dirty, marks: kept };
     }
     let autosave = autosave_on && autosave_possible(doc, state);
     let generation = doc.edit_generation();
@@ -615,6 +830,31 @@ pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
     }
 }
 
+/// A write of document `id` failed: the footer says so until the next change. A file made
+/// read-only since it opened shows as read-only, and autosave stops trying it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_failed(app: &mut PdfCraftApp, id: pdfcraft_engine::DocId, generation: u64) {
+    let file_read_only = app
+        .session
+        .get(id)
+        .and_then(|doc| doc.path.as_ref())
+        .and_then(|path| std::fs::metadata(path).ok())
+        .is_some_and(|meta| meta.permissions().readonly());
+    if let Some(view) = app.views.iter_mut().find(|view| view.id == id) {
+        view.margin.autosave.failed = Some(generation);
+        view.margin.autosave.file_read_only |= file_read_only;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn saved_pdf(app: &mut PdfCraftApp, id: pdfcraft_engine::DocId) {
+    if let Some(view) = app.views.iter_mut().find(|view| view.id == id) {
+        // Atomic replacement creates a writable file, including after Save As from read-only.
+        view.margin.autosave.file_read_only = false;
+        view.margin.autosave.failed = None;
+    }
+}
+
 enum Step {
     Idle,
     /// A change waits; look again at this time.
@@ -626,33 +866,42 @@ enum Step {
 
 /// The sidecar's part of a frame: note changes, and write once they have held still for
 /// [`DEBOUNCE_SECS`] (at once when `flush`).
-fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, now: f64, flush: bool) -> Step {
-    if view.margin.sidecar.is_none() {
+fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, remember: bool, now: f64, flush: bool) -> Step {
+    let Some(file) = view.margin.sidecar.as_ref() else { return Step::Idle };
+    if file.locked.is_some() {
         return Step::Idle;
     }
-    let snap = snapshot(view, auto_add);
-    let Some(file) = view.margin.sidecar.as_mut() else { return Step::Idle };
-    let Some(saved) = &file.saved else {
+    if file.saved.is_none() {
         // The first frame: the state as opened, never written for itself.
-        file.saved = Some(snap);
-        return Step::Idle;
-    };
-    if file.locked.is_some() || saved.same(&snap) {
-        file.pending = None;
+        let snap = snapshot(view, auto_add, remember);
+        if let Some(file) = view.margin.sidecar.as_mut() {
+            file.saved = Some(snap);
+        }
         return Step::Idle;
     }
-    let since = match &file.pending {
-        Some((pending, since)) if pending.same(&snap) => *since,
-        _ => now,
-    };
-    file.pending = Some((snap.clone(), since));
+    if file.saved.as_ref().is_some_and(|saved| saved.matches(view, auto_add, remember)) {
+        if let Some(file) = view.margin.sidecar.as_mut() {
+            file.pending = None;
+        }
+        return Step::Idle;
+    }
+    let unchanged = file.pending.as_ref().is_some_and(|(pending, _)| pending.matches(view, auto_add, remember));
+    if !unchanged {
+        let snap = snapshot(view, auto_add, remember);
+        if let Some(file) = view.margin.sidecar.as_mut() {
+            file.pending = Some((snap, now));
+        }
+    }
+    let reading = &mut view.margin;
+    let Some(file) = reading.sidecar.as_mut() else { return Step::Idle };
+    let Some((_, since)) = file.pending.as_ref() else { return Step::Idle };
     if !flush && now - since < DEBOUNCE_SECS {
         return Step::WakeAt(since + DEBOUNCE_SECS);
     }
-    let result = write_sidecar(file, &snap, doc);
+    let Some((mut snap, _)) = file.pending.take() else { return Step::Idle };
+    let result = write_sidecar(file, &mut snap, doc, Records { marks: &mut reading.marks, bookmarks: &mut reading.bookmarks });
     // Either way this state is done: a failure is reported once, the next change retries.
     file.saved = Some(snap);
-    file.pending = None;
     match result {
         Ok(None) => Step::Idle,
         Ok(Some(moved)) => Step::Tell(moved),
@@ -663,9 +912,41 @@ fn sidecar_step(view: &mut DocView, doc: &Document, auto_add: bool, now: f64, fl
     }
 }
 
-/// Write `snap` into the sidecar, keeping everything else in it. Returns what to tell the reader
-/// when it newly went to the data folder because the document's folder can't be written.
-fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Result<Option<String>, String> {
+/// The records a sidecar write carries besides the reading state; a write that merges another
+/// writer's copy puts the merged records back.
+struct Records<'a> {
+    marks: &'a mut super::marks::Marks,
+    bookmarks: &'a mut Vec<Bookmark>,
+}
+
+/// The sidecar on disk as `file` must take it into account before writing over it: `Ok(None)`
+/// when it is the copy last read or written (or gone), `Ok(Some(theirs))` when another writer
+/// saved it since, and an error when it must be left alone (a newer Margin wrote it, or it can't
+/// be read any more).
+fn on_disk(file: &SidecarFile) -> Result<Option<Sidecar>, String> {
+    let Some(path) = file.path.as_deref() else { return Ok(None) };
+    match store::read(path)? {
+        Some(theirs) if theirs.version > store::SIDECAR_VERSION => {
+            Err(format!("{} was written by a newer Margin (version {}) since it was opened; it is not changed", path.display(), theirs.version))
+        }
+        Some(theirs) if theirs.revision > file.file.revision => Ok(Some(theirs)),
+        Some(_) | None => Ok(None),
+    }
+}
+
+/// Write `snap` and `records` into the sidecar, keeping everything else in it, merged with
+/// what another writer saved there since (`margin_config::marks::merge`): `snap` and `records`
+/// then hold the merged records. Returns what to tell the reader when it newly went to the data
+/// folder because the document's folder can't be written.
+fn write_sidecar(file: &mut SidecarFile, snap: &mut Snapshot, doc: &Document, records: Records<'_>) -> Result<Option<String>, String> {
+    let theirs = match on_disk(file) {
+        Ok(theirs) => theirs,
+        Err(reason) => {
+            records.marks.refuse(format!("its sidecar can't be changed: {}", reason.trim_end_matches("; it is not changed")));
+            file.locked = Some(reason.clone());
+            return Err(reason);
+        }
+    };
     let mut out = file.file.clone();
     let fingerprint = store::fingerprint(&doc.bytes);
     let pages = doc.info.pages.len();
@@ -673,7 +954,7 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
     let size = u64::try_from(doc.bytes.len()).unwrap_or(u64::MAX);
     let unchanged = old.as_ref().is_some_and(|d| d.sidecar_fingerprint == fingerprint && d.size == size);
     out.doc = Some(SidecarDoc {
-        book_id: old.as_ref().map(|d| d.book_id.clone()).filter(|id| !id.is_empty()).unwrap_or_else(store::new_ulid),
+        book_id: old.as_ref().map(|d| d.book_id.clone()).filter(|id| !id.is_empty()).or_else(|| file.book_id.clone()).unwrap_or_else(store::new_ulid),
         sidecar_fingerprint: fingerprint.clone(),
         size,
         // The whole-file hash of another revision would be wrong now.
@@ -684,34 +965,36 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
         path_hint: Some(file.document.display().to_string()),
         extra: old.map(|d| d.extra).unwrap_or_default(),
     });
-    let old = out.progress.take();
-    let fraction = if pages == 0 { 0.0 } else { ((snap.page as f64 + f64::from(snap.at)) / pages as f64).clamp(0.0, 1.0) };
-    // Unknown sideways (a jump not drawn yet): keep what was saved; 0 restores as before R8.
-    let old_x = old.as_ref().and_then(|p| match p.locator {
-        Locator::Pdf { at: Some([x, _]), .. } => Some(x),
-        _ => None,
-    });
-    let x = snap.x.map(f64::from).or(old_x).unwrap_or(0.0);
-    out.progress = Some(Progress {
-        locator: Locator::Pdf { page: u32::try_from(snap.page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some([x, f64::from(snap.at)]) },
-        fraction,
-        finished: old.as_ref().is_some_and(|p| p.finished),
-        updated: store::now_rfc3339(),
-        extra: old.map(|p| p.extra).unwrap_or_default(),
-    });
-    // Other `[doc]` keys someone wrote into the layer stay.
-    let mut settings = match out.settings.take() {
-        Some(Value::Object(settings)) => settings,
-        _ => Map::new(),
-    };
-    let view = settings.entry("view").or_insert_with(|| Value::Object(Map::new()));
-    if !view.is_object() {
-        *view = Value::Object(Map::new());
+    if snap.remember {
+        let old = out.progress.take();
+        let fraction = if pages == 0 { 0.0 } else { ((snap.page as f64 + f64::from(snap.at)) / pages as f64).clamp(0.0, 1.0) };
+        // Unknown sideways (a jump not drawn yet): keep what was saved; 0 restores as before R8.
+        let old_x = old.as_ref().and_then(|p| match p.locator {
+            Locator::Pdf { at: Some([x, _]), .. } => Some(x),
+            _ => None,
+        });
+        let x = snap.x.map(f64::from).or(old_x).unwrap_or(0.0);
+        out.progress = Some(Progress {
+            locator: Locator::Pdf { page: u32::try_from(snap.page).unwrap_or(u32::MAX), quads: Vec::new(), at: Some([x, f64::from(snap.at)]) },
+            fraction,
+            finished: old.as_ref().is_some_and(|p| p.finished),
+            updated: store::now_rfc3339(),
+            extra: old.map(|p| p.extra).unwrap_or_default(),
+        });
+        // Other `[doc]` keys someone wrote into the layer stay.
+        let mut settings = match out.settings.take() {
+            Some(Value::Object(settings)) => settings,
+            _ => Map::new(),
+        };
+        let view = settings.entry("view").or_insert_with(|| Value::Object(Map::new()));
+        if !view.is_object() {
+            *view = Value::Object(Map::new());
+        }
+        if let Value::Object(view) = view {
+            view.extend(view_layer(&snap.view));
+        }
+        out.settings = Some(Value::Object(settings));
     }
-    if let Value::Object(view) = view {
-        view.extend(snap.view.clone());
-    }
-    out.settings = Some(Value::Object(settings));
     let old = out.trim.take();
     let wide = |m: Margins| m.map(f64::from);
     out.trim = Some(margin_config::Trim {
@@ -725,7 +1008,18 @@ fn write_sidecar(file: &mut SidecarFile, snap: &Snapshot, doc: &Document) -> Res
     out.obsidian =
         (snap.auto_add || old.is_some()).then(|| SidecarObsidian { auto_add: snap.auto_add, extra: old.map(|o| o.extra).unwrap_or_default() });
     out.bookmarks = snap.bookmarks.clone();
-    let written = store::write(&mut out, &file.document, &fingerprint, file.data.as_deref(), file.path.as_deref())?;
+    records.marks.write_into(&mut out);
+    if let Some(theirs) = &theirs {
+        margin_config::marks::merge(&mut out, theirs);
+        out.bookmarks.sort_by_key(|bookmark| bookmark_page(bookmark).unwrap_or(usize::MAX));
+        out.bookmarks.truncate(MAX_BOOKMARKS);
+        records.marks.adopt(&out);
+        records.bookmarks.clone_from(&out.bookmarks);
+        snap.bookmarks.clone_from(&out.bookmarks);
+        snap.marks = records.marks.generation();
+    }
+    let key = file.book_id.as_deref().unwrap_or(&fingerprint);
+    let written = store::write(&mut out, &file.document, key, file.data.as_deref(), file.path.as_deref())?;
     let beside = store::beside_path(&file.document);
     let moved = (file.path.as_ref() != Some(&written) && beside.as_ref() != Some(&written))
         .then(|| "This PDF's folder can't be written, so its reading state is kept in Margin's data folder; the PDF itself is unchanged".to_owned());
@@ -739,10 +1033,15 @@ pub(crate) fn closing(app: &mut PdfCraftApp, index: usize) {
     if app.flavor != Flavor::Margin {
         return;
     }
+    let Some(id) = app.views.get(index).map(|view| view.id) else { return };
+    #[cfg(not(target_arch = "wasm32"))]
+    app.wait_margin_saves();
+    let Some(index) = app.views.iter().position(|view| view.id == id) else { return };
+    let remember = app.margin_keys.settings().reader.remember_per_document;
     let Some(view) = app.views.get_mut(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-    if let Step::Tell(message) = sidecar_step(view, doc, auto_add, 0.0, true) {
+    if let Step::Tell(message) = sidecar_step(view, doc, auto_add, remember, 0.0, true) {
         app.notify(message);
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -751,11 +1050,13 @@ pub(crate) fn closing(app: &mut PdfCraftApp, index: usize) {
 
 /// Marks the document open in view `index` finished (or not) in its sidecar, written now.
 pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) -> Result<(), String> {
+    let remember = app.margin_keys.settings().reader.remember_per_document;
     let Some(view) = app.views.get_mut(index) else { return Ok(()) };
     let Some(doc) = app.session.get(view.id) else { return Ok(()) };
     let auto_add = doc.path.as_ref().is_some_and(|path| app.notes.autoadd.contains(path));
-    let snap = snapshot(view, auto_add);
-    let Some(file) = view.margin.sidecar.as_mut() else { return Ok(()) };
+    let mut snap = snapshot(view, auto_add, remember);
+    let reading = &mut view.margin;
+    let Some(file) = reading.sidecar.as_mut() else { return Ok(()) };
     if let Some(reason) = &file.locked {
         return Err(reason.clone());
     }
@@ -767,7 +1068,7 @@ pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) 
         extra: Map::new(),
     });
     progress.finished = finished;
-    write_sidecar(file, &snap, doc)?;
+    write_sidecar(file, &mut snap, doc, Records { marks: &mut reading.marks, bookmarks: &mut reading.bookmarks })?;
     file.saved = Some(snap);
     file.pending = None;
     Ok(())
@@ -775,8 +1076,11 @@ pub(crate) fn set_finished(app: &mut PdfCraftApp, index: usize, finished: bool) 
 
 /// Write every open document's pending reading state now (tests, embedders shutting down).
 pub fn flush(app: &mut PdfCraftApp) {
-    for index in 0..app.views.len() {
-        closing(app, index);
+    let documents: Vec<_> = app.views.iter().map(|view| view.id).collect();
+    for id in documents {
+        if let Some(index) = app.views.iter().position(|view| view.id == id) {
+            closing(app, index);
+        }
     }
 }
 
@@ -789,7 +1093,7 @@ pub fn sidecar_path(app: &PdfCraftApp, index: usize) -> Option<PathBuf> {
 /// file's comments. Returns what to tell the user.
 pub fn set_as_default(app: &mut PdfCraftApp, index: usize, row: DefaultRow) -> String {
     let Some(view) = app.views.get(index) else { return "No document is open.".to_owned() };
-    let layer = view_layer(view);
+    let layer = view_layer(&ViewState::of(view));
     let keys: &[&str] = match row {
         DefaultRow::PageColor => &PAGE_COLOR_KEYS,
         DefaultRow::Layout => &LAYOUT_KEYS,
@@ -803,5 +1107,48 @@ pub fn set_as_default(app: &mut PdfCraftApp, index: usize, row: DefaultRow) -> S
             DefaultRow::Layout => "Layout saved as the default for new documents".to_owned(),
         },
         Err(err) => format!("Couldn't set the default: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn idle_and_pending_frames_keep_the_existing_snapshot_allocations() {
+        let mut session = pdfcraft_engine::Session::new();
+        let bytes = session.create_blank(300.0, 400.0, 2).unwrap();
+        let id = session.open("synthetic.pdf", None, bytes, None).unwrap();
+        let doc = session.get(id).unwrap();
+        let mut view = DocView::new(id, &doc.info, Default::default());
+        view.margin.sidecar = Some(SidecarFile {
+            document: PathBuf::from("synthetic.pdf"),
+            data: None,
+            book_id: None,
+            file: Sidecar::new(),
+            path: None,
+            locked: None,
+            saved: None,
+            pending: None,
+        });
+        assert_eq!(toggle_bookmark(&mut view), BookmarkToggle::Added);
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 0.0, false), Step::Idle));
+        assert_eq!(view.margin.snapshots_built.get(), 1);
+        let bookmark_allocation = view.margin.sidecar.as_ref().unwrap().saved.as_ref().unwrap().bookmarks.as_ptr();
+        for frame in 1..20 {
+            assert!(matches!(sidecar_step(&mut view, doc, false, true, f64::from(frame), false), Step::Idle));
+            assert_eq!(view.margin.sidecar.as_ref().unwrap().saved.as_ref().unwrap().bookmarks.as_ptr(), bookmark_allocation);
+            assert_eq!(view.margin.snapshots_built.get(), 1, "idle frames must not rebuild JSON or clone bookmarks");
+        }
+        // A fitted zoom follows the window and is not recorded, so it is no change to write.
+        view.zoom = 1.5;
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.0, false), Step::Idle));
+        assert_eq!(view.margin.snapshots_built.get(), 1);
+        view.layout = PageLayout::TwoUp;
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.0, false), Step::WakeAt(_)));
+        let pending_allocation = view.margin.sidecar.as_ref().unwrap().pending.as_ref().unwrap().0.bookmarks.as_ptr();
+        assert!(matches!(sidecar_step(&mut view, doc, false, true, 20.5, false), Step::WakeAt(_)));
+        assert_eq!(view.margin.sidecar.as_ref().unwrap().pending.as_ref().unwrap().0.bookmarks.as_ptr(), pending_allocation);
+        assert_eq!(view.margin.snapshots_built.get(), 2, "a pending unchanged state is captured once");
     }
 }

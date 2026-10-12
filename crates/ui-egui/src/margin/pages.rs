@@ -4,9 +4,9 @@
 //! picked with Ctrl/Shift-click (for the page commands and Print) carry a check badge and the
 //! title counts them. Small dots under a thumbnail show its highlights' colours.
 //!
-//! Reuses PdfCraft's page machinery: `DocView::{thumb, click_page, clear_page_selection,
-//! go_to_page}` and the thumbnail renders the canvas schedules while Pages shows (`app.right`
-//! is `RightPanel::Pages`, set by `margin::sync`). Only the rows in view are laid out. The grid
+//! Reuses PdfCraft's page machinery: `DocView::{thumb, need_thumbnail, click_page,
+//! clear_page_selection, go_to_page}`. The grid asks the canvas for the thumbnails of the rows in
+//! view (and those just beyond, rendered ahead), and lays out only the rows in view. The grid
 //! reveals the current page once when it opens and whenever the reader's page changes, never
 //! while the reader scrolls the grid. PdfCraft's own Pages panel (`panels::pages`) is unchanged.
 
@@ -41,6 +41,9 @@ const BADGE_INSET: f32 = 4.0;
 const DOT: f32 = 6.0;
 const DOT_GAP: f32 = 3.0;
 const MAX_DOTS: usize = 4;
+/// Rows this far beyond the viewport get their thumbnails rendered ahead of a scroll (PdfCraft's
+/// Pages panel looks as far ahead).
+const PREFETCH: f32 = 200.0;
 
 /// A mark with no colour of its own shows as PDF++'s yellow.
 const UNCOLORED_MARK: [f32; 3] = [1.0, 0.816, 0.0];
@@ -124,7 +127,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         top += height + ROW_GAP;
     }
     let total = (top - ROW_GAP).max(0.0);
-    let dots = highlight_dots(info);
+    let dots = highlight_dots(info, &view.comments.notes.markup_indices, &view.margin.marks, &app.notes);
 
     let seen_id = egui::Id::new(("margin-pages-seen", view.id.0));
     let pass = ui.ctx().cumulative_pass_nr();
@@ -144,13 +147,20 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
                 ui.scroll_to_rect(rect, Some(egui::Align::Center));
             }
         }
+        // Rows near the viewport have their thumbnails rendered ahead; only rows in it are drawn.
+        let near = viewport.expand2(vec2(0.0, PREFETCH));
         for (r, row) in rows.iter().enumerate() {
-            if row.top + row.height < viewport.top() || row.top > viewport.bottom() {
+            if row.top + row.height < near.top() || row.top > near.bottom() {
                 continue;
             }
+            let on_screen = row.top + row.height >= viewport.top() && row.top <= viewport.bottom();
             for column in 0..grid.columns {
                 let i = r * grid.columns + column;
                 let Some(page) = info.pages.get(i) else { break };
+                view.need_thumbnail(i, on_screen);
+                if !on_screen {
+                    continue;
+                }
                 let x = column as f32 * (grid.cell + COLUMN_GAP);
                 let cell = Rect::from_min_size(origin + vec2(x, row.top), vec2(grid.cell, grid.cell_height(page.width, page.height)));
                 let cell_input = Cell {
@@ -227,12 +237,25 @@ fn paint_cell(ui: &egui::Ui, t: &Tokens, resp: &egui::Response, cell: &Cell<'_>)
     }
 }
 
-/// Each page's highlight colours, in order, one per highlight (also the footer scrubber's dots).
-pub(crate) fn highlight_dots(info: &pdfcraft_render::DocInfo) -> HashMap<usize, Vec<Color32>> {
+/// Each page's highlight colours, in order, one per highlight: the PDF's text marks, then those
+/// kept in the sidecar (also the footer scrubber's dots).
+pub(crate) fn highlight_dots(
+    info: &pdfcraft_render::DocInfo,
+    indices: &[usize],
+    marks: &super::marks::Marks,
+    notes: &obsidian::Notes,
+) -> HashMap<usize, Vec<Color32>> {
     let mut dots: HashMap<usize, Vec<Color32>> = HashMap::new();
-    for a in obsidian::markup_comments(info) {
-        let [r, g, b] = a.color.unwrap_or(UNCOLORED_MARK).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let rgb8 = |rgb: [f32; 3]| rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+    for a in obsidian::cached_markup(info, indices) {
+        let [r, g, b] = rgb8(a.color.unwrap_or(UNCOLORED_MARK));
         dots.entry(a.page).or_default().push(Color32::from_rgb(r, g, b));
+    }
+    for h in marks.highlights() {
+        if let Some(page) = margin_config::marks::locator_page(&h.locator) {
+            let [r, g, b] = rgb8(super::marks::shown_rgb(notes, h));
+            dots.entry(page).or_default().push(Color32::from_rgb(r, g, b));
+        }
     }
     dots
 }

@@ -3,7 +3,7 @@
 use pdfcraft_engine::a11y::{Category, Options, Report, Rule, Status};
 use serde_json::{Value, json};
 
-use crate::{Args, Automation, Result, ToolError, child, failed, write_atomic};
+use crate::{Args, Automation, Result, ToolError, child, failed, unused, write_atomic};
 
 fn status_id(s: Status) -> &'static str {
     match s {
@@ -156,10 +156,16 @@ impl Automation {
     pub(crate) fn ocr_recognize_files(&mut self, a: &Args) -> Result<Value> {
         let settings = self.ocr_settings(a)?;
         let folder = self.resolve(a.str("folder")?, true)?;
+        // A path that leaves the root refuses the whole call before any work starts, like the
+        // other tools (the write check passes missing files, which stay per-file errors below).
+        let paths = a.strs("paths")?;
+        for p in &paths {
+            self.resolve(p, true)?;
+        }
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
         let ocr = pdfcraft_engine::ocr::engine().map_err(failed)?;
         let mut out = Vec::new();
-        for p in a.strs("paths")? {
+        for p in paths {
             let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into());
             let result =
                 self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| std::fs::read(&src).map_err(|e| e.to_string())).and_then(|bytes| {
@@ -270,6 +276,38 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "format": format.extension() }))
     }
 
+    pub(crate) fn doc_export_markdown(&self, a: &Args) -> Result<Value> {
+        let path = self.resolve(a.str("path")?, true)?;
+        if path.is_dir() {
+            return Err(failed(format!("{}: is a folder, not a file", path.display())));
+        }
+        let doc = self.doc(a)?;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..doc.info.pages.len()).collect(),
+        };
+        let title = doc.info.title.clone().unwrap_or_else(|| doc.name.clone());
+        // Images are named after the note, so two notes exported into one folder keep their own.
+        let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let image_prefix = if stem.is_empty() { String::new() } else { format!("{stem}-") };
+        let options = pdfcraft_engine::export::MarkdownOptions {
+            title: &title,
+            obsidian: a.opt_bool("obsidian")?.unwrap_or(false),
+            image_prefix: &image_prefix,
+        };
+        let markdown = pdfcraft_engine::export::markdown(&doc.export_source(), &pages, &options).map_err(failed)?;
+        let folder = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let mut image_paths = Vec::with_capacity(markdown.images.len());
+        // Images first: the note never points at a file that isn't there yet.
+        for (name, bytes) in &markdown.images {
+            let image_path = child(folder, name);
+            write_atomic(&image_path, bytes)?;
+            image_paths.push(image_path.to_string_lossy().into_owned());
+        }
+        write_atomic(&path, markdown.text.as_bytes())?;
+        Ok(json!({ "path": path.to_string_lossy(), "bytes": markdown.text.len(), "images": image_paths }))
+    }
+
     fn pdfa_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");
         pdfcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))
@@ -341,6 +379,16 @@ impl Automation {
             out.push(match result {
                 Ok(r) => {
                     let target = child(&folder, &name);
+                    let target = if target.exists() {
+                        let stem =
+                            std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+                        unused(&folder, &stem)
+                    } else {
+                        target
+                    };
+                    if target.exists() {
+                        return Err(failed(format!("{}: no unused output name available", target.display())));
+                    }
                     write_atomic(&target, &r.bytes)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }

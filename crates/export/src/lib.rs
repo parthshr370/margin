@@ -21,6 +21,8 @@ pub struct Block {
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
+    /// Text fill colour as sRGB components in 0..=1 (black when unknown).
+    pub color: [f64; 3],
 }
 
 /// An image of a page.
@@ -48,6 +50,8 @@ pub struct Cell {
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
+    /// Text fill colour as sRGB components in 0..=1.
+    pub color: [f64; 3],
     pub span: usize,
 }
 
@@ -199,7 +203,7 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                 let b = &blocks[bi];
                 let Some(slot) = edges.iter().position(|e| (*e - b.rect[0]).abs() <= COL_TOL) else { continue };
                 let span = edges[slot + 1..].iter().filter(|e| **e > b.rect[0] + COL_TOL && **e < b.rect[2] - COL_TOL).count() + 1;
-                let cell = Cell { text: b.text.trim().to_string(), size: b.size, bold: b.bold, italic: b.italic, span };
+                let cell = Cell { text: b.text.trim().to_string(), size: b.size, bold: b.bold, italic: b.italic, color: b.color, span };
                 match &mut slots[slot] {
                     Some(c) => {
                         c.text.push(' ');
@@ -220,7 +224,7 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                     }
                     None => {
                         column += 1;
-                        materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, span: 1 });
+                        materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span: 1 });
                     }
                 }
             }
@@ -308,6 +312,161 @@ fn items(pages: &[Page]) -> Vec<Item<'_>> {
     out
 }
 
+/// The most Markdown text one export may produce. A longer paper is exported a few pages at a
+/// time; the check runs as the text grows, so a hostile file can't make it allocate without end.
+pub const MAX_MARKDOWN_TEXT_BYTES: usize = 64 << 20;
+
+/// Markdown text and the image files it references, in the order the text embeds them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Markdown {
+    pub text: String,
+    /// File name (`<prefix>image-0001.png`) and encoded bytes.
+    pub images: Vec<(String, Vec<u8>)>,
+}
+
+/// How [`markdown`] writes its output.
+#[derive(Clone, Copy, Debug)]
+pub struct MarkdownOptions<'a> {
+    /// The `# ` heading at the top.
+    pub title: &'a str,
+    /// Obsidian embeds (`![[name]]`) instead of standard image links.
+    pub obsidian: bool,
+    /// Put in front of every image file name, so several exports can share one folder.
+    pub image_prefix: &'a str,
+}
+
+/// `text` as literal Markdown inline text: the characters that would start emphasis, a link,
+/// an image, a heading, code or HTML are escaped, and line breaks become spaces (a PDF's line
+/// breaks are soft wraps). In a table cell `|` is escaped too.
+fn markdown_text(text: &str, table_cell: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars().filter(|ch| allowed(*ch)) {
+        match ch {
+            '|' if table_cell => out.push_str("\\|"),
+            '\\' | '`' | '*' | '_' | '[' | ']' | '!' | '#' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' | '\r' => out.push(' '),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The paragraph as a list item (`- body` or `3. body`), when it starts with a bullet or a number.
+fn list_item(text: &str) -> Option<(String, &str)> {
+    let trimmed = text.trim();
+    if let Some(body) = trimmed.strip_prefix("• ").or_else(|| trimmed.strip_prefix("- ")) {
+        return Some(("-".to_owned(), body));
+    }
+    let (number, body) = trimmed.split_once(". ")?;
+    (!number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())).then(|| (format!("{number}."), body))
+}
+
+fn push_table(text: &mut String, table: &Table) {
+    let columns = table.cols.len().max(1);
+    for (row_index, row) in table.rows.iter().enumerate() {
+        text.push('|');
+        let mut written = 0usize;
+        for cell in row {
+            text.push(' ');
+            text.push_str(&markdown_text(&cell.text, true));
+            text.push_str(" |");
+            // Markdown has no spanning cells: a wide cell is followed by empty ones.
+            for _ in 1..cell.span.max(1) {
+                text.push_str("  |");
+            }
+            written = written.saturating_add(cell.span.max(1));
+        }
+        for _ in written..columns {
+            text.push_str("  |");
+        }
+        text.push('\n');
+        if row_index == 0 {
+            text.push('|');
+            for _ in 0..written.max(columns) {
+                text.push_str(" --- |");
+            }
+            text.push('\n');
+        }
+    }
+    text.push('\n');
+}
+
+/// The pages as Markdown: a `#` title, `##`/`###` headings, paragraphs, bullet and numbered
+/// lists, pipe tables, and each image as a separate file next to the note. Image bytes move out
+/// of `pages` rather than being copied. Fails when the text would pass
+/// [`MAX_MARKDOWN_TEXT_BYTES`].
+pub fn markdown(mut pages: Vec<Page>, options: &MarkdownOptions<'_>) -> Result<Markdown, String> {
+    let too_large = || format!("The Markdown would be larger than {} MiB; export fewer pages at a time.", MAX_MARKDOWN_TEXT_BYTES >> 20);
+    let mut text = format!("# {}\n\n", markdown_text(options.title, false));
+    // (file name, page, index in the page's images): the bytes are moved out once the text is done.
+    let mut wanted: Vec<(String, usize, usize)> = Vec::new();
+    let mut page_index = 0usize;
+    let mut in_list = false;
+    for part in items(&pages) {
+        let is_list_item = matches!(&part, Item::Para(block, 0) if list_item(&block.text).is_some());
+        if in_list && !is_list_item {
+            // A blank line ends the list, so the next paragraph isn't read as part of its last item.
+            text.push('\n');
+        }
+        in_list = is_list_item;
+        match part {
+            Item::Para(block, 0) => match list_item(&block.text) {
+                Some((marker, body)) => {
+                    text.push_str(&marker);
+                    text.push(' ');
+                    text.push_str(&markdown_text(body, false));
+                    text.push('\n');
+                }
+                None => {
+                    text.push_str(&markdown_text(&block.text, false));
+                    text.push_str("\n\n");
+                }
+            },
+            Item::Para(block, heading) => {
+                // The title is the only `#`; headings start at `##`.
+                text.push_str(&"#".repeat(usize::from(heading).saturating_add(1)));
+                text.push(' ');
+                text.push_str(&markdown_text(&block.text, false));
+                text.push_str("\n\n");
+            }
+            Item::Table(table) => push_table(&mut text, &table),
+            Item::Img(image) => {
+                let Some(index) = pages.get(page_index).and_then(|page| page.images.iter().position(|candidate| std::ptr::eq(candidate, image)))
+                else {
+                    continue;
+                };
+                let name = format!("{}image-{:04}.{}", options.image_prefix, wanted.len().saturating_add(1), image.ext);
+                if options.obsidian {
+                    text.push_str(&format!("![[{name}]]\n\n"));
+                } else {
+                    text.push_str(&format!("![image](<{name}>)\n\n"));
+                }
+                wanted.push((name, page_index, index));
+            }
+            Item::PageBreak => {
+                page_index = page_index.saturating_add(1);
+                text.push_str("---\n\n");
+            }
+        }
+        if text.len() > MAX_MARKDOWN_TEXT_BYTES {
+            return Err(too_large());
+        }
+    }
+    let images = wanted
+        .into_iter()
+        .filter_map(|(name, page, index)| {
+            let image = pages.get_mut(page)?.images.get_mut(index)?;
+            Some((name, std::mem::take(&mut image.bytes)))
+        })
+        .collect();
+    Ok(Markdown { text, images })
+}
+
 /// Whether a character may appear in the output. XML 1.0 forbids the C0 controls other than tab,
 /// line feed and carriage return, and U+FFFE/U+FFFF. Text extracted from PDFs often holds them
 /// (fonts without a usable `/ToUnicode`), and Word refuses a whole document over one (#72).
@@ -361,9 +520,10 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                 if b.bold && lvl == 0 {
                     t = format!("<strong>{t}</strong>");
                 }
+                let style = hex(b.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
                 match lvl {
-                    0 => s.push_str(&format!("<p>{t}</p>\n")),
-                    l => s.push_str(&format!("<h{l}>{t}</h{l}>\n")),
+                    0 => s.push_str(&format!("<p{style}>{t}</p>\n")),
+                    l => s.push_str(&format!("<h{l}{style}>{t}</h{l}>\n")),
                 }
             }
             Item::Table(t) => {
@@ -379,7 +539,8 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                             body = format!("<strong>{body}</strong>");
                         }
                         let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
-                        s.push_str(&format!("<td{span}>{body}</td>"));
+                        let style = hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                        s.push_str(&format!("<td{span}{style}>{body}</td>"));
                     }
                     s.push_str("</tr>\n");
                 }
@@ -396,14 +557,29 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
     s
 }
 
+/// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
+fn rgb8(c: [f64; 3]) -> [u8; 3] {
+    // The value is clamped to 0..=255 before the cast, so it cannot truncate.
+    c.map(|v| if v.is_finite() { (v.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 })
+}
+
+/// The colour as `RRGGBB`, or `None` for black (the default every format already uses).
+fn hex(c: [f64; 3]) -> Option<String> {
+    let [r, g, b] = rgb8(c);
+    (r | g | b != 0).then(|| format!("{r:02X}{g:02X}{b:02X}"))
+}
+
 /// A formatted text run (shared by paragraphs and table cells).
-fn run_xml(text: &str, size: f64, bold: bool, italic: bool) -> String {
+fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
     let mut rpr = String::new();
     if bold {
         rpr.push_str("<w:b/>");
     }
     if italic {
         rpr.push_str("<w:i/>");
+    }
+    if let Some(h) = hex(color) {
+        rpr.push_str(&format!("<w:color w:val=\"{h}\"/>"));
     }
     let half_points = if size.is_finite() { (size * 2.0).round().clamp(2.0, 3276.0) as i64 } else { 24 };
     rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/>"));
@@ -440,7 +616,7 @@ fn docx_table(t: &Table) -> String {
             let w: i64 = widths.iter().take(c.span.min(widths.len())).sum();
             s.push_str(&format!(
                 "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}</w:p></w:tc>",
-                run_xml(&c.text, c.size, c.bold, c.italic)
+                run_xml(&c.text, c.size, c.bold, c.italic, c.color)
             ));
         }
         // Pad the grid so every row covers all columns (Word rejects short rows).
@@ -468,7 +644,7 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut media: Vec<(String, &Image)> = Vec::new();
     // Word needs a paragraph between adjacent tables and after the last one in the body.
     let mut after_table = false;
-    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic);
+    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic, b.color);
     for it in items(pages) {
         match &it {
             Item::Para(b, lvl) => {
@@ -586,8 +762,36 @@ fn rtf_text(s: &str) -> String {
 /// Rich Text Format: paragraphs with their sizes and bold/italic, real table rows, page breaks
 /// between pages (images are left out).
 pub fn rtf(pages: &[Page]) -> String {
+    let items = items(pages);
+    // The colour table: entry 0 is the default (auto) colour, then each non-black colour once.
+    let mut colors: Vec<[u8; 3]> = Vec::new();
+    let mut note = |c: [f64; 3]| {
+        let c = rgb8(c);
+        if c != [0, 0, 0] && !colors.contains(&c) {
+            colors.push(c);
+        }
+    };
+    for it in &items {
+        match it {
+            Item::Para(b, _) => note(b.color),
+            Item::Table(t) => t.rows.iter().flatten().for_each(|c| note(c.color)),
+            Item::Img(_) | Item::PageBreak => {}
+        }
+    }
+    // `\cfN` for a colour (nothing for black, which keeps the default).
+    let cf = |c: [f64; 3]| {
+        let c = rgb8(c);
+        colors.iter().position(|e| *e == c).map_or(String::new(), |i| format!("\\cf{}", i + 1))
+    };
     let mut s = String::from("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Helvetica;}}\n");
-    for it in items(pages) {
+    if !colors.is_empty() {
+        s.push_str("{\\colortbl;");
+        for [r, g, b] in &colors {
+            s.push_str(&format!("\\red{r}\\green{g}\\blue{b};"));
+        }
+        s.push_str("}\n");
+    }
+    for it in items {
         match it {
             Item::Para(b, _) => {
                 let mut fmt = format!("\\fs{}", (b.size * 2.0).round() as i64);
@@ -597,6 +801,7 @@ pub fn rtf(pages: &[Page]) -> String {
                 if b.italic {
                     fmt.push_str("\\i");
                 }
+                fmt.push_str(&cf(b.color));
                 s.push_str(&format!("{{\\pard{fmt} {}\\par}}\n", rtf_text(&b.text)));
             }
             Item::Table(t) => {
@@ -622,6 +827,7 @@ pub fn rtf(pages: &[Page]) -> String {
                         if c.italic {
                             fmt.push_str("\\i");
                         }
+                        fmt.push_str(&cf(c.color));
                         s.push_str(&format!("{{{fmt} {}}}\\cell", rtf_text(&c.text)));
                     }
                     s.push_str("\\row\n");
@@ -639,8 +845,91 @@ pub fn rtf(pages: &[Page]) -> String {
 mod tests {
     use super::*;
 
+    const PLAIN: MarkdownOptions<'static> = MarkdownOptions { title: "Title", obsidian: false, image_prefix: "" };
+
+    #[test]
+    fn markdown_writes_headings_tables_lists_and_separate_images() {
+        // The heading and list sit on a page of their own: upstream's table detection takes a
+        // block whose left edge lines up with the grid's first column into the table.
+        let mut prose = Page { width: 612.0, height: 792.0, ..Page::default() };
+        prose.blocks.push(Block {
+            text: "A heading".into(),
+            rect: [72.0, 700.0, 300.0, 730.0],
+            size: 22.0,
+            bold: true,
+            italic: false,
+            color: [0.0; 3],
+        });
+        prose.blocks.push(Block {
+            text: "• item".into(),
+            rect: [72.0, 480.0, 300.0, 491.0],
+            size: 11.0,
+            bold: false,
+            italic: false,
+            color: [0.0; 3],
+        });
+        let mut p = table_page();
+        p.images.push(Image { ext: "png", bytes: vec![1, 2, 3], rect: [72.0, 400.0, 100.0, 430.0] });
+        let standard = markdown(vec![prose.clone(), p.clone()], &PLAIN).unwrap();
+        assert!(standard.text.contains("## A heading"), "{}", standard.text);
+        assert!(standard.text.contains("| Meter | Unit | Reading |"), "{}", standard.text);
+        assert!(standard.text.contains("- item\n\n"), "a blank line closes the list: {}", standard.text);
+        assert!(standard.text.contains("![image](<image-0001.png>)"), "{}", standard.text);
+        assert_eq!(standard.images, [("image-0001.png".into(), vec![1, 2, 3])]);
+        let obsidian = markdown(vec![prose, p], &MarkdownOptions { obsidian: true, image_prefix: "paper-", ..PLAIN }).unwrap();
+        assert!(obsidian.text.contains("![[paper-image-0001.png]]"), "{}", obsidian.text);
+        assert_eq!(obsidian.images, [("paper-image-0001.png".into(), vec![1, 2, 3])]);
+    }
+
+    #[test]
+    fn markdown_escapes_hostile_text_and_table_delimiters() {
+        let page = Page {
+            blocks: vec![Block {
+                text: "# [bad](x) ! <script> &\n- not a list".into(),
+                rect: [0.0, 10.0, 300.0, 21.0],
+                size: 11.0,
+                bold: false,
+                italic: false,
+                color: [0.0; 3],
+            }],
+            ..Page::default()
+        };
+        let output = markdown(vec![page], &MarkdownOptions { title: "# title", ..PLAIN }).unwrap();
+        assert!(output.text.starts_with("# \\# title\n\n"), "{}", output.text);
+        assert!(output.text.contains("\\# \\[bad\\](x) \\! &lt;script&gt; & - not a list\n"), "{}", output.text);
+        assert!(output.images.is_empty());
+        let mut table = Table { rect: [0.0; 4], cols: vec![0.0, 10.0], rows: Vec::new() };
+        let cell = |text: &str, span| Cell { text: text.into(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span };
+        table.rows.push(vec![cell("wide | cell", 2)]);
+        table.rows.push(vec![cell("a", 1), cell("b", 1)]);
+        let mut text = String::new();
+        push_table(&mut text, &table);
+        assert_eq!(text, "| wide \\| cell |  |\n| --- | --- |\n| a | b |\n\n");
+    }
+
+    #[test]
+    fn markdown_refuses_text_past_its_budget() {
+        let block = Block {
+            text: "x".repeat(MAX_MARKDOWN_TEXT_BYTES),
+            rect: [0.0, 10.0, 300.0, 21.0],
+            size: 11.0,
+            bold: false,
+            italic: false,
+            color: [0.0; 3],
+        };
+        let page = Page { blocks: vec![block], ..Page::default() };
+        assert!(markdown(vec![page], &PLAIN).unwrap_err().contains("export fewer pages"));
+    }
+
     fn page() -> Page {
-        let b = |t: &str, y: f64, size: f64, bold: bool| Block { text: t.into(), rect: [72.0, y, 500.0, y + size], size, bold, italic: false };
+        let b = |t: &str, y: f64, size: f64, bold: bool| Block {
+            text: t.into(),
+            rect: [72.0, y, 500.0, y + size],
+            size,
+            bold,
+            italic: false,
+            color: [0.0; 3],
+        };
         Page {
             width: 612.0,
             height: 792.0,
@@ -712,6 +1001,7 @@ mod tests {
             size: f64::NAN,
             bold: false,
             italic: false,
+            color: [0.0; 3],
         });
         let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
         assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
@@ -726,9 +1016,34 @@ mod tests {
     }
 
     #[test]
+    fn text_colour_survives_every_format() {
+        // #526: a dark green heading (0.05 0.23 0.18 rg) came out black in Word.
+        let mut p = page();
+        p.blocks[1].color = [0.05, 0.23, 0.18];
+        p.blocks[3].color = [f64::NAN, 2.0, -1.0];
+        let xml = part(&docx(&[p.clone()], "Colour"), "word/document.xml");
+        assert!(xml.contains("<w:color w:val=\"0D3B2E\"/>"), "{xml}");
+        assert!(xml.contains("<w:color w:val=\"00FF00\"/>"), "out-of-range values clamp: {xml}");
+        // Black text keeps Word's default colour.
+        assert_eq!(xml.matches("<w:color ").count(), 2, "{xml}");
+        let h = html(&[p.clone()], "Colour");
+        assert!(h.contains("<h1 style=\"color:#0D3B2E\">Annual Report</h1>"), "{h}");
+        assert!(h.contains("<p style=\"color:#00FF00\">"), "{h}");
+        let r = rtf(&[p]);
+        assert!(r.contains("{\\colortbl;\\red13\\green59\\blue46;\\red0\\green255\\blue0;}"), "{r}");
+        assert!(r.contains("\\cf1 Annual Report"), "{r}");
+        // A table cell keeps its colour too.
+        let mut t = table_page();
+        t.blocks[0].color = [1.0, 0.0, 0.0];
+        let xml = part(&docx(&[t.clone()], "Grid"), "word/document.xml");
+        assert!(xml.contains("<w:color w:val=\"FF0000\"/>"), "{xml}");
+        assert!(html(&[t], "Grid").contains("style=\"color:#FF0000\""));
+    }
+
+    #[test]
     fn rtf_escapes_and_sizes() {
         let mut p = page();
-        p.blocks.push(Block { text: "Café {x}".into(), rect: [72.0, 100.0, 200.0, 110.0], size: 10.0, bold: false, italic: true });
+        p.blocks.push(Block { text: "Café {x}".into(), rect: [72.0, 100.0, 200.0, 110.0], size: 10.0, bold: false, italic: true, color: [0.0; 3] });
         let r = rtf(&[p]);
         assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
         assert!(r.contains("\\fs48\\b Annual Report"));
@@ -737,7 +1052,14 @@ mod tests {
 
     /// A 3-column table with a spanning header row and a hole in the last row.
     fn table_page() -> Page {
-        let cell = |t: &str, x: f64, y: f64, w: f64| Block { text: t.into(), rect: [x, y, x + w, y + 12.0], size: 11.0, bold: false, italic: false };
+        let cell = |t: &str, x: f64, y: f64, w: f64| Block {
+            text: t.into(),
+            rect: [x, y, x + w, y + 12.0],
+            size: 11.0,
+            bold: false,
+            italic: false,
+            color: [0.0; 3],
+        };
         Page {
             width: 612.0,
             height: 792.0,
@@ -758,6 +1080,7 @@ mod tests {
                     size: 11.0,
                     bold: false,
                     italic: false,
+                    color: [0.0; 3],
                 },
             ],
             images: Vec::new(),
@@ -801,7 +1124,7 @@ mod tests {
             .map(|i| {
                 let (row, col) = (i / 2, i / 2 + i % 2);
                 let (x, y) = (10.0 + col as f64 * 20.0, 10_000.0 - row as f64 * 14.0);
-                Block { text: "x".into(), rect: [x, y, x + 8.0, y + 12.0], size: 11.0, bold: false, italic: false }
+                Block { text: "x".into(), rect: [x, y, x + 8.0, y + 12.0], size: 11.0, bold: false, italic: false, color: [0.0; 3] }
             })
             .collect();
         let started = std::time::Instant::now();
@@ -820,7 +1143,7 @@ mod tests {
                 .flat_map(|row| {
                     (0..n).map(move |col| {
                         let (x, y) = (20.0 + col as f64 * 22.0, 700.0 - row as f64 * 14.0);
-                        Block { text: (col + 1).to_string(), rect: [x, y, x + 8.0, y + 8.0], size: 8.0, bold: false, italic: false }
+                        Block { text: (col + 1).to_string(), rect: [x, y, x + 8.0, y + 8.0], size: 8.0, bold: false, italic: false, color: [0.0; 3] }
                     })
                 })
                 .collect(),
@@ -840,6 +1163,7 @@ mod tests {
             size: 11.0,
             bold: false,
             italic: false,
+            color: [0.0; 3],
         };
         let p = Page {
             width: 612.0,

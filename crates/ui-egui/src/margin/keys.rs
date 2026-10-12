@@ -18,7 +18,9 @@ use std::sync::LazyLock;
 
 use egui::{Event, Key, Modifiers};
 use margin_config::resolve::{self, Outcome};
-use margin_config::{CompileOptions, Compiled, CompiledKeymap, ContextNode, KeymapBase, KeymapSource, Os, Problem, Registry, Settings, Severity};
+use margin_config::{
+    CompileOptions, Compiled, CompiledKeymap, ContextNode, KeymapBase, KeymapSource, LoadedSettings, Os, Problem, Registry, Settings, Severity,
+};
 use pdfcraft_engine::commands::{self, CommandSpec, Shortcut};
 use serde_json::Value;
 
@@ -58,6 +60,9 @@ pub struct MarginKeys {
     pub(crate) key_context_open: bool,
     /// The last keystroke resolved, for the key context window.
     pub(crate) last: Option<LastKey>,
+    /// Changes whenever the keymap is loaded or reloaded, so what shows its keys (the macOS menu
+    /// bar) knows to read them again.
+    revision: u64,
 }
 
 /// One keystroke and what the keymap made of it.
@@ -83,6 +88,25 @@ struct Loaded {
     /// First keystrokes some binding or unbind uses.
     bound_strokes: HashSet<String>,
     watch: Option<SettingsWatch>,
+    /// What the files said at the last load; `None` without a config folder.
+    files: Option<Files>,
+}
+
+/// `settings.jsonc` and `keymap.jsonc` as read from `<config>`. A change event that leaves them
+/// saying the same (Margin's own write, which [`reload_now`] applied as it was made) reloads
+/// nothing, so it can't reset a chord in progress or cover a message with "reloaded".
+#[derive(PartialEq)]
+struct Files {
+    settings: LoadedSettings,
+    /// The keymap's text, `None` without one, or why it couldn't be read.
+    keymap: Result<Option<String>, String>,
+}
+
+impl Files {
+    fn read(dir: &Path) -> Self {
+        let keymap = margin_config::read_capped(&dir.join(margin_config::KEYMAP_FILE), margin_config::MAX_SETTINGS_BYTES);
+        Self { settings: Settings::load(dir), keymap }
+    }
 }
 
 impl MarginKeys {
@@ -94,6 +118,12 @@ impl MarginKeys {
     /// The compiled keymap, once loaded.
     pub fn keymap(&self) -> Option<&CompiledKeymap> {
         self.loaded.as_ref().and_then(|loaded| loaded.compiled.as_ref()).map(|compiled| &compiled.keymap)
+    }
+
+    /// The keymap's revision: equal values mean the same keymap (the macOS menu bar re-reads its
+    /// shortcuts when it changes).
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Every bindable id with its title.
@@ -201,31 +231,38 @@ impl Loaded {
             bound_ids: HashSet::new(),
             bound_strokes: HashSet::new(),
             watch,
+            files: None,
         };
         let problems = loaded.reload();
         (loaded, problems)
     }
 
     fn reload(&mut self) -> Vec<Problem> {
+        let files = self.dir.as_deref().map(Files::read);
+        self.apply(files)
+    }
+
+    /// After a change event: reloads unless the files say what they said at the last load.
+    /// `None` when nothing changed.
+    fn reload_if_changed(&mut self) -> Option<Vec<Problem>> {
+        let files = self.dir.as_deref().map(Files::read);
+        (files != self.files).then(|| self.apply(files))
+    }
+
+    fn apply(&mut self, files: Option<Files>) -> Vec<Problem> {
         let mut problems = Vec::new();
-        let mut user_keymap: Option<(String, String)> = None;
-        if let Some(dir) = &self.dir {
-            let loaded = Settings::load(dir);
-            self.settings = loaded.settings;
-            problems = loaded.problems;
-            let path = dir.join(margin_config::KEYMAP_FILE);
-            let shown = path.display().to_string();
-            match margin_config::read_capped(&path, margin_config::MAX_SETTINGS_BYTES) {
+        let mut user_keymap: Option<(String, &str)> = None;
+        if let (Some(dir), Some(files)) = (&self.dir, &files) {
+            self.settings = files.settings.settings.clone();
+            problems.clone_from(&files.settings.problems);
+            let shown = dir.join(margin_config::KEYMAP_FILE).display().to_string();
+            match &files.keymap {
                 Ok(Some(text)) => user_keymap = Some((shown, text)),
                 Ok(None) => {}
                 Err(message) => problems.push(problem(&shown, "", format!("{message}; file ignored"), Severity::Error)),
             }
         }
         let keys = &self.settings.keys;
-        if matches!(keys.base, KeymapBase::Okular | KeymapBase::Sioyek) {
-            let file = self.dir.as_ref().map(|dir| dir.join(margin_config::SETTINGS_FILE).display().to_string()).unwrap_or_default();
-            problems.push(problem(&file, "keys.base", "this keymap is not shipped yet; using the built-in one".to_owned(), Severity::Info));
-        }
         self.compiled = self.registry.as_ref().map(|registry| {
             let mut sources = Vec::with_capacity(2);
             if keys.base != KeymapBase::None {
@@ -243,6 +280,7 @@ impl Loaded {
             self.bound_ids = bindings.iter().filter_map(|binding| binding.command.clone()).collect();
             self.bound_strokes = bindings.iter().filter_map(|binding| binding.keys.first().cloned()).collect();
         }
+        self.files = files;
         self.problems = problems.clone();
         problems
     }
@@ -282,6 +320,8 @@ fn ensure_loaded(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let (loaded, load_problems) = Loaded::read(dir, registry, watch);
     problems.extend(load_problems);
     app.margin_keys.loaded = Some(loaded);
+    super::obsidian::settings_loaded(app);
+    app.margin_keys.revision = app.margin_keys.revision.wrapping_add(1);
     report(app, &problems, false);
 }
 
@@ -346,7 +386,7 @@ fn report(app: &mut PdfCraftApp, problems: &[Problem], reloaded: bool) {
     }
 }
 
-/// A watched file changed: reload once the saves settle.
+/// A watched file changed: reload once the saves settle, if the files now say something new.
 fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let now = ctx.input(|input| input.time);
     let keys = &mut app.margin_keys;
@@ -360,17 +400,22 @@ fn poll(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     }
     keys.reload_at = None;
+    let Some(problems) = loaded.reload_if_changed() else { return };
     keys.pending.clear();
-    let problems = loaded.reload();
+    keys.revision = keys.revision.wrapping_add(1);
+    super::obsidian::settings_loaded(app);
     report(app, &problems, true);
 }
 
 /// Margin itself just wrote `settings.jsonc` (the Settings window): read it again now, so what
 /// that window shows and the next document opened follow at once. Problems are reported as on
-/// any reload. The watch still sees the save and reloads once more after the debounce.
+/// any reload. The watch still sees the save; by then the files say what was read here, so it
+/// reloads nothing.
 pub(crate) fn reload_now(app: &mut PdfCraftApp) {
     let Some(loaded) = app.margin_keys.loaded.as_mut() else { return };
     let problems = loaded.reload();
+    app.margin_keys.revision = app.margin_keys.revision.wrapping_add(1);
+    super::obsidian::settings_loaded(app);
     report(app, &problems, false);
 }
 
@@ -383,9 +428,15 @@ pub(crate) fn dispatch(app: &mut PdfCraftApp, ctx: &egui::Context) {
     scroll_step::drive(app, ctx);
 }
 
-fn resolve_keys(app: &mut PdfCraftApp, ctx: &egui::Context) {
+/// Loads the settings and keymap on the first Margin frame and reloads them after a change on
+/// disk. Every frame, before the shortcuts: a modal dialog stops key dispatch, not the settings it
+/// may be showing (a Settings window open on the first frame must read and write real files).
+pub(crate) fn load(app: &mut PdfCraftApp, ctx: &egui::Context) {
     ensure_loaded(app, ctx);
     poll(app, ctx);
+}
+
+fn resolve_keys(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let stack = context_stack(app, ctx);
     let os = Os::current();
     let now = ctx.input(|input| input.time);
@@ -492,7 +543,7 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let stats_sheet = app.margin_stats.sheet_open();
+    let stats_sheet = app.margin_stats.sheet_open() || app.margin_library.sheet_open();
     #[cfg(target_arch = "wasm32")]
     let stats_sheet = false;
     if app.margin_keys.sheet.is_some() || stats_sheet || app.dialog.is_some() || app.password_prompt.is_some() {
@@ -533,8 +584,9 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         if view.selected_text().is_some() {
             stack.push(node("Selection", &[("selection", "text")]));
         }
-        // A comment picked on the page or in the Highlights tab: its delete and colour keys.
-        if view.comments.selected.is_some() {
+        // A mark picked on the page or in the Highlights tab (a PDF comment or one kept in the
+        // sidecar): its delete and colour keys.
+        if view.comments.selected.is_some() || view.margin.marks.selected.is_some() {
             stack.push(node("Annotation", &[]));
         }
     }
@@ -639,8 +691,14 @@ fn close_layer(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if view.selected_text().is_some() {
         view.clear_selection();
-    } else {
+        return;
+    }
+    if view.find.is_some() {
         view.find = None;
+        return;
+    }
+    if super::focus::active(app) {
+        super::focus::leave(app);
     }
 }
 
@@ -760,6 +818,44 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
+    /// Margin's own settings write applies as it is made; the change event the watch then sees
+    /// reloads nothing, so the message the write led to stays and a chord in progress isn't
+    /// dropped. An edit from another program still reloads and says so.
+    #[test]
+    fn only_an_edit_from_outside_reloads_when_the_watch_fires() {
+        let dir = std::env::temp_dir().join(format!("margin-keys-own-write-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = PdfCraftApp::with_flavor(crate::Flavor::Margin);
+        app.margin_keys.set_config_dir(dir.clone());
+        app.margin_keys.set_data_dir(dir.join("data"));
+        let ctx = egui::Context::default();
+        ensure_loaded(&mut app, &ctx);
+        // The OS delivers the real watch's events whenever it likes: the test says when one came.
+        app.margin_keys.loaded.as_mut().unwrap().watch = None;
+        let watch_fired = |app: &mut PdfCraftApp| {
+            app.margin_keys.reload_at = Some(0.0);
+            poll(app, &ctx);
+        };
+
+        super::super::obsidian::write_user_settings(&mut app, &[("view.scroll_line_px", Value::from(120))]).unwrap();
+        assert_eq!(app.margin_keys.settings().view.scroll_line_px, 120, "applied as it is written");
+        app.notify("Vault connected");
+        app.margin_keys.pending = vec!["ctrl-k".to_owned()];
+        let revision = app.margin_keys.revision();
+        watch_fired(&mut app);
+        assert_eq!(app.toast.as_ref().map(|toast| toast.0.as_str()), Some("Vault connected"));
+        assert_eq!(app.margin_keys.pending, ["ctrl-k"]);
+        assert_eq!(app.margin_keys.revision(), revision, "the keymap wasn't loaded again");
+
+        std::fs::write(dir.join(margin_config::SETTINGS_FILE), "{ \"view\": { \"scroll_line_px\": 200 } }").unwrap();
+        watch_fired(&mut app);
+        assert_eq!(app.margin_keys.settings().view.scroll_line_px, 200);
+        assert_eq!(app.toast.as_ref().map(|toast| toast.0.as_str()), Some("Settings and keymap reloaded"));
+        assert!(app.margin_keys.pending.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn strokes_match_the_keymap_syntax() {
         let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
@@ -783,7 +879,8 @@ mod tests {
     }
 
     /// The ids `margin::run` (the reader chrome, reading state and library) handles.
-    const CHROME_COMMANDS: [&str; 10] = [
+    const CHROME_COMMANDS: [&str; 25] = [
+        "view.focus_mode.toggle",
         "view.sidebar.toggle",
         "view.sidebar.tab",
         "reader.annotate.toggle",
@@ -791,9 +888,23 @@ mod tests {
         "view.trim.toggle",
         "library.open",
         "library.search",
+        "library.import",
+        "library.add_folder",
+        "app.choose_vault",
+        "reader.export_markdown",
         "app.stats",
         "annotation.delete",
         "annotation.color",
+        "note.add",
+        "note.edit",
+        "note.delete",
+        "note.next",
+        "note.prev",
+        "note.list",
+        "reader.save_with_highlights",
+        "view.tab.next",
+        "view.tab.prev",
+        "view.tab.go",
     ];
 
     /// Every id the built-in keymap binds is one the app runs.
@@ -825,7 +936,8 @@ mod tests {
     #[test]
     fn static_shortcuts_fall_back_only_where_unbound() {
         let registry = Registry::load().unwrap();
-        let user = "[{ \"bindings\": { \"ctrl-p\": \"view.palette\", \"ctrl-s\": null } }]";
+        // `secondary` is Cmd on macOS and Ctrl elsewhere, where PdfCraft's static Print and Save sit.
+        let user = "[{ \"bindings\": { \"secondary-p\": \"view.palette\", \"secondary-s\": null } }]";
         let compiled = {
             let options = CompileOptions { os: Os::current(), chord_timeout_ms: 1000, annotate_letters: true };
             margin_config::compile(&registry, &[KeymapSource { file: "keymap.jsonc", text: user }], &options)
@@ -841,11 +953,12 @@ mod tests {
                 bound_strokes: bindings.iter().filter_map(|b| b.keys.first().cloned()).collect(),
                 compiled: Some(compiled),
                 watch: None,
+                files: None,
             }),
             ..MarginKeys::default()
         };
         let spec = |id: &str| commands::command(id).unwrap();
-        assert!(!keys.falls_back(spec("print.dialog")), "Ctrl+P belongs to the keymap now");
+        assert!(!keys.falls_back(spec("print.dialog")), "Cmd/Ctrl+P belongs to the keymap now");
         assert!(!keys.falls_back(spec("file.save")), "an unbind hides the static shortcut too");
         assert!(keys.falls_back(spec("file.open")), "untouched shortcuts keep working");
         assert!(MarginKeys::default().falls_back(spec("file.open")), "before loading, everything falls back");

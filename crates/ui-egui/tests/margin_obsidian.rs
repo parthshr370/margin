@@ -54,7 +54,8 @@ fn harness(vault: &Path) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
         app.set_option("language", "en").unwrap();
-        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-obsidian-data-{}", std::process::id())));
+        app.margin_keys.set_config_dir(vault.parent().unwrap().join("config"));
+        app.margin_keys.set_data_dir(vault.parent().unwrap().join("data"));
         let pdf = vault.join("papers/text.pdf");
         app.open_bytes("text.pdf", Some(pdf.to_string_lossy().into_owned()), TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
@@ -76,6 +77,19 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+fn await_note(h: &mut Harness<'static, PdfCraftApp>, note: &Path, expected: &str) -> String {
+    for _ in 0..200 {
+        h.run_steps(1);
+        if let Ok(contents) = std::fs::read_to_string(note)
+            && contents.contains(expected)
+            && h.state().views[0].comments.notes.progress.is_none()
+        {
+            return contents;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("Timed out waiting for note export ({expected}); toast: {}", toast(h));
 }
 
 fn drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
@@ -100,6 +114,11 @@ fn highlight(h: &mut Harness<'static, PdfCraftApp>, first: usize, last: usize) {
     drag(h, a, b);
 }
 
+/// Optional local evidence avoids writing developer-specific paths or requiring a GPU in CI.
+fn evidence_folder() -> Option<PathBuf> {
+    std::env::var_os("MARGIN_NOTES_EVIDENCE_DIR").map(PathBuf::from)
+}
+
 fn ask(h: &mut Harness<'static, PdfCraftApp>, request: Request) {
     h.state_mut().views[0].comments.notes.request = Some(request);
     h.run_steps(2);
@@ -107,6 +126,20 @@ fn ask(h: &mut Harness<'static, PdfCraftApp>, request: Request) {
 
 fn toast(h: &Harness<'static, PdfCraftApp>) -> String {
     h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+}
+
+/// The failure held on screen, once there is one. A write is refused on its worker thread,
+/// after it has read the highlights' text (perhaps rendering the page for it), so how many
+/// frames that takes depends on the machine.
+fn await_held(h: &mut Harness<'static, PdfCraftApp>) -> String {
+    for _ in 0..200 {
+        h.run_steps(1);
+        if let Some(held) = h.state().margin_chrome.notices.held() {
+            return held.to_owned();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("Timed out waiting for a held failure; toast: {}", toast(h));
 }
 
 #[test]
@@ -132,15 +165,23 @@ fn a_highlight_copies_as_a_pdf_plus_callout() {
 fn writing_to_the_note_twice_adds_one_entry() {
     let vault = Vault::new("write");
     let mut h = harness(&vault.dir());
+    std::fs::create_dir_all(vault.note().parent().unwrap()).unwrap();
+    std::fs::write(vault.note(), "Foreign note text\n\n## Highlights\n\n").unwrap();
     highlight(&mut h, 4, 14);
     ask(&mut h, Request::Write);
-    assert_eq!(toast(&h), "Wrote 1 callout to reading/text.md");
+    let note = await_note(&mut h, &vault.note(), CALLOUT);
+    assert!(note.starts_with("Foreign note text\n\n## Highlights\n\n<!-- margin:"), "{note}");
+    assert_eq!(toast(&h), "Updated reading/text.md: 1 added");
+    if let Some(folder) = evidence_folder() {
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("initial-note.txt"), &note).unwrap();
+    }
     ask(&mut h, Request::Write);
+    let note = await_note(&mut h, &vault.note(), CALLOUT);
     assert_eq!(toast(&h), "reading/text.md already has every highlight");
-    let note = std::fs::read_to_string(vault.note()).unwrap();
     assert_eq!(note.matches("<!-- margin:").count(), 1, "{note}");
-    assert!(note.starts_with("---\nsource: \"[[papers/text.pdf]]\"\n---\n\n## Highlights\n\n<!-- margin:"), "{note}");
-    assert!(note.ends_with(&format!(" -->\n{CALLOUT}")), "{note}");
+    assert!(note.contains(&format!("{CALLOUT}<!-- /margin:")), "{note}");
+    assert!(note.ends_with("\n\n"), "{note}");
 }
 
 /// A note path leaving the vault is refused; the failure stays on screen (R8 QoL 23) with Retry
@@ -154,14 +195,17 @@ fn a_note_path_leaving_the_vault_is_refused_with_a_toast() {
     // A path that got in some other way (a hand-edited settings file) is refused at write time.
     h.state_mut().notes.note_template = "reading/../../escape.md".into();
     ask(&mut h, Request::Write);
-    let held = h.state().margin_chrome.notices.held().unwrap_or_default().to_owned();
+    let held = await_held(&mut h);
     assert!(held.contains("must stay inside the vault"), "{held}");
     assert!(!vault.0.join("escape.md").exists() && !vault.dir().join("escape.md").exists());
     h.state_mut().notify("Copied");
     h.run_steps(20);
     assert_eq!(h.state().margin_chrome.notices.held(), Some(held.as_str()), "kept past routine messages");
     h.get_by_label("Retry");
-    h.get_by_label("Dismiss").click();
+    // The toast's ×, at the bottom; the notice bar over the page (the xref-less fixture is
+    // repaired on open) has its own Dismiss.
+    let dismiss = h.get_all_by_label("Dismiss").max_by(|a, b| a.rect().bottom().total_cmp(&b.rect().bottom())).expect("a Dismiss button");
+    dismiss.click();
     h.run_steps(2);
     assert!(h.state().margin_chrome.notices.held().is_none());
 }
@@ -172,8 +216,10 @@ fn open_in_obsidian_writes_the_highlight_and_opens_the_note() {
     let mut h = harness(&vault.dir());
     highlight(&mut h, 4, 14);
     ask(&mut h, Request::Open(Some((0, 0))));
+    let note = await_note(&mut h, &vault.note(), CALLOUT);
+    settle(&mut h);
     assert_eq!(h.state().last_opened_url.as_deref(), Some("obsidian://open?vault=vault&file=reading%2Ftext.md"));
-    assert!(std::fs::read_to_string(vault.note()).unwrap().contains(CALLOUT));
+    assert!(note.contains(CALLOUT));
 }
 
 /// A highlight goes to the note as soon as it is made; one whose note is opened with it (the
@@ -184,8 +230,9 @@ fn autoadd_writes_each_new_highlight_with_its_note() {
     let mut h = harness(&vault.dir());
     h.state_mut().set_option("notes.autoadd", "on").unwrap();
     highlight(&mut h, 4, 14);
+    let first = await_note(&mut h, &vault.note(), CALLOUT);
     assert_eq!(h.state().views[0].comments.editing, None, "Margin opens no note editor on a new highlight");
-    assert!(std::fs::read_to_string(vault.note()).unwrap().contains(CALLOUT));
+    assert!(first.contains(CALLOUT));
     assert_eq!(toast(&h), "Added to reading/text.md");
     // "fox", selected with the pointer, then Comment: marked, its note open for typing.
     h.state_mut().set_option("quick", "select").unwrap();
@@ -195,12 +242,13 @@ fn autoadd_writes_each_new_highlight_with_its_note() {
     h.run_steps(3);
     assert_eq!(h.state().views[0].comments.editing, Some((0, 1, String::new())));
     let fox = "> [!PDF|yellow] [[papers/text.pdf#page=1|text, p.1]]\n> > fox\n";
-    assert!(!std::fs::read_to_string(vault.note()).unwrap().contains(fox), "nothing is written while its note is typed");
+    assert!(!std::fs::read_to_string(vault.note()).unwrap_or_default().contains(fox), "nothing is written while its note is typed");
+
     let view = &mut h.state_mut().views[0];
     view.comments.editing = None;
     view.pending_edit = Some(pdfcraft_engine::Edit::SetAnnotationContents { page: 0, index: 1, text: "speed matters".into() });
     h.run_steps(3);
-    let note = std::fs::read_to_string(vault.note()).unwrap();
+    let note = await_note(&mut h, &vault.note(), "speed matters");
     assert!(note.contains(&format!("{fox}>\n> speed matters\n")), "{note}");
     assert_eq!(toast(&h), "Added to reading/text.md");
     // The flag lives in the document's sidecar, not in the app's saved state.
@@ -210,10 +258,127 @@ fn autoadd_writes_each_new_highlight_with_its_note() {
     let sidecar: serde_json::Value = serde_json::from_str(&sidecar).unwrap();
     assert_eq!(sidecar["obsidian"]["auto_add"], true);
 }
+#[test]
+fn saving_a_snapshot_embeds_a_300_dpi_png_in_the_note() {
+    let vault = Vault::new("snapshot");
+    let mut h = harness(&vault.dir());
+    pdfcraft_ui_egui::margin::obsidian::save_snapshot_to_note(h.state_mut(), 0, 0, [10.0, 10.0, 100.0, 100.0]).unwrap();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if toast(&h).starts_with("Saved snapshot to ") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(toast(&h).starts_with("Saved snapshot to "), "{}", toast(&h));
+    let note = std::fs::read_to_string(vault.note()).unwrap();
+    assert!(note.contains("![[attachments/"), "{note}");
+    assert!(note.contains("[[papers/text.pdf#page=1|text, p.1]]"), "the embed links back to the page: {note}");
+    let image = std::fs::read_dir(vault.dir().join("attachments")).unwrap().next().unwrap().unwrap();
+    assert_eq!(&std::fs::read(image.path()).unwrap()[..8], b"\x89PNG\r\n\x1a\n");
+    if let Some(folder) = evidence_folder() {
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("snapshot-note.txt"), &note).unwrap();
+        std::fs::copy(image.path(), folder.join("snapshot.png")).unwrap();
+    }
+}
+
+#[test]
+fn writing_updates_recolored_notes_and_removes_deleted_highlights() {
+    let vault = Vault::new("edit-recolor-delete");
+    let mut h = harness(&vault.dir());
+    highlight(&mut h, 4, 14);
+    ask(&mut h, Request::Write);
+    let original = await_note(&mut h, &vault.note(), CALLOUT);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetAnnotationContents { page: 0, index: 0, text: "edited highlight note".into() });
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation {
+        page: 0,
+        index: 0,
+        color: Some([1.0, 0.0, 0.0]),
+        opacity: None,
+        width: None,
+        endings: None,
+    });
+    ask(&mut h, Request::Write);
+    let updated = await_note(&mut h, &vault.note(), "edited highlight note");
+    assert_ne!(updated, original);
+    assert_eq!(updated.matches("<!-- margin:").count(), 1, "{updated}");
+    assert!(updated.contains("> [!PDF|255,0,0]") && !updated.contains("> [!PDF|yellow]"), "{updated}");
+    if let Some(folder) = evidence_folder() {
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("updated-note.txt"), &updated).unwrap();
+    }
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAnnotation { page: 0, index: 0 });
+    ask(&mut h, Request::Write);
+    let deleted = await_note(&mut h, &vault.note(), "## Highlights");
+    assert!(!deleted.contains("<!-- margin:") && !deleted.contains("edited highlight note"), "{deleted}");
+}
+
+/// A block the user rewrote in Obsidian is Margin's no longer: a recolour or a delete leaves it
+/// as it is, and the message says so.
+#[test]
+fn a_block_the_user_edited_survives_recolour_and_delete() {
+    let vault = Vault::new("user-edited");
+    let mut h = harness(&vault.dir());
+    highlight(&mut h, 4, 14);
+    ask(&mut h, Request::Write);
+    let written = await_note(&mut h, &vault.note(), CALLOUT);
+    let edited = written.replace("> > quick brown", "> > quick brown (my own words)");
+    std::fs::write(vault.note(), &edited).unwrap();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation {
+        page: 0,
+        index: 0,
+        color: Some([1.0, 0.0, 0.0]),
+        opacity: None,
+        width: None,
+        endings: None,
+    });
+    ask(&mut h, Request::Write);
+    assert_eq!(await_note(&mut h, &vault.note(), "my own words"), edited);
+    assert!(toast(&h).contains("left 1 block you edited"), "{}", toast(&h));
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAnnotation { page: 0, index: 0 });
+    ask(&mut h, Request::Write);
+    assert_eq!(await_note(&mut h, &vault.note(), "my own words"), edited, "a deleted highlight never takes the user's text along");
+}
+
+/// A read-only PDF keeps its highlights in the sidecar; they reach the note like the PDF's own.
+#[cfg(unix)]
+#[test]
+fn sidecar_highlights_of_a_read_only_pdf_reach_the_note() {
+    use std::os::unix::fs::PermissionsExt;
+    let vault = Vault::new("sidecar");
+    std::fs::set_permissions(vault.dir().join("papers/text.pdf"), std::fs::Permissions::from_mode(0o444)).unwrap();
+    let mut app = harness(&vault.dir());
+    highlight(&mut app, 4, 14);
+    let view = &app.state().views[0];
+    assert_eq!(pdfcraft_ui_egui::margin::marks::sidecar_highlights(view).len(), 1, "kept in the sidecar");
+    assert!(app.state().session.get(view.id).is_some_and(|doc| doc.info.annotations.is_empty()), "not in the PDF");
+    ask(&mut app, Request::Write);
+    let written = await_note(&mut app, &vault.note(), CALLOUT);
+    assert_eq!(written.matches("<!-- margin:").count(), 1, "{written}");
+}
 
 #[test]
 fn pdfcraft_has_no_notes() {
     let mut app = PdfCraftApp::new();
     assert!(app.set_option("notes.vault", "/tmp").is_err());
     assert!(!app.persist().contains("\"notes\""));
+}
+#[test]
+fn export_target_picker_lists_every_format() {
+    let vault = Vault::new("export-picker");
+    let mut h = harness(&vault.dir());
+    highlight(&mut h, 4, 14);
+    h.state_mut().margin_chrome.sidebar_open = true;
+    h.state_mut().margin_chrome.tab = pdfcraft_ui_egui::margin::SidebarTab::Highlights;
+    h.run_steps(3);
+    h.get_by_label(obsidian::TARGET_PICKER_NAME).click();
+    h.run_steps(3);
+    for label in ["Markdown", "Logseq", "Readwise CSV", "JSON"] {
+        assert!(h.query_by_label(label).is_some(), "{label} is offered");
+    }
+    if let Some(folder) = evidence_folder() {
+        std::fs::create_dir_all(&folder).unwrap();
+        h.render().unwrap().save(folder.join("export-target-picker.png")).unwrap();
+    }
 }

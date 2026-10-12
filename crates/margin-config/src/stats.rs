@@ -22,7 +22,8 @@ pub const STATS_DB: &str = "stats.sqlite";
 pub const IDLE_SECS: f64 = 5.0 * 60.0;
 /// Shorter page visits are not recorded.
 pub const MIN_PAGE_SECS: f64 = 5.0;
-const SCHEMA_VERSION: i64 = 1;
+/// How `stats.sqlite` grew, one step per schema version ([`crate::migrate`]).
+const STEPS: &[crate::migrate::Step] = &[schema_v1];
 /// A local day's first moment, for [`StatsDb::local_unix`].
 const MIDNIGHT: &str = "00:00:00";
 const MONTHS_PER_YEAR: i64 = 12;
@@ -32,7 +33,8 @@ const DAYS_PER_WEEK: i64 = 7;
 /// Longest title kept for a book (from the PDF, untrusted).
 const MAX_TITLE_CHARS: usize = 512;
 
-const SCHEMA: &str = "
+/// Version 1: books, sessions and page times, keyed by the library's book key.
+const SCHEMA_V1: &str = "
 CREATE TABLE IF NOT EXISTS books (
     book TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT '',
@@ -56,6 +58,10 @@ CREATE TABLE IF NOT EXISTS page_times (
 CREATE INDEX IF NOT EXISTS page_times_book ON page_times(book);
 CREATE INDEX IF NOT EXISTS page_times_start ON page_times(start);
 ";
+
+fn schema_v1(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(SCHEMA_V1).map_err(db_err)
+}
 
 fn db_err(err: rusqlite::Error) -> String {
     format!("stats database: {err}")
@@ -201,14 +207,10 @@ impl StatsDb {
     /// Opens (and creates) `<data>/stats.sqlite`.
     pub fn open(data: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(data).map_err(|err| format!("can't create {}: {err}", data.display()))?;
-        let conn = Connection::open(data.join(STATS_DB)).map_err(db_err)?;
+        let path = data.join(STATS_DB);
+        let conn = Connection::open(&path).map_err(db_err)?;
         configure(&conn)?;
-        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).map_err(db_err)?;
-        if version > SCHEMA_VERSION {
-            return Err(format!("stats database: written by a newer Margin (schema {version}); not changed"));
-        }
-        conn.execute_batch(SCHEMA).map_err(db_err)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION).map_err(db_err)?;
+        crate::migrate::upgrade(&conn, &path, &crate::migrate::Schema { name: "stats database", steps: STEPS })?;
         Ok(Self { conn })
     }
 
@@ -703,6 +705,25 @@ mod tests {
         assert_eq!(summary.seconds_left(10), Some(300.0));
         rec.stop(&db, t0 + 100.0).unwrap();
         assert_eq!(db.page_time_count("b").unwrap(), 4);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_version_1_file_opens_with_its_history() {
+        let dir = temp_dir("stats-v1");
+        {
+            // As Margin wrote it before the upgrade steps: the schema, then the version stamp.
+            let conn = Connection::open(dir.join(STATS_DB)).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute("INSERT INTO books (book, title, pages) VALUES ('aaaa', 'Alpha', 12)", []).unwrap();
+            conn.execute("INSERT INTO sessions (id, book, start, end) VALUES (1, 'aaaa', 1000, 1600)", []).unwrap();
+            conn.execute("INSERT INTO page_times (book, page, start, seconds, session) VALUES ('aaaa', 3, 1000, 600, 1)", []).unwrap();
+        }
+        let db = StatsDb::open(&dir).unwrap();
+        let summary = db.summary("aaaa").unwrap();
+        assert_eq!((summary.seconds, summary.pages, summary.sessions), (600, 1, 1));
+        assert_eq!(db.last_read("aaaa").unwrap(), Some(1600));
         std::fs::remove_dir_all(&dir).ok();
     }
 

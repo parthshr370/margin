@@ -5,8 +5,9 @@
 use egui::{Align, Layout};
 use pdfcraft_engine::commands;
 
+use crate::margin::contents::current_section_at;
 use crate::margin::look::{self, GAP_LARGE};
-use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at};
+use crate::margin::{SidebarTab, motion, open_tab, outline_at, reading, window_chrome};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
 
@@ -41,11 +42,12 @@ const DOCUMENT_MENU: &[Option<&str>] = &[
 const EXPORT_MENU: &[&str] = &["export.text", "export.docx", "export.html", "export.rtf", "export.image", "export.all_images"];
 
 /// The Library's app menu: what the document menu offers without a document (open, recent,
-/// settings, shortcuts), since the Library shows no reader header.
-const APP_MENU: &[Option<&str>] = &[Some("file.open"), Some("recent"), None, Some("app.preferences"), Some("help.shortcuts")];
+/// settings, shortcuts), and the library's import, since the Library shows no reader header.
+const APP_MENU: &[Option<&str>] = &[Some("file.open"), Some("recent"), Some("library.import"), None, Some("app.preferences"), Some("help.shortcuts")];
 
-/// The header. While the active document is being searched, the find field takes the title's
-/// place; returns true when the header has no room for it, so it needs its own row.
+/// The header, and under it the open documents' tab strip. While the active document is being
+/// searched, the find field takes the title's place; returns true when the header has no room
+/// for it, so it needs its own row.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut needs_row = false;
@@ -56,10 +58,14 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
             let full = ui.max_rect();
+            // The whole bar, its padding too, moves the window where nothing else takes the press.
+            window_chrome::drag_area(app, ui, full.expand2(egui::vec2(GAP_LARGE, 0.0)), ui.id().with("margin-header-drag"));
+            let traffic_lights = window_chrome::traffic_lights_inset(ui.ctx(), full);
             let mut left_end = full.left();
             let mut right_start = full.right();
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
+                ui.add_space(traffic_lights);
                 left_cluster(app, ui);
                 left_end = ui.min_rect().right();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -74,6 +80,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
                 title(app, ui, &t, full, left_end, right_start);
             }
         });
+    // The open documents, under the header (hidden with it).
+    crate::margin::tabs::strip(app, ui);
     needs_row
 }
 
@@ -173,8 +181,8 @@ pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui
         Some((view, doc)) => {
             let name = doc.info.title.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| doc.display_name());
             job.append(&name, 0.0, format(12.5, t.text_muted));
-            let section =
-                current_section(&doc.info.outline, view.current).and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.trim().to_owned()));
+            let section = current_section_at(&doc.info, reading::spot(view), view.rotation)
+                .and_then(|p| outline_at(&doc.info.outline, &p).map(|i| i.title.trim().to_owned()));
             if let Some(section) = &section {
                 job.append("  ·  ", 0.0, format(12.5, t.text_faint));
                 job.append(section, 0.0, format(12.5, t.text));
@@ -268,6 +276,8 @@ fn menu_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, rows: &[Option<&str>]) {
                 });
             }
             Some("recent") => recent_menu(app, ui),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some("library.import") => crate::margin::library::import_item(app, ui),
             Some(id) => command_item(app, ui, id),
         }
     }

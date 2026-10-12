@@ -13,7 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::{DocView, PageXform};
@@ -191,6 +191,11 @@ impl CommentTool {
         self.draws() || self.clicks_points()
     }
 
+    /// Whether the fill-colour control applies: shapes with an interior (#686).
+    pub fn has_fill(self) -> bool {
+        matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud)
+    }
+
     /// A placeholder shape of this kind (for per-tool default styles).
     fn sample(self) -> Shape {
         match self {
@@ -200,14 +205,14 @@ impl CommentTool {
                 Shape::TextMarkup { kind: self.markup().unwrap_or(Markup::Highlight), quads: Vec::new() }
             }
             Self::Ink => Shape::Ink { strokes: Vec::new() },
-            Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: false },
-            Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: true },
+            Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::None },
+            Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::OpenArrow },
             Self::Rectangle => Shape::Rectangle { rect: [0.0; 4] },
             Self::Oval => Shape::Oval { rect: [0.0; 4] },
             Self::Polygon => Shape::Polygon { vertices: Vec::new(), cloud: false },
             Self::Cloud => Shape::Polygon { vertices: Vec::new(), cloud: true },
-            Self::PolyLine => Shape::PolyLine { vertices: Vec::new() },
-            Self::Callout => Shape::Callout { rect: [0.0; 4], knee: [0.0; 2], point: [0.0; 2], font_size: 10.0 },
+            Self::PolyLine => Shape::PolyLine { vertices: Vec::new(), start: LineEnding::None, end: LineEnding::None },
+            Self::Callout => Shape::Callout { rect: [0.0; 4], knee: [0.0; 2], point: [0.0; 2], font_size: 10.0, ending: LineEnding::OpenArrow },
             Self::Caret => Shape::Caret { rect: [0.0; 4] },
             Self::ReplaceText => Shape::TextMarkup { kind: Markup::StrikeOut, quads: Vec::new() },
             Self::Eraser => Shape::Ink { strokes: Vec::new() },
@@ -263,6 +268,11 @@ impl CommentPrefs {
         self.styles.iter().find(|(t, _)| *t == tool).map(|(_, s)| s.clone()).unwrap_or_default()
     }
 
+    /// Every tool with its current default style (the persisted settings read this).
+    pub fn styles(&self) -> impl Iterator<Item = (CommentTool, &Style)> {
+        self.styles.iter().map(|(t, s)| (*t, s))
+    }
+
     pub fn set_color(&mut self, tool: CommentTool, c: Rgb) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.color = c;
@@ -279,6 +289,13 @@ impl CommentPrefs {
     pub fn set_opacity(&mut self, tool: CommentTool, o: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.opacity = if o.is_finite() { o.clamp(0.1, 1.0) } else { 1.0 };
+        }
+    }
+
+    /// The tool's fill (`None`: no fill). Only shapes with an interior keep one.
+    pub fn set_fill(&mut self, tool: CommentTool, fill: Option<Rgb>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.fill = if tool.has_fill() { fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
         }
     }
 
@@ -520,10 +537,10 @@ fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
-/// Rectangles, ovals, text boxes and stamps. A callout's `/Rect` also holds its leader line, so it
-/// only moves.
+/// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
+/// `/Rect` also holds its leader line, so it only moves.
 fn resizable(a: &Annotation) -> bool {
-    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp") && a.intent.as_deref() != Some("FreeTextCallout")
+    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
 }
 
 const HANDLES: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)];
@@ -575,6 +592,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let page_rect = cx.xf.rect;
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
+    let fill_grab = fill_grabs(ui, cx, view);
     let cv = &mut view.comments;
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
@@ -767,8 +785,45 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             true
         }
         QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
         _ => false,
     }
+}
+
+/// With a Fill & Sign tool, the Fill & Sign marks already on the page are picked up as with the
+/// Select tool, as in Acrobat: hovering one shows the move cursor, a click selects it, a drag
+/// moves it and the selected one's handles resize it. Elsewhere the tool places its mark. While
+/// the button is down the press decides; otherwise the pointer (egui clears the press origin on
+/// release, so a click is located by the pointer).
+pub(crate) fn fill_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
+    matches!(cx.tool, QuickTool::Fill(_)) && grabs(ui, cx, view, |a| a.fill_sign)
+}
+
+/// With the Select tool, a comment that would move (not text markup) is picked up before a form
+/// field under it, so a signature placed over a field can still be dragged off it.
+pub(crate) fn select_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
+    cx.tool == QuickTool::Select && grabs(ui, cx, view, |a| !is_markup(&a.subtype))
+}
+
+/// Whether the press (or, with no button down, the pointer) is on a `pick` comment or on the
+/// selected one's resize handles.
+fn grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotation) -> bool) -> bool {
+    if cx.hidden {
+        return false;
+    }
+    let cv = &view.comments;
+    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+        return true;
+    }
+    let (pointer, origin, down) = ui.input(|i| (i.pointer.hover_pos(), i.pointer.press_origin(), i.pointer.any_down()));
+    let Some(p) = (if down { origin } else { pointer }).filter(|p| cx.xf.rect.contains(*p)) else { return false };
+    let on_handle = cv
+        .selected
+        .filter(|(page, _)| *page == cx.page)
+        .and_then(|(_, i)| cx.get(i))
+        .filter(|a| pick(a) && cx.allowed && resizable(a))
+        .is_some_and(|a| HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0));
+    on_handle || cx.hit(p).is_some_and(pick)
 }
 
 fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
@@ -815,6 +870,11 @@ fn select_input(
             // On screen, the image is also turned by the view's rotation.
             let turned = !cx.xf.rot.is_multiple_of(180);
             let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
+            // A drawn signature keeps its shape from the corners, as image signatures do.
+            let aspect_ratio = aspect_ratio.or_else(|| {
+                let r = cx.screen_rect(a);
+                (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
+            });
             cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
             consumed = true;
         } else if let Some(a) = cx.hit(o)
@@ -916,9 +976,9 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    if cx.tool == QuickTool::Select
-        && cv.gesture.is_none()
+    if cv.gesture.is_none()
         && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && (cx.tool == QuickTool::Select || matches!(cx.tool, QuickTool::Fill(_)) && a.fill_sign)
         && cv.selected != Some((cx.page, a.index))
     {
         for r in cx.screen_rects(a) {
@@ -1012,13 +1072,20 @@ fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
         CommentTool::Ink if points.len() >= 2 => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
-        CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line { from: first, to: last, arrow: tool == CommentTool::Arrow }),
+        CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
+            from: first,
+            to: last,
+            start: LineEnding::None,
+            end: if tool == CommentTool::Arrow { LineEnding::OpenArrow } else { LineEnding::None },
+        }),
         CommentTool::Rectangle if big => Some(Shape::Rectangle { rect }),
         CommentTool::Oval if big => Some(Shape::Oval { rect }),
         CommentTool::Polygon | CommentTool::Cloud if points.len() >= 3 => {
             Some(Shape::Polygon { vertices: points.to_vec(), cloud: tool == CommentTool::Cloud })
         }
-        CommentTool::PolyLine if points.len() >= 2 => Some(Shape::PolyLine { vertices: points.to_vec() }),
+        CommentTool::PolyLine if points.len() >= 2 => {
+            Some(Shape::PolyLine { vertices: points.to_vec(), start: LineEnding::None, end: LineEnding::None })
+        }
         _ => None,
     }
 }
@@ -1078,7 +1145,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             ui.set_width(260.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&prefs.author).font(theme::semibold(13.0)));
-                ui.label(egui::RichText::new(title).font(theme::regular(11.5)).color(t.text_faint));
+                ui.label(egui::RichText::new(tl!(title)).font(theme::regular(11.5)).color(t.text_faint));
             });
             ui.add_space(6.0);
             let hint = match c.kind {
@@ -1148,7 +1215,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 (rect[0] + rect[2]) / 2.0
             };
             let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
-            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0 }, text))
+            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
             view.comments.tool_done = true;
@@ -1240,8 +1307,14 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 });
                 ui.menu_button(tl!("Colour"), |ui| {
                     if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                        action =
-                            Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
+                        action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
+                            page,
+                            index,
+                            color: Some(c),
+                            opacity: None,
+                            width: None,
+                            endings: None,
+                        })));
                         ui.close();
                     }
                 });
@@ -1321,7 +1394,23 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     picked
 }
 
-/// The comment tools' extra quick-bar controls: pin, colour, opacity and thickness.
+/// "No fill" and the colour swatches; returns the choice clicked (`Some(None)`: no fill).
+pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb>> {
+    let mut picked = None;
+    ui.push_id("fill-picker", |ui| {
+        ui.vertical(|ui| {
+            if ui.selectable_label(current.is_none(), tl!("No fill")).clicked() {
+                picked = Some(None);
+            }
+            if let Some(c) = swatch_grid(ui, current) {
+                picked = Some(Some(c));
+            }
+        });
+    });
+    picked
+}
+
+/// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) {
     let style = prefs.style(tool);
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
@@ -1337,6 +1426,16 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             ui.close();
         }
     });
+    if tool.has_fill() {
+        let resp = fill_button(ui, style.fill);
+        egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
+            ui.label(egui::RichText::new(tl!("Fill colour")).font(theme::semibold(12.0)));
+            if let Some(f) = fill_picker(ui, style.fill) {
+                prefs.set_fill(tool, f);
+                ui.close();
+            }
+        });
+    }
     let resp = icons::button(ui, "blend", 32.0, false, tl!("Opacity"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(180.0);
@@ -1357,6 +1456,32 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             }
         });
     }
+}
+
+/// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline
+/// for no fill.
+fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let sq = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    let edge = Stroke::new(1.0, Color32::from_black_alpha(90));
+    match fill {
+        Some(c) => {
+            ui.painter().rect_filled(sq, 2.0, color32(c));
+        }
+        None => {
+            ui.painter().line_segment([sq.left_bottom(), sq.right_top()], Stroke::new(1.5, Color32::from_rgb(0xD3, 0x2F, 0x2F)));
+        }
+    }
+    ui.painter().rect_stroke(sq, 2.0, edge, egui::StrokeKind::Inside);
+    if resp.hovered() {
+        ui.painter().rect_stroke(r.shrink(2.0), 6.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
+    }
+    let label = match fill {
+        Some(_) => tl!("Fill colour"),
+        None => tl!("Fill colour: none"),
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.on_hover_text(label)
 }
 
 /// Status badge icon and label for a review state name.
@@ -1410,7 +1535,10 @@ mod tests {
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[0.0, 0.0], [1.0, 1.0]]), None);
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[10.0, 0.0], [0.0, 10.0]]), Some(Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }));
         assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), None);
-        assert!(matches!(drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]), Some(Shape::Line { arrow: true, .. })));
+        assert!(matches!(
+            drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
+            Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
+        ));
     }
 
     #[test]
