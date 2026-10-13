@@ -31,15 +31,18 @@ fn config_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// A Margin app on `config`, the system dark.
+/// A Margin app on `config`, the system dark. Its data folder sits beside `config`, one per
+/// test: tests run in parallel and must not share `library.sqlite`.
 fn margin_harness(config: &Path) -> Harness<'static, PdfCraftApp> {
+    let mut data = config.as_os_str().to_owned();
+    data.push("-data");
     let config = config.to_path_buf();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
         app.set_option("language", "en").unwrap();
         app.set_theme_preference(ThemePreference::Dark);
         app.margin_keys.set_config_dir(config);
-        app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-themes-data-{}", std::process::id())));
+        app.margin_keys.set_data_dir(PathBuf::from(data));
         app.margin_keys.disable_editor();
         app
     });
