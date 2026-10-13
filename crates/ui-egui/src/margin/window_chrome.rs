@@ -39,9 +39,10 @@ const CLOSE_HOVER: Color32 = Color32::from_rgb(0xe8, 0x11, 0x23);
 const CLOSE_PRESSED: Color32 = Color32::from_rgb(0xc5, 0x0f, 0x1f);
 const CLOSE_ICON: Color32 = Color32::WHITE;
 
-/// How far in from the window's sides a press resizes it, and how far along the sides from each
+/// How far in from the window's sides a press resizes it (thin, so the reader's floating scroll
+/// bar against the right edge keeps most of its width), and how far along the sides from each
 /// corner a press resizes both ways.
-const RESIZE_EDGE: f32 = 6.0;
+const RESIZE_EDGE: f32 = 4.0;
 const RESIZE_CORNER: f32 = 12.0;
 
 /// The memory key of the room the traffic lights take this frame, in egui points from the
@@ -160,12 +161,13 @@ pub(crate) fn show_window_controls(app: &PdfCraftApp, ctx: &egui::Context) {
     if !CLIENT_SIDE || !integrated(app) {
         return;
     }
-    if stored_width(ctx, window_buttons_id()) > 0.0 {
+    let buttons_shown = stored_width(ctx, window_buttons_id()) > 0.0;
+    if buttons_shown {
         window_buttons(ctx);
     }
     let (maximized, full_screen) = ctx.input(|input| (input.viewport().maximized.unwrap_or(false), input.viewport().fullscreen.unwrap_or(false)));
     if !maximized && !full_screen && !app.full_screen {
-        resize_edges(ctx);
+        resize_edges(ctx, buttons_shown);
     }
 }
 
@@ -240,26 +242,36 @@ fn window_button(ui: &mut egui::Ui, t: &Tokens, button: WindowButton) -> Respons
     };
     ui.painter().rect_filled(rect, 0.0, fill);
     look::focus_ring(ui, t, rect, &response, 0);
-    let tint = if is_close && lit > 0.0 { CLOSE_ICON } else { look::icon_tint(t, false, response.hovered()) };
+    let rest_tint = look::icon_tint(t, false, response.hovered());
+    let tint = if is_close { rest_tint.lerp_to_gamma(CLOSE_ICON, lit) } else { rest_tint };
     icons::paint(ui, rect, button.icon(), look::ICON_SMALL, tint);
     response
 }
 
 /// The window's sides and corners as resize grips: a strip [`RESIZE_EDGE`] deep along each side,
-/// a [`RESIZE_CORNER`] square at each corner.
-fn resize_edges(ctx: &egui::Context) {
+/// a [`RESIZE_CORNER`] square at each corner. With the window buttons shown (`buttons_shown`)
+/// no grip covers them: the top strip ends where they start, and the top right corner becomes a
+/// [`RESIZE_CORNER`]-long piece of the right side just under the header row.
+fn resize_edges(ctx: &egui::Context, buttons_shown: bool) {
     let screen = ctx.content_rect();
     let (left, right, top, bottom) = (screen.left(), screen.right(), screen.top(), screen.bottom());
     let corner = Vec2::splat(RESIZE_CORNER);
-    let along_top_and_bottom = (left + RESIZE_CORNER)..=(right - RESIZE_CORNER);
-    let along_sides = (top + RESIZE_CORNER)..=(bottom - RESIZE_CORNER);
+    let (top_end, east_top, north_east) = if buttons_shown {
+        let under_header = top + super::header::HEIGHT;
+        let corner_piece = Rect::from_x_y_ranges(right - RESIZE_EDGE..=right, under_header..=under_header + RESIZE_CORNER);
+        (right - WINDOW_BUTTON_COUNT * WINDOW_BUTTON_WIDTH, under_header + RESIZE_CORNER, corner_piece)
+    } else {
+        (right - RESIZE_CORNER, top + RESIZE_CORNER, Rect::from_min_size(pos2(right - RESIZE_CORNER, top), corner))
+    };
+    let along_bottom = (left + RESIZE_CORNER)..=(right - RESIZE_CORNER);
+    let along_west = (top + RESIZE_CORNER)..=(bottom - RESIZE_CORNER);
     let grips = [
-        (ResizeDirection::North, CursorIcon::ResizeNorth, Rect::from_x_y_ranges(along_top_and_bottom.clone(), top..=top + RESIZE_EDGE)),
-        (ResizeDirection::South, CursorIcon::ResizeSouth, Rect::from_x_y_ranges(along_top_and_bottom, bottom - RESIZE_EDGE..=bottom)),
-        (ResizeDirection::West, CursorIcon::ResizeWest, Rect::from_x_y_ranges(left..=left + RESIZE_EDGE, along_sides.clone())),
-        (ResizeDirection::East, CursorIcon::ResizeEast, Rect::from_x_y_ranges(right - RESIZE_EDGE..=right, along_sides)),
+        (ResizeDirection::North, CursorIcon::ResizeNorth, Rect::from_x_y_ranges(left + RESIZE_CORNER..=top_end, top..=top + RESIZE_EDGE)),
+        (ResizeDirection::South, CursorIcon::ResizeSouth, Rect::from_x_y_ranges(along_bottom, bottom - RESIZE_EDGE..=bottom)),
+        (ResizeDirection::West, CursorIcon::ResizeWest, Rect::from_x_y_ranges(left..=left + RESIZE_EDGE, along_west)),
+        (ResizeDirection::East, CursorIcon::ResizeEast, Rect::from_x_y_ranges(right - RESIZE_EDGE..=right, east_top..=bottom - RESIZE_CORNER)),
         (ResizeDirection::NorthWest, CursorIcon::ResizeNorthWest, Rect::from_min_size(pos2(left, top), corner)),
-        (ResizeDirection::NorthEast, CursorIcon::ResizeNorthEast, Rect::from_min_size(pos2(right - RESIZE_CORNER, top), corner)),
+        (ResizeDirection::NorthEast, CursorIcon::ResizeNorthEast, north_east),
         (ResizeDirection::SouthWest, CursorIcon::ResizeSouthWest, Rect::from_min_size(pos2(left, bottom - RESIZE_CORNER), corner)),
         (ResizeDirection::SouthEast, CursorIcon::ResizeSouthEast, Rect::from_min_size(pos2(right - RESIZE_CORNER, bottom - RESIZE_CORNER), corner)),
     ];
