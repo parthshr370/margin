@@ -251,7 +251,11 @@ impl PdfCraftApp {
             "view.continuous" if self.flavor == crate::Flavor::Margin => {
                 if let Some(i) = active {
                     let v = &mut self.views[i];
-                    let next = if crate::margin::reading::layout_of(v) == margin_config::Layout::Single { margin_config::Layout::Scroll } else { margin_config::Layout::Single };
+                    let next = if crate::margin::reading::layout_of(v) == margin_config::Layout::Single {
+                        margin_config::Layout::Scroll
+                    } else {
+                        margin_config::Layout::Single
+                    };
                     crate::margin::reading::show_layout(v, next);
                 }
             }

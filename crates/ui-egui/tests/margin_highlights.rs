@@ -105,7 +105,8 @@ fn the_delete_button_removes_the_highlight_and_undo_restores_it() {
     assert_eq!(markup_count(&h), 0);
     h.get_by_label("No highlights yet.");
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    h.run_steps(3);
+    // Undo is an edit: the page's text layer is read again before the card can quote it.
+    settle(&mut h);
     assert_eq!(markup_count(&h), 1);
     h.get_by_label_contains("highlight, p. 1: quick brown");
 }
