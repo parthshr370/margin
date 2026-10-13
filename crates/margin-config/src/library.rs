@@ -881,7 +881,7 @@ fn detect_ids(bytes: &Arc<Vec<u8>>, info: Option<&pdfcraft_render::DocInfo>) -> 
     }
     if doi.is_none() && arxiv.is_none() && info.is_some_and(|info| !info.pages.is_empty()) {
         let mut renderer = PageRenderer::new(bytes.clone(), RenderConfig::default());
-        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         if let Some(text) = page.text {
             let text = text.plain_text();
             (doi, arxiv) = (ids::find_doi(&text), ids::find_arxiv(&text));
@@ -897,7 +897,7 @@ fn render_cover(bytes: &Arc<Vec<u8>>, width_pt: f32) -> CoverOut {
     }
     let mut renderer = PageRenderer::new(bytes.clone(), RenderConfig::default());
     let scale = COVER_WIDTH as f32 / width_pt;
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0 });
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false });
     if page.error.is_some() || page.width == 0 || page.height == 0 {
         return CoverOut::Failed;
     }

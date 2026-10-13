@@ -234,7 +234,7 @@ fn read_text(file: Stale, cancel: &AtomicBool) -> Option<BookText> {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        let rendered = renderer.render(RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        let rendered = renderer.render(RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         let page_number = u32::try_from(page).unwrap_or(u32::MAX);
         if let Some(text) = &rendered.text
             && kept < MAX_BOOK_TEXT

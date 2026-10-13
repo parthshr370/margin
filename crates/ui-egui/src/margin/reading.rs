@@ -161,7 +161,7 @@ struct TrimRecord {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ViewState {
     display: DisplayState,
-    layout: PageLayout,
+    layout: margin_config::Layout,
     cover: bool,
     fit: &'static str,
     /// Only a zoom fit records its zoom; the others recompute it from the window.
@@ -181,7 +181,7 @@ impl ViewState {
         };
         Self {
             display: view.margin.display,
-            layout: view.layout,
+            layout: layout_of(view),
             cover: view.cover,
             fit,
             zoom: (fit == "zoom").then(|| (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32),
@@ -410,11 +410,36 @@ pub fn set_fit(view: &mut DocView, fit: Fit) {
     go(view, spot);
 }
 
+/// Margin's page display of `view`: Scroll is one page across scrolling, Single one page at a
+/// time, Two-up spreads (PdfCraft's two-page view that doesn't scroll shows as Two-up too).
+pub(crate) fn layout_of(view: &DocView) -> margin_config::Layout {
+    match (view.layout, view.continuous) {
+        (PageLayout::TwoUp, _) => margin_config::Layout::TwoUp,
+        (PageLayout::Single, true) => margin_config::Layout::Scroll,
+        (PageLayout::Single, false) => margin_config::Layout::Single,
+    }
+}
+
+/// The canvas's base layout and continuous scrolling for Margin's page display `layout`.
+fn display_of(layout: margin_config::Layout) -> (PageLayout, bool) {
+    match layout {
+        margin_config::Layout::Scroll => (PageLayout::Single, true),
+        margin_config::Layout::Single => (PageLayout::Single, false),
+        margin_config::Layout::TwoUp => (PageLayout::TwoUp, true),
+    }
+}
+
+/// Show `view` in Margin's page display `layout`, keeping the current page in view.
+pub(crate) fn show_layout(view: &mut DocView, layout: margin_config::Layout) {
+    let (base, continuous) = display_of(layout);
+    view.set_display(base, continuous);
+}
+
 /// The canvas's fit width or page just changed the zoom (a resized window or sidebar): keep the
 /// reading line. Nothing to keep before a frame is drawn, and Single view fits each page anew as
 /// it turns, so a page turn is not pulled back.
 pub(crate) fn refitted(view: &mut DocView) {
-    if view.goto.is_some() || view.layout == PageLayout::Single || view.visible_page_rects().is_empty() {
+    if view.goto.is_some() || !view.continuous || view.visible_page_rects().is_empty() {
         return;
     }
     let spot = spot(view);
@@ -448,11 +473,7 @@ fn apply_view_settings(view: &mut DocView, settings: &margin_config::View, trim:
         (trim_state.odd, trim_state.even) = (margins(record.odd), margins(record.even));
     }
     view.margin.trim = trim_state;
-    view.layout = match settings.layout {
-        margin_config::Layout::Scroll => PageLayout::Continuous,
-        margin_config::Layout::Single => PageLayout::Single,
-        margin_config::Layout::TwoUp => PageLayout::TwoUp,
-    };
+    (view.layout, view.continuous) = display_of(settings.layout);
     view.cover = settings.cover_alone;
     view.margin.read_fit = None;
     match settings.fit {
@@ -651,9 +672,9 @@ pub fn toggle_trim(view: &mut DocView) {
 fn view_layer(state: &ViewState) -> Map<String, Value> {
     let mut layer = state.display.settings_values();
     let layout = match state.layout {
-        PageLayout::Continuous => "scroll",
-        PageLayout::Single => "single",
-        PageLayout::TwoUp => "two_up",
+        margin_config::Layout::Scroll => "scroll",
+        margin_config::Layout::Single => "single",
+        margin_config::Layout::TwoUp => "two_up",
     };
     layer.insert("layout".into(), layout.into());
     layer.insert("cover_alone".into(), state.cover.into());

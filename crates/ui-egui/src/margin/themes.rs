@@ -421,7 +421,8 @@ fn chosen_names(setting: &ThemeSetting) -> Vec<(&'static str, &str, &'static str
 /// installed: after a reload, a change of `theme`, or the system turning light or dark. Every
 /// frame, before Margin draws.
 pub(crate) fn sync(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    let system_dark = crate::system_theme(ctx, app.desktop_dark);
+    let follow = matches!(&app.margin_keys.settings().theme, ThemeSetting::ByMode(modes) if modes.mode == ThemeMode::System);
+    let system_dark = app.system_dark(ctx, follow);
     let keys = &app.margin_keys;
     let entry = keys.themes().choose(&keys.settings().theme, system_dark);
     let revision = keys.revision();
