@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/margin/screenshots/reader-display.png" alt="The Margin reader with 'Attention Is All You Need' open in the Night page colour, the Contents sidebar on the left, the annotate rail beside the page and the Display popover showing the Paper, Sepia, Night, Ink and Mono page colours" width="100%">
+  <img src="docs/margin/screenshots/reader.png" alt="The Margin reader with 'Attention Is All You Need' open on page 3 in the Night page colour: the Contents sidebar follows the Model Architecture section, a sentence is highlighted in yellow with the selection bar above it, and Margin's own minimize, maximize and close buttons sit at the top right" width="100%">
 </p>
 
 Margin is a desktop PDF reader for papers, books and long documents. It opens into your library,
@@ -27,6 +27,22 @@ reading.
 
 Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet.
 
+### At a glance
+
+- **Opens into your library**, not an empty window, and reopens every PDF at the exact spot and
+  zoom you left it.
+- **Highlights are real PDF annotations**, so every other PDF reader sees them. They autosave.
+- **Straight into Obsidian**: PDF++ style callouts, a reading note per paper that stays in sync,
+  and exports for Markdown, Logseq, Readwise CSV and JSON.
+- **Made for long reading**: five page colours with a Night mode that keeps photos in colour,
+  automatic margin trim, a two-up book layout and a focus mode.
+- **Works with LaTeX**: reloads after every build, with SyncTeX jumps both ways.
+- **Private by default**: no account. Reading stats stay in a local file, and nothing leaves your
+  machine unless you ask for a metadata lookup.
+- **Configured like Zed**: settings, keymap and themes are commented JSON that reload as you save,
+  and Zed theme files work as they are.
+- **Small and native**: one Rust binary, about 25 MB to download on Linux.
+
 ## Contents
 
 - [Features](#features)
@@ -34,191 +50,182 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - [Install](#install)
 - [Build from source](#build-from-source)
 - [Configuration](#configuration)
+- [LaTeX and SyncTeX](#latex-and-synctex)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Built on PdfCraft](#built-on-pdfcraft)
 - [License](#license)
 
 ## Features
 
-**Library and reading stats**
+### Library
 
-- A library is the home screen: a Continue reading card that opens the last book at its page,
-  then shelves for Recent, Reading, Finished, Folders, Collections and Tags, as a cover grid or a
-  list, with search (<kbd>/</kbd>) and sort by recent, title, author, progress or date added.
-  Search matches titles, authors, file names, tags and a book's details; turn on **In text** to
-  search the pages and PDF highlights of every book instead, and click a result to open the book
-  at that page. The text is read in the background after each scan.
-- Covers come from each PDF's first page. Folders listed in `library.folders` are scanned on
-  start and on Rescan, in the background. A scan also finds a paper's DOI or arXiv id in the file
-  itself (its metadata, XMP or first page).
-- Right-click a book to open it, see its details, show it in its folder, mark it finished, add it
-  to a collection, tag it or remove it. The details sheet edits the title, authors, year, DOI,
-  arXiv id and tags; what you edit there is never overwritten by a scan, an import or a lookup.
-- Import a BibTeX file (from Zotero, Better BibTeX, JabRef or Mendeley) or Zotero's own
-  `zotero.sqlite` from the Library's menu: entries fill in the details of the books they match (by
-  file, DOI, arXiv id, or title and year), their keywords become tags, and PDFs the library doesn't
-  have yet are added. Zotero's database is copied and only the copy is read.
-- Reading time is recorded per page and per session in a local SQLite file (turn it off with
-  `stats.enabled`). The Reading stats sheet (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>) shows
-  today, this week and the last 12 months, a calendar heatmap, streaks and a sortable table of
-  books, and exports CSV.
-- Nothing leaves your machine unless you ask for a lookup: **Look up details** in a book's details
-  sends its DOI or arXiv id to Crossref (api.crossref.org) and arXiv (export.arxiv.org). Turn on
-  `library.metadata_lookup` to look up every new book with an id after each scan.
+- **Library home.** Margin opens on a **Continue reading** card for the last book, then shelves for
+  Recent, Reading, Finished, Folders, Collections and Tags, as a cover grid or a list. Sort by
+  recent, title, author, progress or date added.
+- **Search everything** (<kbd>/</kbd>). Titles, authors, file names, tags and details by default;
+  turn on **In text** to search the pages and highlights of every book, and click a result to open
+  that page. Book text is read in the background after each scan.
+- **Folders scanned for you.** Folders in `library.folders` are scanned on start and on Rescan.
+  Covers come from each first page, and a scan finds a paper's **DOI or arXiv id** in the file
+  itself (metadata, XMP or first page).
+- **Book details.** Right-click a book to open it, show it in its folder, mark it finished, add it
+  to a collection, tag it or remove it. The details sheet edits title, authors, year, DOI, arXiv id
+  and tags, and what you edit there is never overwritten by a scan, import or lookup.
+- **Import from Zotero and BibTeX.** Read a BibTeX file (Zotero, Better BibTeX, JabRef, Mendeley)
+  or Zotero's own `zotero.sqlite`. Entries fill in the books they match (by file, DOI, arXiv id, or
+  title and year), keywords become tags, and missing PDFs are added. Zotero's database is copied
+  and only the copy is read.
+- **Metadata lookup, only when asked.** **Look up details** sends a book's DOI or arXiv id to
+  Crossref (api.crossref.org) and arXiv (export.arxiv.org). Turn on `library.metadata_lookup` to
+  do it for every new book after a scan.
 
-**Reading**
+### Reading stats
 
-- A quiet layout: a header with the title and current section, a sidebar, a floating annotate
-  rail and a footer with the page field, zoom and a progress scrubber.
-- On macOS the window has no separate title bar: the traffic lights sit in Margin's own header
-  row, and the empty parts of that row move the window and zoom it on a double click.
-- On Linux Margin draws its own title bar too: minimize, maximize and close sit at the right end
-  of the header row (or the Library's bar), the empty parts of the row move the window and
-  maximize it on a double click, and the window's edges and corners resize it. The buttons hide
-  with the header in full screen and focus mode. Set `ui.titlebar` to `"system"` to get your
-  desktop's title bar back; the change applies at once.
-- On macOS a full menu bar (Margin, File, Edit, View, Go, Window, Help) runs the same commands as
-  the palette, with Open Recent and live Undo and Redo labels. Each row shows its shortcut from
-  your keymap, and the keys still go through the keymap, so they keep working by context. File
-  also adds a library folder, imports BibTeX or Zotero, saves a copy with highlights, exports the
-  paper as Markdown and chooses the Obsidian vault; Edit and Go hold the page notes, View focus
-  mode, and Window the next and previous document.
-- Page colours: Paper, Sepia, Night, Ink and Mono, with brightness and contrast and an option to
-  follow the system's dark mode. Night flips light and dark but keeps hues, and photos and
-  diagrams keep their colours in the dark modes.
-- Layouts: continuous Scroll, Single page and Two-up (with the cover alone, like a book). Fit to
+- **Reading time per page and per session**, kept in a local SQLite file (turn it off with
+  `stats.enabled`).
+- **The Reading stats sheet** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>) shows today, this
+  week and the last 12 months, a **calendar heatmap**, **streaks** and a sortable table of books,
+  and exports **CSV**.
+
+### Reading
+
+- **A quiet layout.** A header with the title and current section, a sidebar, a floating annotate
+  rail, and a footer with the page field, zoom and a progress scrubber.
+- **Page colours**: Paper, Sepia, Night, Ink and Mono, with brightness and contrast, and an option
+  to follow the system's dark mode. **Night** flips light and dark but keeps hues, and photos and
+  diagrams keep their colours.
+- **Layouts**: continuous Scroll, Single page and **Two-up** (cover alone, like a book). Fit to
   width, to page, or to a comfortable reading width.
-- Trim: hide white page margins automatically, or set them by hand (odd and even pages apart).
-  The PDF itself is not changed.
-- Margin reopens every file at the exact spot and zoom you left it, not only the page.
-- Back returns to the exact place before a jump (a link, the outline, a search, the scrubber), with
-  a short "Back to p. N" pill after each jump.
-- Smooth screen steps with Space and Page Down that leave part of the previous screen visible.
-- Focus mode (<kbd>F</kbd> or <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>H</kbd>; <kbd>Ctrl</kbd>+<kbd>H</kbd>
-  on Linux; also in the command palette) hides the header, sidebar, footer and annotate rail
-  without changing the sidebar choice; press the same key or <kbd>Esc</kbd> to leave.
-- Full screen with a hidden top bar that shows the title and a way out.
-- Find lives in one place: a field in the header and its results in the sidebar's Find tab, with
-  match case and whole-word options.
-- Scanned, image-only pages offer text recognition from Find or when you try to select or
-  highlight text. Recognize one page or the whole document locally, with progress and Cancel.
-  Recognition adds an invisible text layer as one undoable PDF edit; the image stays unchanged.
-  Dismiss the offer once per open document. Signed or PDF-restricted documents are not changed;
-  read-only files offer Save as to make a writable copy first.
-- Sidebar tabs: Contents (the outline, following the section you are reading), Highlights, Pages
-  (a thumbnail grid with the current page marked and highlight dots), Bookmarks, Find, and Tools
-  (PdfCraft's tools that work in this build). In a narrow window the sidebar floats over the page.
-- Open several documents at once: with two or more, a tab strip under the header shows them (close
-  with ×, or middle-click; drag to reorder; a dot marks unsaved changes). <kbd>Ctrl</kbd>+<kbd>Tab</kbd>
-  and <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> switch, and the Library lists them under Open now.
-  Each keeps its own place, zoom, history and sidebar tab.
-- A file rewritten by another program (a LaTeX build, a sync client) reloads by itself at the same
-  place, zoom and page colour (`reader.reload_on_change`, `reader.reload_debounce_ms`). A half
-  written or broken file keeps the version shown, and unsaved edits are never dropped: Margin asks
-  whether to reload or keep yours.
-- SyncTeX: jump from a source line to the PDF and back (see [LaTeX](#latex-and-synctex)).
-
-**Highlights and notes**
-
-- Select text and a small bar appears beside it: Copy, four highlight colours, Underline, Comment
-  and Copy callout. The default colours are the PDF++ set: Yellow, Red, Note and Important.
-- Highlights, underlines, strikethroughs, squiggles, sticky notes, ink, text boxes and shapes are
-  real PDF annotations, so other PDF readers see them too.
-- A PDF Margin can't write (a read-only file or folder, a signed PDF, one that forbids comment
-  changes) keeps its highlights in its sidecar instead. They show on the page and in the lists
-  like the rest, and **Save a copy with highlights** (footer, palette) writes them into a new PDF
-  as real annotations.
-- Page notes: <kbd>Shift</kbd>+<kbd>N</kbd> adds a note to the page you are reading (beside the
-  selected text, if any). Notes live in the sidecar for every PDF and show as small markers on
+- **Trim margins**: hide white page margins automatically, or set them by hand (odd and even pages
+  apart). The PDF itself is not changed.
+- **Exact place, every time.** Every file reopens at the exact spot and zoom you left it, not only
   the page.
-- The Highlights tab lists every mark and page note as a card with the text it covers, its page,
-  date and note. Search the text and notes, filter by colour or kind, sort by page or newest.
-  Change a colour, copy, open or delete from the card.
-- Obsidian: copy a highlight as a PDF++ style callout
-  (`> [!PDF|yellow] [[paper.pdf#page=4|paper, p.4]]` followed by the quote), open the page in
-  Obsidian, or write them to a reading note in your vault. Writing updates and recolours Margin's
-  hash-marked blocks in place and removes deleted highlights. A block edited in Obsidian, or an
-  older entry without an ownership hash, is kept and reported rather than overwritten. Text
-  outside Margin's block markers stays untouched; writes are atomic and confined to the vault.
-- The Highlights tab's format picker applies to **Copy all** and **Export highlights**:
-  Obsidian/PDF++, plain Markdown, Logseq outline blocks, Readwise CSV, or JSON. The CSV has the
-  columns Readwise's CSV import documents, `Highlight,Title,Author,URL,Note,Location,Date`
-  (Location is the page number, Date the day the highlight last changed; see
-  [Readwise's import page](https://docs.readwise.io/readwise/docs/importing-highlights)).
-  Exports extract missing page text in a background job with progress, and stop with an error
-  past 16 MiB of highlight text.
-- **Export paper as Markdown** writes headings, paragraphs, lists and detected tables, with
-  images as files beside it named after the note (`paper-image-0001.png`). **Export paper to
-  vault** writes a `-paper.md` beside the reading note with Obsidian image embeds, and never
-  replaces a note or image already in the vault. A paper whose text passes 64 MiB, or whose
-  images pass 256 MiB or 10,000 files, is refused with the page where it went over.
-- Right-click the area-snapshot rail button and choose **Save snapshot to note**, then drag a
-  region: Margin renders it at 300 DPI, saves a PNG under `notes.snapshot_folder` in the vault,
-  and adds an image embed and PDF page link to the reading note.
-- With **Add highlights to this note** on, every highlight change (new, edited, recoloured,
-  deleted) reaches the note in the background; a write that changes nothing says nothing.
-- Highlights and page notes kept in the sidecar (a read-only or signed PDF) go to the note and to
-  every export as the PDF's own do, after them on each page; a page note has no quote and takes
-  the palette's Note colour.
-- Configure the vault, reading-note path, front matter, header, highlight template, palette and
-  export target in the live-reloaded `notes` block of `settings.jsonc`, or in Settings ▸ Notes.
-  The vault and notes settings of an older Margin move from its saved state into
-  `settings.jsonc` once, without replacing values already there; CLI `notes.vault`,
-  `notes.note_template` and `notes.colors` write `settings.jsonc`. A relative `notes.vault` is
-  not used, and the Highlights tab says why. Templates use literal `{{variable}}` substitution,
-  never code. Available variables include `title`, `title-slug`, `authors`, `year`, `doi`,
-  `arxiv`, `citekey`, `tags`, `date`, `progress`, `page`, `color`, `color-name`, `text`, `note`,
-  `link` and `callout`; unavailable metadata is empty. Title, authors and progress come from the
-  library when it has the book, read again whenever a note is written. Path values are slugged,
-  front-matter values are quote-escaped, and inserted values are not reinterpreted as
-  templates. `notes.update_mode: "append"` opts out of updates and deletions.
-- First run: the library home shows a setup card to connect an Obsidian vault (a folder without
-  `.obsidian` is accepted with a warning), add a library folder (written to `library.folders`
-  and scanned at once) and open a PDF. **Not now** hides it for good (remembered in Margin's
-  saved state as `margin_setup_dismissed`); Settings ▸ Library and Settings ▸ Notes keep both
-  changeable.
+- **Back after a jump.** Back returns to where you were before a link, the outline, a search or the
+  scrubber, with a short "Back to p. N" pill after each jump.
+- **Smooth paging.** Space and Page Down move one screen and leave part of the previous one visible.
+- **Focus mode** (<kbd>F</kbd>, or <kbd>Ctrl</kbd>+<kbd>H</kbd> on Linux and
+  <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>H</kbd> on macOS) hides the header, sidebar, footer and
+  rail. Press the same key or <kbd>Esc</kbd> to leave. **Full screen** keeps a hidden top bar with
+  the title and a way out.
+- **Tabs.** With two or more documents open, a tab strip shows them: close with × or a middle
+  click, drag to reorder, and a dot marks unsaved changes. <kbd>Ctrl</kbd>+<kbd>Tab</kbd> and
+  <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> switch. Each tab keeps its own place, zoom, history and
+  sidebar tab, and the Library lists them under Open now.
+- **Sidebar tabs**: Contents (the outline, following the section you are reading), Highlights,
+  Pages (thumbnails with highlight dots), Bookmarks, Find, and Tools (PdfCraft's page tools). In a
+  narrow window the sidebar floats over the page.
+- **Find in one place.** A field in the header, results in the sidebar's Find tab, with match case
+  and whole-word options.
+- **Text recognition (OCR)** for scanned pages, offered from Find or when you try to select text.
+  Recognize one page or the whole document **locally**, with progress and Cancel. It adds an
+  invisible text layer as one undoable edit; the image stays the same. Signed or restricted PDFs
+  are never changed, and read-only files offer Save as first.
+- **Live reload.** A file rewritten by another program (a LaTeX build, a sync client) reloads by
+  itself at the same place, zoom and page colour (`reader.reload_on_change`). A half-written file
+  keeps the version shown, and unsaved edits are never dropped: Margin asks first.
+- **SyncTeX**: jump from a source line to the PDF and back (see [LaTeX](#latex-and-synctex)).
 
-**Saving**
+### Window
 
-- Annotations in a writable PDF autosave about a second after your last change (`reader.autosave`;
-  <kbd>Ctrl</kbd>+<kbd>S</kbd> still works). Serialization and atomic replacement run on a
-  background worker; edits made during a save remain dirty until the next write completes.
-  The footer says truthfully whether the file is saved, saving, failed, read-only or signed.
-  Within an unsigned document's session, incremental saves coalesce into one revision while
-  preserving the original PDF bytes. Saves that must rewrite the whole file (a repaired file,
-  applied redactions, changed encryption) do so once and later saves append to it. Save As and
-  Save asked for during a write all happen, in order. A file made read-only after opening is
-  never replaced. Quitting waits for pending writes.
-- Your place, layout, page colour, trim, page bookmarks, page notes and kept highlights live in a
-  small sidecar file next to the PDF (`paper.pdf.margin.json`), or in Margin's data folder when
-  that folder is not writable. Sidecars are never written just because you opened a file. Two
-  Margins writing the same sidecar merge their highlights, notes and bookmarks instead of losing
-  one side's changes.
-  Set `reader.remember_per_document` to false to use your global view defaults and stop restoring
-  or updating per-document positions and view settings; bookmarks and annotations still persist.
+- **Linux: Margin's own title bar**, like Zed. Minimize, maximize and close sit at the right end of
+  the header (or the Library's bar), the empty part of the row moves the window and maximizes it on
+  a double click, and the edges and corners resize it. The buttons hide in full screen and focus
+  mode. Set `ui.titlebar` to `"system"` to get your desktop's title bar back; it applies at once.
+- **macOS: no separate title bar.** The traffic lights sit in Margin's header row, which moves the
+  window and zooms it on a double click.
+- **macOS menu bar.** Margin, File, Edit, View, Go, Window and Help run the same commands as the
+  palette, with Open Recent and live Undo and Redo labels. Each row shows its shortcut from your
+  keymap.
 
-**Customisation**
+### Highlights and notes
 
-- `settings.jsonc`, `keymap.jsonc` and `themes.json` are plain JSON with comments. Margin writes
-  commented copies on first start and reloads them as soon as you save.
-- Themes work as in Zed: pick one with `"theme"`, write your own in `themes.json`, drop Zed theme
-  files into `themes/`, or change a few colours with `"theme_overrides"`
-  ([docs/margin/themes.md](docs/margin/themes.md)). Margin Dark and Margin Light are built in.
-- The keymap uses Zed's format with contexts (Reader, Library, Selection, annotate mode and more).
-  Press <kbd>?</kbd> for a keyboard sheet generated from your current keymap, and
-  <kbd>Ctrl</kbd>+<kbd>K</kbd> for the command palette.
-- Keyboard focus is always visible, and `ui.reduce_motion` turns off every animation.
+- **Highlight from the selection.** Select text and a small bar appears: Copy, four highlight
+  colours, Underline, Comment and Copy callout. The default colours are the PDF++ set: Yellow,
+  Red, Note and Important.
+- **Real PDF annotations.** Highlights, underlines, strikethroughs, squiggles, sticky notes, ink,
+  text boxes and shapes are standard annotations, so other PDF readers see them too.
+- **Works on read-only PDFs.** A file Margin can't write (read-only, signed, or one that forbids
+  comment changes) keeps its highlights in its sidecar. They show like the rest, go to notes and
+  exports, and **Save a copy with highlights** writes them into a new PDF as real annotations.
+- **Page notes** (<kbd>Shift</kbd>+<kbd>N</kbd>) add a note to the page you are reading, beside
+  the selected text if any. They show as small markers on the page.
+- **The Highlights tab** lists every mark and page note as a card with its text, page, date and
+  note. Search, filter by colour or kind, sort by page or newest, and recolour, copy, open or
+  delete from the card.
+- **Area snapshots.** Right-click the snapshot button, choose **Save snapshot to note**, and drag a
+  region: Margin saves it as a 300 DPI PNG in your vault (`notes.snapshot_folder`) and adds it to
+  the reading note with a link back to the page.
+
+### Obsidian and exports
+
+- **PDF++ callouts.** Copy a highlight as
+  `> [!PDF|yellow] [[paper.pdf#page=4|paper, p.4]]` followed by the quote, or open the page in
+  Obsidian.
+- **A reading note that stays in sync.** With **Add highlights to this note** on, every new,
+  edited, recoloured or deleted highlight reaches the note in the background. Margin only updates
+  its own marked blocks: a block you edited in Obsidian is kept and reported, text outside Margin's
+  blocks is never touched, and writes are atomic and stay inside the vault.
+- **Export highlights** (and **Copy all**) as Obsidian/PDF++, plain Markdown, Logseq outline
+  blocks, **Readwise CSV** or JSON. The CSV uses the columns
+  [Readwise's import](https://docs.readwise.io/readwise/docs/importing-highlights) expects
+  (`Highlight,Title,Author,URL,Note,Location,Date`, with the page as Location).
+- **Export a paper as Markdown**: headings, paragraphs, lists and detected tables, with images as
+  files beside it. **Export paper to vault** writes it next to the reading note with Obsidian image
+  embeds, and never replaces a note or image already there.
+- **Templates you control.** The vault, note path, front matter, highlight template, colours and
+  export target live in the `notes` block of `settings.jsonc` or in Settings ▸ Notes (see
+  [Obsidian](#obsidian)).
+- **Guided first run.** The library starts with a setup card to connect a vault, add a library
+  folder and open a PDF. **Not now** hides it for good; Settings ▸ Library and Settings ▸ Notes keep
+  both changeable.
+
+### Saving
+
+- **Autosave.** Annotations in a writable PDF save about a second after your last change
+  (`reader.autosave`; <kbd>Ctrl</kbd>+<kbd>S</kbd> still works), on a background worker. The footer
+  says truthfully whether the file is saved, saving, failed, read-only or signed.
+- **Your original bytes are kept.** Saves append to the PDF instead of rewriting it, and a session's
+  saves coalesce into one revision. A file made read-only after opening is never replaced, and
+  quitting waits for pending writes.
+- **Sidecar files.** Your place, layout, page colour, trim, bookmarks, page notes and kept
+  highlights live in a small `paper.pdf.margin.json` next to the PDF, or in Margin's data folder
+  when that folder is not writable. Opening a file never writes one, and two Margins writing the
+  same sidecar merge instead of losing changes. Set `reader.remember_per_document` to false to
+  always use your global view defaults.
+
+### Customisation
+
+- **Plain-text config.** `settings.jsonc`, `keymap.jsonc` and `themes.json` are JSON with
+  comments. Margin writes commented copies on first start and **reloads them as soon as you save**.
+  The **Settings** window (<kbd>Ctrl</kbd>+<kbd>,</kbd>) changes the common ones without a text
+  editor.
+- **Themes like Zed.** Margin Dark and Margin Light are built in. Pick one with `"theme"`, write
+  your own in `themes.json`, drop **Zed theme files** into `themes/`, or change a few colours with
+  `"theme_overrides"` ([docs/margin/themes.md](docs/margin/themes.md)).
+- **Keymap like Zed**, with contexts (Reader, Library, Selection, annotate mode and more). Press
+  <kbd>?</kbd> for a keyboard sheet built from your current keymap, and
+  <kbd>Ctrl</kbd>+<kbd>K</kbd> for the **command palette**.
+- **Accessible.** Keyboard focus is always visible, and `ui.reduce_motion` turns off every
+  animation.
 
 ## Screenshots
 
 <table>
 <tr>
-<td width="50%"><img src="docs/margin/screenshots/library.png" alt="The Margin library: a Continue reading card for a two-column paper, then five books in the Recent shelf with progress bars and page counts"></td>
-<td width="50%"><img src="docs/margin/screenshots/stats.png" alt="The Reading stats sheet: cards for today, this week, the last 12 months and books, a 12-month calendar heatmap in orange, and this week's reading time as bars"></td>
+<td width="50%"><img src="docs/margin/screenshots/library.png" alt="The Margin library: a Continue reading card for 'Attention Is All You Need' with its authors, page and time left, then six papers in the Recent shelf with progress bars and page counts"></td>
+<td width="50%"><img src="docs/margin/screenshots/highlights.png" alt="The Highlights tab beside 'Attention Is All You Need': a search field, the Obsidian note controls, export and copy buttons, and a card for the yellow highlight on page 3"></td>
 </tr>
 <tr>
-<td align="center"><sub>The library</sub></td>
-<td align="center"><sub>Reading stats</sub></td>
+<td align="center"><sub><b>Library</b>: continue reading, shelves and covers</sub></td>
+<td align="center"><sub><b>Highlights</b>: every mark as a card, ready for Obsidian</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/margin/screenshots/display.png" alt="The Page colour and layout popover over 'Attention Is All You Need': Paper, Sepia, Night, Ink and Mono swatches with Night chosen, brightness and contrast sliders, and Scroll, Single and Two-up pages with fit and trim options"></td>
+<td width="50%"><img src="docs/margin/screenshots/stats.png" alt="The Reading stats sheet: cards for today, this week, the last 12 months and books, a 12-month calendar heatmap in orange, this week's reading time as bars and the current streak"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Page colour and layout</b>, per document</sub></td>
+<td align="center"><sub><b>Reading stats</b>: heatmap and streaks, all local</sub></td>
 </tr>
 </table>
 
@@ -288,6 +295,13 @@ them. For a development build, run that command yourself once; models live in th
 `bin/margin`, so keep both directories together when using the tarball.
 
 ## Configuration
+
+The **Settings** window (<kbd>Ctrl</kbd>+<kbd>,</kbd>) covers the common options. Everything else,
+and everything Settings changes, lives in plain files you can edit and keep in a dotfiles repo.
+
+<p align="center">
+  <img src="docs/margin/screenshots/settings.png" alt="Margin's Settings window: interface language, reopen last files, default pages and fit, the name signed on highlights, and library folders" width="720">
+</p>
 
 Margin keeps its files in two folders:
 
@@ -374,7 +388,10 @@ removes a binding, and `secondary` means <kbd>Cmd</kbd> on macOS and <kbd>Ctrl</
 theme files work as they are in `themes/`. [docs/margin/themes.md](docs/margin/themes.md) lists
 every style key and what it colours.
 
-**Obsidian.** Point Margin at your vault once from the command line; it remembers the choice:
+### Obsidian
+
+Pick your vault in Settings ▸ Notes, or once from the command line; the choice is written to
+`settings.jsonc`:
 
 ```sh
 margin --notes.vault "/home/you/Obsidian/My Vault"
@@ -382,7 +399,15 @@ margin --notes.vault "/home/you/Obsidian/My Vault"
 
 `--notes.note_template` sets where reading notes go inside the vault (default
 `reading/{{title-slug}}.md`), and `--notes.colors "Yellow=#ffd000,Red=#ea5252"` sets the highlight
-colours. PDF++ links work best when the PDF itself is inside the vault.
+colours. PDF++ links work best when the PDF itself is inside the vault. A relative `notes.vault`
+is not used, and the Highlights tab says why.
+
+Templates use literal `{{variable}}` substitution, never code. Variables include `title`,
+`title-slug`, `authors`, `year`, `doi`, `arxiv`, `citekey`, `tags`, `date`, `progress`, `page`,
+`color`, `color-name`, `text`, `note`, `link` and `callout`; missing metadata is empty. Path
+values are slugged, front-matter values are quote-escaped, and inserted values are never read as
+templates again. `notes.update_mode: "append"` stops Margin from updating or deleting entries it
+wrote before.
 
 ### LaTeX and SyncTeX
 
