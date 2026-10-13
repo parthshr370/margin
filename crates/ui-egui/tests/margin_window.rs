@@ -21,11 +21,8 @@ const CLICK_FRAMES: usize = 3;
 
 /// One 200×300 page.
 fn fixture() -> Vec<u8> {
-    let objects = [
-        "<< /Type /Catalog /Pages 2 0 R >>",
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
-        "<< /Type /Page /Parent 2 0 R >>",
-    ];
+    let objects =
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>", "<< /Type /Page /Parent 2 0 R >>"];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (index, object) in objects.iter().enumerate() {
