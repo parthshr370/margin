@@ -246,6 +246,15 @@ impl PdfCraftApp {
                     self.views[i].set_layout(layout);
                 }
             }
+            // Margin has three layouts (Scroll, Single, Two-up): the toggle goes Single <-> Scroll
+            // so it never makes a non-scrolling Two-up that settings and sidecars can't store.
+            "view.continuous" if self.flavor == crate::Flavor::Margin => {
+                if let Some(i) = active {
+                    let v = &mut self.views[i];
+                    let next = if crate::margin::reading::layout_of(v) == margin_config::Layout::Single { margin_config::Layout::Scroll } else { margin_config::Layout::Single };
+                    crate::margin::reading::show_layout(v, next);
+                }
+            }
             // The Continuous scrolling checkbox (an independent toggle over the base layout).
             "view.continuous" => {
                 if let Some(i) = active {

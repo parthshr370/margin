@@ -2701,6 +2701,7 @@ fn paragraph_drag_points(h: &Harness<'static, PdfCraftApp>, text: &str, offset: 
         rot: view.rotation,
         pw: doc.info.pages[0].width,
         ph: doc.info.pages[0].height,
+        crop: pdfcraft_ui_egui::margin::trim::FULL,
     };
     let moved = std::array::from_fn(|i| (b.rect[i] + offset[i % 2]) as f32);
     (xf.user_rect(&doc.info, 0, b.rect.map(|v| v as f32)).center(), xf.user_rect(&doc.info, 0, moved).center())
