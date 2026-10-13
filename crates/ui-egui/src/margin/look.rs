@@ -38,7 +38,7 @@ const LABEL_SIZE: f32 = 11.0;
 const LABEL_TRACKING: f32 = 0.9;
 /// An icon's size in a button of at least [`CONTROL_ROW`] (and in every smaller button: 14).
 const ICON_LARGE: f32 = 16.0;
-const ICON_SMALL: f32 = 14.0;
+pub(crate) const ICON_SMALL: f32 = 14.0;
 /// The switch (mockup `.sw-t`: 30×18, knob inset 2).
 pub(crate) const SWITCH_SIZE: Vec2 = Vec2::new(30.0, 18.0);
 const SWITCH_KNOB_INSET: f32 = 2.0;

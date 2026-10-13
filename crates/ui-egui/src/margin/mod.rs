@@ -395,18 +395,18 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         sync(app);
     }
     motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
-    window_chrome::place_traffic_lights(app, ctx);
+    let focus_mode = focus::active(app);
+    // The Library has its own single toolbar (with the app menu), so no reader header over it.
+    let library_shown = cfg!(not(target_arch = "wasm32")) && app.active.is_none() && !app.combine_showing();
+    window_chrome::place(app, ctx, library_shown || !focus_mode);
     let t = crate::theme::Tokens::get(ctx);
     // A click while a popover or menu is open closes it (`look::popover`) and does nothing else:
     // the page must not also clear its selection, follow a link or place a mark.
     let dismissing = egui::Popup::is_any_open(ctx) && ctx.input(|i| i.pointer.any_click());
-    let focus_mode = focus::active(app);
     // The sidebar slides itself in and out (`margin_chrome.sidebar_open`).
     if !focus_mode && app.active.is_some() {
         sidebar::show(app, ui);
     }
-    // The Library has its own single toolbar (with the app menu), so no reader header over it.
-    let library_shown = cfg!(not(target_arch = "wasm32")) && app.active.is_none() && !app.combine_showing();
     let find_floats = !focus_mode && !library_shown && header::show(app, ui);
     if !focus_mode && app.active.is_some() {
         footer::show(app, ui);
@@ -451,6 +451,7 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     }
     app.show_progress(ctx);
     toast::show(app, ctx, pill);
+    window_chrome::show_window_controls(app, ctx);
 }
 
 /// The deepest outline entry at or before `page`, in reading order: the section being read.

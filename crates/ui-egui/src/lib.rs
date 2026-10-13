@@ -565,7 +565,9 @@ pub struct PdfCraftApp {
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
     pub toast: Option<(String, f64)>,
-    /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
+    /// Whether the title bar is drawn by us: on macOS the traffic lights sit over our tab strip;
+    /// in Margin on Linux, `margin::window_chrome` draws the window buttons (unless
+    /// `ui.titlebar` is "system").
     pub integrated_titlebar: bool,
     pub password_prompt: Option<PasswordPrompt>,
     pub unlock_prompt: Option<UnlockPrompt>,

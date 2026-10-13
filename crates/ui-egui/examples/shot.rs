@@ -9,7 +9,8 @@
 //! (in the order given, after the runs) click or point at the widget with that accessible label;
 //! `--scroll N` (in the same order) turns the wheel at the window's middle to scroll down N points.
 //! `--margin-home DIR` gives Margin `DIR/config` and `DIR/data` (a prepared library or stats
-//! history) instead of an empty temporary data folder.
+//! history) instead of an empty temporary data folder. `--integrated-titlebar` (no value) draws
+//! the title bar as `apps/margin` does on macOS and Linux (Margin's window buttons on Linux).
 //! Any other `--key value` pair is passed to `PdfCraftApp::set_option` (the same verbs as the
 //! desktop app's command-line flags and the future control channel).
 
@@ -30,6 +31,7 @@ fn main() -> Result<(), String> {
     let mut pointer = Vec::new();
     let mut select_text: Option<(usize, usize, usize)> = None;
     let mut margin_home: Option<std::path::PathBuf> = None;
+    let mut integrated_titlebar = false;
     while let Some(a) = args.next() {
         match a.strip_prefix("--") {
             Some("size") => {
@@ -48,6 +50,7 @@ fn main() -> Result<(), String> {
             }
             Some("margin-run") => margin_runs.push(args.next().ok_or("--margin-run ID")?),
             Some("margin-home") => margin_home = Some(args.next().ok_or("--margin-home DIR")?.into()),
+            Some("integrated-titlebar") => integrated_titlebar = true,
             Some("select-text") => {
                 // `--select-text PAGE:FROM-TO`: 1-based page, glyph indices in reading order.
                 let v = args.next().unwrap_or_default();
@@ -68,6 +71,7 @@ fn main() -> Result<(), String> {
     }
     let mut harness = Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_flavor(flavor);
+        app.integrated_titlebar = integrated_titlebar;
         if flavor == Flavor::Margin {
             app.set_theme_preference(pdfcraft_ui_egui::theme::ThemePreference::Dark);
             // A shot must not touch the reader's data: no library or stats rows, and the file

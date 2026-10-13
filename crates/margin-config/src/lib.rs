@@ -81,7 +81,7 @@ pub use registry::{CommandEntry, CommandId, CommandInfo, Group, MARGIN_NAMESPACE
 pub use settings::{
     ExportTarget, FindOptions, Fit, KeymapBase, Keys, Layout, Library, LibrarySort, LibraryView, NoteColor, NoteUpdateMode, Notes, PageColor, Rail,
     RailSide, Reader, SETTINGS_SCHEMA_URL, SETTINGS_VERSION, Settings, Sidebar, SidebarTab, Stats, SynctexClick, ThemeMode, ThemeModes, ThemeSetting,
-    ThemeStyle, Ui, View,
+    ThemeStyle, Titlebar, Ui, View,
 };
 pub use sidecar::{
     Bookmark, Highlight, HighlightSource, HighlightStyle, Locator, PageNote, PdfAnnot, Progress, Sidecar, SidecarDoc, SidecarFormat, SidecarObsidian,
