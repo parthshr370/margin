@@ -98,16 +98,20 @@ fn main() -> eframe::Result {
         }
     }
     // macOS: the content runs under a transparent title bar and Margin places the traffic lights
-    // in its header row (`margin::window_chrome`).
-    let integrated = cfg!(target_os = "macos");
+    // in its header row. Linux: no desktop decorations unless `ui.titlebar` is "system"; Margin
+    // draws the window buttons and resize edges (`margin::window_chrome`).
+    let integrated = cfg!(any(target_os = "macos", target_os = "linux"));
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Margin")
         .with_inner_size(WINDOW_SIZE)
         .with_min_inner_size(MIN_WINDOW_SIZE)
         .with_drag_and_drop(true)
         .with_app_id(APP_ID);
-    if integrated {
+    if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
+    if pdfcraft_ui_egui::margin::window_chrome::starts_undecorated() {
+        viewport = viewport.with_decorations(false);
     }
     match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
         Ok(icon) => viewport = viewport.with_icon(icon),

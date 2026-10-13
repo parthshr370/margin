@@ -372,6 +372,19 @@ pub struct Ui {
     pub rail: Rail,
     /// true = no animation: the sidebar, rail, popovers, hover fills, progress bars and screen steps change at once
     pub reduce_motion: bool,
+    /// Linux: "margin" = Margin's header row is the title bar, with minimize, maximize and close at its right; "system" = the desktop's title bar and frame. Other systems ignore it
+    pub titlebar: Titlebar,
+}
+
+/// Who draws the window's title bar on Linux.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Titlebar {
+    /// Margin: the header row moves the window, its own buttons minimize, maximize and close it.
+    #[default]
+    Margin,
+    /// The desktop's title bar and window frame.
+    System,
 }
 
 /// The sidebar (CU-UI-3). `visible` and `tab` are the first run's choice only: afterwards Margin

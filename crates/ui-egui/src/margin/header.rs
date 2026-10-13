@@ -110,6 +110,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
             // The whole bar, its padding too, moves the window where nothing else takes the press.
             window_chrome::drag_area(app, ui, full.expand2(egui::vec2(GAP_LARGE, 0.0)), ui.id().with("margin-header-drag"));
             let traffic_lights = window_chrome::traffic_lights_inset(ui.ctx(), full);
+            let window_buttons = window_chrome::window_buttons_inset(ui.ctx(), full);
             let mut left_end = full.left();
             let mut right_start = full.right();
             ui.horizontal_centered(|ui| {
@@ -118,6 +119,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
                 left_cluster(app, ui);
                 left_end = ui.min_rect().right();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(window_buttons);
                     right_cluster(app, ui);
                     right_start = ui.min_rect().left();
                 });

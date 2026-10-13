@@ -72,6 +72,11 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
   rail and a footer with the page field, zoom and a progress scrubber.
 - On macOS the window has no separate title bar: the traffic lights sit in Margin's own header
   row, and the empty parts of that row move the window and zoom it on a double click.
+- On Linux Margin draws its own title bar too: minimize, maximize and close sit at the right end
+  of the header row (or the Library's bar), the empty parts of the row move the window and
+  maximize it on a double click, and the window's edges and corners resize it. The buttons hide
+  with the header in full screen and focus mode. Set `ui.titlebar` to `"system"` to get your
+  desktop's title bar back; the change applies at once.
 - On macOS a full menu bar (Margin, File, Edit, View, Go, Window, Help) runs the same commands as
   the palette, with Open Recent and live Undo and Redo labels. Each row shows its shortcut from
   your keymap, and the keys still go through the keymap, so they keep working by context. File
@@ -329,6 +334,7 @@ An example `settings.jsonc`:
   },
   "ui": {
     "reduce_motion": false,
+    "titlebar": "margin",   // Linux: "margin" draws Margin's own window buttons; "system" = the desktop's title bar
     "rail": { "side": "right", "items": ["reader.tool.select", "comment.highlight", "|", "edit.undo", "edit.redo"] }
   },
   "library": { "folders": ["/home/you/Papers"], "view": "grid", "sort": "recent", "metadata_lookup": false },

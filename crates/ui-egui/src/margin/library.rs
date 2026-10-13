@@ -581,14 +581,17 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut actions = Vec::new();
     let full = ui.available_rect_before_wrap();
     window_chrome::drag_area(app, ui, Rect::from_min_size(full.min, vec2(full.width(), super::header::HEIGHT)), ui.id().with("margin-library-drag"));
-    // With the traffic lights over the window, the bar shares their row (the reader's header row).
-    let top_pad = if window_chrome::traffic_lights_shown(&ctx) { (super::header::HEIGHT - BUTTON) / 2.0 } else { TOP_PAD };
+    // With window buttons over the window, the bar shares their row (the reader's header row).
+    let top_pad = if window_chrome::window_buttons_shown(&ctx) { (super::header::HEIGHT - BUTTON) / 2.0 } else { TOP_PAD };
     let width = (full.width() - 2.0 * SIDE_PAD).clamp(0.0, MAX_WIDTH);
     let left = full.left() + (full.width() - width) / 2.0;
     let content = Rect::from_min_max(pos2(left, full.top() + top_pad), pos2(left + width, full.bottom()));
-    let traffic_lights = window_chrome::traffic_lights_inset(&ctx, content);
+    let insets = BarInsets {
+        traffic_lights: window_chrome::traffic_lights_inset(&ctx, content),
+        window_buttons: window_chrome::window_buttons_inset(&ctx, content),
+    };
     let mut page = ui.new_child(egui::UiBuilder::new().max_rect(content).layout(egui::Layout::top_down(egui::Align::Min)));
-    let bar = top_bar(app, &mut page, &t, traffic_lights, &mut actions);
+    let bar = top_bar(app, &mut page, &t, insets, &mut actions);
     scan_line(app, &page, &t, bar);
     page.add_space(GAP_LARGE * 2.0);
     // Everything under the top bar scrolls as one page, so what comes and goes above the shelf
@@ -841,17 +844,25 @@ fn hero_meta(app: &mut PdfCraftApp, index: usize) -> String {
     line
 }
 
+/// What the window buttons cover of the top bar's row: the traffic lights at its left, Margin's
+/// own window buttons at its right (`window_chrome`).
+#[derive(Clone, Copy)]
+struct BarInsets {
+    traffic_lights: f32,
+    window_buttons: f32,
+}
+
 /// The top bar on one [`BUTTON`]-tall row: Back (its slot kept when there is no book to go back
 /// to, so the title never moves), the title, then on the right the search field, "In text" and
 /// the icon buttons, every control one height. Nothing in it changes width with the state: a
 /// scan shows under the bar ([`scan_line`]) and in the Rescan button's tooltip. Returns the
 /// row's rect.
-fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights: f32, actions: &mut Vec<Action>) -> Rect {
+fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, insets: BarInsets, actions: &mut Vec<Action>) -> Rect {
     look::bar_row(ui, BUTTON, |ui| {
         ui.spacing_mut().item_spacing.x = GAP_LARGE;
         // The gap after the space is the row's own item spacing.
-        if traffic_lights > 0.0 {
-            ui.add_space((traffic_lights - GAP_LARGE).max(0.0));
+        if insets.traffic_lights > 0.0 {
+            ui.add_space((insets.traffic_lights - GAP_LARGE).max(0.0));
         }
         let back = app.margin_library.back_to.filter(|index| *index < app.views.len());
         if back.is_some() {
@@ -865,6 +876,9 @@ fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, traffic_lights:
         ui.label(egui::RichText::new("Library").font(theme::semibold(18.0)).color(t.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = GAP / 2.0;
+            if insets.window_buttons > 0.0 {
+                ui.add_space(insets.window_buttons);
+            }
             super::header::app_menu_button(app, ui, BUTTON);
             let open_keys = look::shortcut(app, "file.open");
             if look::icon_button(ui, "plus", BUTTON, false, "Open PDF…", open_keys.as_deref()).clicked() {
