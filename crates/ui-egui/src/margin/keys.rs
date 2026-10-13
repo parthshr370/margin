@@ -28,7 +28,7 @@ use serde_json::Value;
 use super::settings_watch::SettingsWatch;
 use super::themes::Themes;
 use super::{reading, scroll_step};
-use crate::canvas::{DocView, Fit, PageLayout};
+use crate::canvas::{DocView, Fit};
 use crate::{PdfCraftApp, QuickTool};
 
 /// Wait after the last change event before reloading: editors save a file in several steps.
@@ -577,15 +577,14 @@ fn control_focused(ctx: &egui::Context) -> bool {
 }
 
 /// What is left of `canvas::shortcuts` once its keys are bound in the keymap: ⌘C, which egui
-/// delivers as a Copy event, not a key.
-pub(crate) fn view_keys(view: &mut DocView, ctx: &egui::Context) {
+/// delivers as a Copy event, not a key. The selected text to copy, if ⌘C asks for it; the caller
+/// copies it unless the PDF forbids copying.
+pub(crate) fn view_keys(view: &DocView, ctx: &egui::Context) -> Option<String> {
     if ctx.text_edit_focused() {
-        return;
+        return None;
     }
     let copy = ctx.input(|input| input.events.iter().any(|event| matches!(event, Event::Copy)));
-    if copy && let Some(text) = view.selected_text() {
-        ctx.copy_text(text);
-    }
+    if copy { view.selected_text() } else { None }
 }
 
 fn node(name: &str, attrs: &[(&str, &str)]) -> ContextNode {
@@ -626,10 +625,10 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         text_input(&mut stack);
         return stack;
     };
-    let layout = match view.layout {
-        PageLayout::Continuous => "scroll",
-        PageLayout::Single => "single",
-        PageLayout::TwoUp => "two_up",
+    let layout = match super::reading::layout_of(view) {
+        margin_config::Layout::Scroll => "scroll",
+        margin_config::Layout::Single => "single",
+        margin_config::Layout::TwoUp => "two_up",
     };
     stack.push(node("Reader", &[("format", "pdf"), ("layout", layout)]));
     match app.quick_tool {
@@ -836,7 +835,7 @@ fn view_command(view: &mut DocView, id: &str, args: &Value, settings: &margin_co
             let down = id == "reader.screen.down";
             let by = if down { screen } else { -screen };
             // Single pans an enlarged page to its edge first, then turns the page.
-            let pan = if view.layout == PageLayout::Single { scroll_step::single_pan(view, by) } else { Some(by) };
+            let pan = if view.continuous { Some(by) } else { scroll_step::single_pan(view, by) };
             match pan {
                 Some(pan) => view.margin.screen_step.request(pan),
                 None => {

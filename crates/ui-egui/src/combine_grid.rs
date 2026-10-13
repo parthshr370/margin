@@ -557,7 +557,14 @@ fn file_gap(cells: &[Cell], at: usize, files: usize) -> usize {
 }
 
 /// The grid of files, in the card that holds the list. Returns what the user did.
-pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks: &[Result<usize, String>], selected: &[bool]) -> Option<RowAction> {
+pub(crate) fn grid(
+    app: &mut PdfCraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    checks: &[Result<usize, String>],
+    selected: &[bool],
+    twice: &[bool],
+) -> Option<RowAction> {
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let mut action = None;
@@ -566,13 +573,6 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
     // The card dragged may scroll out of the rows drawn, so its release is watched here.
     let released = drag.is_some() && ctx.input(|i| i.pointer.any_released());
     let n = app.combine_draft.len();
-    // The same file twice is allowed (e.g. a cover sheet), but probably a mistake.
-    // (A file's parts are the one file, not copies: counted by file.)
-    let mut copies: HashMap<(&str, usize), std::collections::BTreeSet<u64>> = HashMap::new();
-    for f in &app.combine_draft {
-        copies.entry((f.name.as_str(), f.bytes.len())).or_default().insert(f.group);
-    }
-    let twice: Vec<bool> = app.combine_draft.iter().map(|f| copies.get(&(f.name.as_str(), f.bytes.len())).is_some_and(|g| g.len() > 1)).collect();
     let places = layout(app);
     // Each file's first place (for the keys and to scroll to it).
     let mut first_place = vec![0usize; n];
@@ -751,7 +751,7 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
     app.combine_tab.card_focus_at = focused_card.map(|(_, file, nth)| (file, nth));
 
     // Pinch, or Ctrl/⌘ with the wheel, over the grid zooms it.
-    let pinch = ctx.input(|i| i.zoom_delta());
+    let pinch = crate::motion::zoom_delta(&ctx);
     if (pinch - 1.0).abs() > 0.001 && over_grid {
         app.combine_tab.zoom_request = Some(app.combine_zoom * pinch);
     }
@@ -1139,7 +1139,11 @@ pub(crate) fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens) {
     // No larger than the GPU takes, or the render would be refused.
     let longest = ctx.input(|i| i.max_texture_side as f32).min(PREVIEW_SIDE);
     let thumbs = &mut app.combine_thumbs;
-    let modal = crate::widgets::dialog_modal(ctx, egui::Id::new("combine-preview")).show(ctx, |ui| {
+    let id = egui::Id::new("combine-preview");
+    let tokens = Tokens::get(ctx);
+    // Margin's sheet in Margin's theme, egui's own modal otherwise.
+    let sheet = if tokens.kind == theme::ThemeKind::Margin { crate::margin::look::modal(ctx, id, &tokens) } else { egui::Modal::new(id) };
+    let modal = sheet.show(ctx, |ui| {
         ui.set_width(width);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::bidi::visual(&f.name)).font(theme::semibold(15.0)));

@@ -1,14 +1,14 @@
 //! ⌘K command palette: every registered command (with its shortcut) and every tool in the
-//! catalogue, with a fuzzy-ish substring match. In Margin it also lists Margin's own commands,
-//! shows the keymap's shortcuts, keeps a keyboard highlight (↑ ↓, Enter runs it) and keeps one
-//! height while the hits change.
+//! catalogue, with a fuzzy-ish substring match; ↑ ↓ select a hit and Enter runs it. In Margin it
+//! also lists Margin's own commands, shows the keymap's shortcuts and keeps one height while the
+//! hits change.
 
 use egui::{Align2, CornerRadius, Rect, Sense, vec2};
 use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
 
 use crate::margin::{keys, look};
 use crate::theme::{self, Tokens};
-use crate::{Flavor, LeftPanel, PdfCraftApp, icons};
+use crate::{Flavor, PdfCraftApp, icons};
 
 /// The most hits listed, and one row's height: Margin's list keeps room for all of them.
 const MAX_HITS: usize = 12;
@@ -24,18 +24,12 @@ struct Hit {
     ready: bool,
 }
 
-/// The keyboard highlight, and the query it belongs to (a new query starts again at the top).
-#[derive(Clone, Default)]
-struct Highlight {
-    query: String,
-    row: usize,
-}
-
+/// Where `needle` (folded with [`pdfcraft_render::text::fold_case`]) matches `hay`, for ranking.
 fn score(hay: &str, needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
-    let h = hay.to_lowercase();
+    let h = pdfcraft_render::text::fold_case(hay);
     if let Some(p) = h.find(needle) {
         return Some(p);
     }
@@ -63,9 +57,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     }
     let margin = app.flavor == Flavor::Margin;
-    let q = app.palette_query.trim().to_lowercase();
+    let q = pdfcraft_render::text::fold_case(app.palette_query.trim());
     let hits = hits(app, ctx, &q, margin);
-    let highlighted = margin.then(|| move_highlight(ctx, &q, hits.len()));
+    let selected = move_selection(ctx, &q, hits.len(), margin);
 
     let screen = ctx.content_rect();
 
@@ -103,12 +97,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             .font(theme::regular(15.0))
                             .desired_width(f32::INFINITY),
                     );
-                    // Enter runs the highlighted hit (Margin) or the top one. The field keeps
-                    // focus (requested every frame), so check while it is focused as well as
-                    // when focus is lost.
+                    // Enter runs the selected hit (↑ ↓ move it). The field keeps focus (requested
+                    // every frame), so check while it is focused as well as when focus is lost.
                     if (r.has_focus() || r.lost_focus())
                         && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        && let Some((_, h)) = hits.get(highlighted.unwrap_or(0))
+                        && let Some((_, h)) = hits.get(selected)
                     {
                         chosen = Some((h.command.clone(), h.group));
                     }
@@ -123,26 +116,34 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     }
                     for (row, (_, h)) in hits.iter().enumerate() {
                         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-                        if margin {
-                            look::row_fill(ui, &t, rect, &resp, highlighted == Some(row));
-                        } else if resp.hovered() {
-                            ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
-                        }
-                        icons::paint(ui, Rect::from_min_size(rect.min + vec2(8.0, 9.0), vec2(18.0, 18.0)), &h.icon, 17.0, t.icon);
+                        let body = if margin {
+                            look::row_fill(ui, &t, rect, &resp, row == selected);
+                            rect
+                        } else {
+                            let press = theme::Press::track(ui, &resp);
+                            press.wash(ui, rect, 6, row == selected);
+                            rect.translate(press.offset())
+                        };
+                        icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 9.0), vec2(18.0, 18.0)), &h.icon, 17.0, t.icon);
                         // Display is translated; matching above already considered both languages.
                         let shown = crate::i18n::command_label(&h.label);
                         let shown_detail = tl!(&h.detail).to_string();
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, h.ready, &shown));
                         let fg = if h.ready { t.text } else { t.text_faint };
-                        ui.painter().text(rect.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, shown, theme::regular(13.5), fg);
-                        ui.painter().text(
-                            rect.right_center() - vec2(10.0, 0.0),
-                            Align2::RIGHT_CENTER,
-                            shown_detail,
-                            theme::regular(12.0),
-                            t.text_faint,
+                        let detail_font = theme::regular(12.0);
+                        let detail_max = (rect.width() * 0.42).clamp(0.0, 220.0);
+                        let detail = crate::widgets::fit_line(&shown_detail, detail_max, |s| crate::widgets::text_width(ui, s, &detail_font));
+                        let detail_w = crate::widgets::text_width(ui, &detail, &detail_font);
+                        ui.painter().text(body.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, detail, detail_font, t.text_faint);
+                        crate::widgets::paint_left(
+                            ui,
+                            body.left_center() + vec2(36.0, 0.0),
+                            &shown,
+                            theme::regular(13.5),
+                            fg,
+                            (rect.width() - 36.0 - detail_w - 24.0).max(0.0),
                         );
-                        if resp.clicked() {
+                        if theme::hand(resp).clicked() {
                             chosen = Some((h.command.clone(), h.group));
                         }
                     }
@@ -162,8 +163,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.palette_open = false;
         app.palette_query.clear();
         if let Some(g) = group {
-            app.left_open = true;
-            app.left = LeftPanel::Tool(g);
+            app.select_tool(g);
         }
         if let Some(c) = command {
             if !margin {
@@ -175,28 +175,36 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Margin's keyboard highlight among `count` hits for query `q`: ↑ and ↓ move it (consumed, so
-/// the field doesn't take them), a new query starts it at the top. Returns its row.
-fn move_highlight(ctx: &egui::Context, q: &str, count: usize) -> usize {
-    let id = egui::Id::new("palette_highlight");
-    let mut highlight = ctx.data(|data| data.get_temp::<Highlight>(id)).filter(|h| h.query == q).unwrap_or_default();
-    highlight.query = q.to_owned();
+/// The selected row among `count` hits for query `q`: ↑ and ↓ move it, a new query starts it at
+/// the top. Margin consumes the keys, so the field doesn't take them.
+fn move_selection(ctx: &egui::Context, q: &str, count: usize, margin: bool) -> usize {
+    let (down, up) = if margin {
+        ctx.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown), i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)))
+    } else {
+        ctx.input(|i| (i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::ArrowUp)))
+    };
     let last = count.saturating_sub(1);
-    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
-        highlight.row += 1;
-    }
-    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
-        highlight.row = highlight.row.saturating_sub(1);
-    }
-    highlight.row = highlight.row.min(last);
-    let row = highlight.row;
-    ctx.data_mut(|data| data.insert_temp(id, highlight));
-    row
+    ctx.data_mut(|data| {
+        let id = egui::Id::new("palette_selected");
+        let query_id = egui::Id::new("palette_selected_query");
+        let previous_query = data.get_temp::<String>(query_id);
+        let selected = if previous_query.as_deref() == Some(q) { data.get_temp::<usize>(id).unwrap_or(0) } else { 0 }.min(last);
+        data.insert_temp(query_id, q.to_owned());
+        let selected = if down {
+            selected.saturating_add(1).min(last)
+        } else if up {
+            selected.saturating_sub(1)
+        } else {
+            selected
+        };
+        data.insert_temp(id, selected);
+        selected
+    })
 }
 
-/// The hits for query `q` (lower case), best first, at most [`MAX_HITS`]: PdfCraft's commands,
-/// its tools and their items, and in Margin (`margin`) Margin's own commands that take no
-/// arguments, with the keymap's shortcuts.
+/// The hits for query `q` (folded with [`pdfcraft_render::text::fold_case`]), best first, at most
+/// [`MAX_HITS`]: PdfCraft's commands, its tools and their items, and in Margin (`margin`) Margin's
+/// own commands that take no arguments, with the keymap's shortcuts.
 fn hits(app: &PdfCraftApp, ctx: &egui::Context, q: &str, margin: bool) -> Vec<(usize, Hit)> {
     let mut hits: Vec<(usize, Hit)> = Vec::new();
     let active = app.active_ids().map(|(_, id)| id);
@@ -283,4 +291,19 @@ fn hits(app: &PdfCraftApp, ctx: &egui::Context, q: &str, margin: bool) -> Vec<(u
     hits.sort_by_key(|(s, h)| (*s, !h.ready));
     hits.truncate(MAX_HITS);
     hits
+}
+
+#[cfg(test)]
+mod search {
+    use super::score;
+    use pdfcraft_render::text::fold_case;
+
+    #[test]
+    fn commands_match_in_any_case_with_turkish_i() {
+        assert_eq!(score("İçe aktar", &fold_case("içe")), Some(0));
+        assert_eq!(score("Yazdır", &fold_case("YAZDIR")), Some(0));
+        assert_eq!(score("Insert Pages", &fold_case("ınsert")), Some(0));
+        assert_eq!(score("Print", &fold_case("print")), Some(0));
+        assert_eq!(score("Print", &fold_case("zz")), None);
+    }
 }

@@ -807,7 +807,7 @@ impl<'a> HighlightReader<'a> {
         });
         self.extracted
             .entry(page)
-            .or_insert_with(|| renderer.render(RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 }).text)
+            .or_insert_with(|| renderer.render(RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).text)
             .clone()
     }
 

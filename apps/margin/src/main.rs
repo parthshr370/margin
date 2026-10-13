@@ -133,6 +133,9 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             pdfcraft_ui_egui::margin::set_version(env!("CARGO_PKG_VERSION"));
             let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+            // A theme that follows the system asks the desktop portal (the native window only).
+            #[cfg(target_os = "linux")]
+            app.enable_desktop_theme();
             // Margin's defaults; saved settings override them.
             app.set_theme_preference(ThemePreference::Dark);
             if let Some(json) = cc.storage.and_then(|s| s.get_string(STORAGE_KEY)) {

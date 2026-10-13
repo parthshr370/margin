@@ -214,7 +214,7 @@ pub(crate) fn modal_frame(t: &Tokens) -> egui::Frame {
 }
 
 /// The padding inside a modal sheet.
-const MODAL_PAD: i8 = 24;
+pub(crate) const MODAL_PAD: i8 = 24;
 /// A sheet's top edge: this share of the window's height down, at least [`SHEET_TOP_MIN`] and at
 /// most [`SHEET_TOP_MAX`]. Sheets hang from it instead of centring, so a sheet whose contents
 /// grow or shrink (a filter, a tab, an error line) only moves its bottom edge.

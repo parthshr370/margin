@@ -182,7 +182,7 @@ fn band_request(info: &DocInfo, (page_index, dest): Destination, available_width
     let top = if y.is_finite() { y.clamp(0.0, (page.height - 1.0).max(0.0)) } else { 0.0 };
     let height = BAND_HEIGHT_PT.min(page.height - top);
     let tile = Tile { x: 0, y: (top * scale).floor() as u32, w: device_pixels(page.width, scale), h: device_pixels(height, scale) };
-    Some(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: PREVIEW_TAG })
+    Some(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: PREVIEW_TAG, preview: false })
 }
 
 #[cfg(test)]

@@ -53,6 +53,23 @@ or fill colour. Names, rectangles and rotations require the single-field form. R
 
 Implemented: `initialize` (protocol 2025-06-18, 2025-03-26, 2024-11-05), `ping`, `tools/list` (with `readOnlyHint`/`destructiveHint` annotations), `tools/call` (JSON results also returned as `structuredContent`; images as `image/png`), and `resources/list`, `resources/templates/list` and `resources/read`. The resources expose the open documents read-only: `pdfcraft://doc/{doc}/info` (JSON), `…/text`, `…/page/{page}/text` and `…/page/{page}/image{?dpi}` (PNG, 1–600 dpi). Tool failures come back as `isError: true` results, so the agent can read and recover from them.
 
+### From an installed release
+
+The release packages ship `pdfcraft-cli` alongside the desktop app, so no build is needed:
+
+| Install | CLI |
+|---|---|
+| Windows (MSI) | `C:\Program Files\PdfCraft\pdfcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Linux (deb, rpm) | `/usr/bin/pdfcraft-cli` |
+| macOS | the separate `pdfcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+
+```sh
+# Windows, default install folder
+claude mcp add pdfcraft -- "C:\Program Files\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
+# Linux, or macOS with the CLI unzipped onto PATH
+claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
+```
+
 ## Adding a tool
 
 1. Add the engine capability first, with its tests (the tool is a thin adapter).
@@ -68,6 +85,15 @@ with generation-scoped kind/index references. `object_move {doc, page, objects, 
 moves 1–1000 references atomically in displayed points (right/down), preserving source glyph bytes
 and fonts. A refusal changes nothing; success is one undo step. See
 [the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
+
+## Accessibility review record
+
+Open the original and edited PDFs as separate documents, then call
+`accessibility_review_record {before, after, path}`. The tool writes a JSON record atomically within
+`--root`: SHA-256 hashes of both working PDFs, rule statuses and finding counts before and after,
+changed rules, and rules still failed or requiring manual review. `all: true` also includes the
+colour-contrast rule. It does not change either PDF or certify accessibility. Keep the original open
+while making edits to the second document so the comparison has a stable baseline.
 
 ## Common command tools
 
@@ -95,3 +121,19 @@ ignored; no background-job or cancellation behavior is added.
 Session resources `pdfcraft://document` and `pdfcraft://commands`, and the refusal of unknown argument keys, are described in [docs/mcp.md](../../docs/mcp.md).
 
 Markdown export is exposed as `doc_export_markdown`: it exports selected 1-based pages from the current document state and writes the image files, then the note, atomically under the same root rules. Images are named after the note (`note-image-0001.png` for `note.md`); standard Markdown links them as `![image](<note-image-0001.png>)`, and `obsidian: true` embeds them as `![[note-image-0001.png]]`. An export whose text passes 64 MiB, or whose images pass 256 MiB or 10,000 files, fails with an error naming the page; export fewer pages. The engine API is `export::markdown(&ExportSource, &[usize], &MarkdownOptions) -> Result<Markdown, String>`, and the structured writer is `pdfcraft_export::markdown(Vec<Page>, &MarkdownOptions)`.
+
+For inline editor previews, `page_render` accepts `hide_text_block` (a 1-based index from
+`text_paragraphs`). It renders the page without that paragraph’s source glyphs and leaves the
+working document unchanged.
+
+
+## Existing text and document fonts
+
+`text_font_files` discovers eligible installed files on request (or specified confined folders),
+`text_font_import` registers a full document face, and `text_fonts` lists source/full resources.
+Use `text_edit.font_resource` to choose a resource, or keep source faces and let matching full
+faces complete absent subset glyphs. `text_edit.ranges` accepts disjoint UTF-8 byte ranges;
+`text_edit_layout` measures the same resource/range draft without committing. All changes are
+undoable and survive saving/reopening. `image_hit` shares the UI's curve and hole hit testing.
+The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
+and [image editing](../../docs/editing-images.md).

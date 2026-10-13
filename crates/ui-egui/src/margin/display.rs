@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, TextureOptions, pos2, vec2};
+use margin_config::Layout;
 use pdfcraft_render::Pixels;
 use serde_json::{Map, Value};
 
@@ -18,7 +19,7 @@ use super::motion;
 use super::pagecolor::{BRIGHTNESS_RANGE, CONTRAST_RANGE, NEUTRAL_PERCENT, PageColor, PageMode};
 use super::reading::{self, DefaultRow};
 use super::trim::{self, Margins};
-use crate::canvas::{Fit, PageLayout};
+use crate::canvas::Fit;
 use crate::theme::{self, Tokens};
 use crate::{DocView, Flavor, PdfCraftApp, i18n};
 
@@ -311,9 +312,7 @@ fn body(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, t: &Tokens) {
         default_row = Some(DefaultRow::Layout);
     }
     let reading_width = app.margin_keys.settings().view.reading_width_px;
-    if let Some(id) = layout_rows(&mut app.views[index], reading_width, ui, t) {
-        app.execute(id);
-    }
+    layout_rows(&mut app.views[index], reading_width, ui, t);
     let pages = app.session.get(app.views[index].id).map(|doc| doc.info.pages.iter().map(|p| (p.width, p.height)).collect::<Vec<_>>());
     trim_rows(&mut app.views[index], &pages.unwrap_or_default(), ui, t);
     section_divider(ui, t);
@@ -400,12 +399,15 @@ fn page_color_rows(state: &mut DisplayState, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
-/// Page display (Scroll, Single, Two-up, through PdfCraft's commands, which it returns), the
-/// cover page in Two-up, and fit (Width, Page, Reading).
-fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &Tokens) -> Option<&'static str> {
-    let layouts = [(PageLayout::Continuous, "Scroll"), (PageLayout::Single, "Single"), (PageLayout::TwoUp, "Two-up")];
-    let segments = layouts.map(|(choice, name)| Segment { label: i18n::t(name), selected: view.layout == choice, tip: None });
-    let command = choice_row(ui, t, i18n::t("Pages"), &segments).and_then(|i| layouts.get(i)).map(|(choice, _)| choice.command());
+/// Page display (Scroll, Single, Two-up), the cover page in Two-up, and fit (Width, Page,
+/// Reading).
+fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &Tokens) {
+    let layouts = [(Layout::Scroll, "Scroll"), (Layout::Single, "Single"), (Layout::TwoUp, "Two-up")];
+    let shown = reading::layout_of(view);
+    let segments = layouts.map(|(choice, name)| Segment { label: i18n::t(name), selected: shown == choice, tip: None });
+    if let Some((choice, _)) = choice_row(ui, t, i18n::t("Pages"), &segments).and_then(|i| layouts.get(i)) {
+        reading::show_layout(view, *choice);
+    }
     // Always shown, so picking Two-up never moves the rows below; only Two-up enables it.
     let sub = i18n::t("Two-up only: the first page sits alone on the right, like a book's cover");
     if switch_row(ui, t, i18n::t("Cover page alone"), Some(sub), view.cover, view.cover_applies()) {
@@ -423,7 +425,6 @@ fn layout_rows(view: &mut DocView, reading_width: u32, ui: &mut egui::Ui, t: &To
         Some(_) => reading::fit_read(view, reading_width),
         None => {}
     }
-    command
 }
 
 /// Trim (Off, Auto, Manual) and, for Manual, the page previews to drag the kept part on.

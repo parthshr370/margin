@@ -448,7 +448,7 @@ fn snapshot(input: &Input, page: usize, rect: [f32; 4]) -> Result<Completed, Str
     let vault = input.notes.vault.as_deref().ok_or("Set notes.vault before saving a snapshot.")?;
     let note_relative = input.context.note.clone()?;
     let mut renderer = PageRenderer::new(input.source.bytes.clone(), input.source.config.clone());
-    let image = renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0 });
+    let image = renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false });
     if let Some(error) = image.error {
         return Err(format!("Couldn't render the snapshot: {error}"));
     }
