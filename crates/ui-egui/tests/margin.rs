@@ -1,6 +1,8 @@
 //! Margin's reader layout (`Flavor::Margin`) in the real shell: no mode bar or tab strip, the
 //! header, sidebar tabs, footer and annotate rail, each running PdfCraft's own commands.
 
+mod support;
+
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::comments::CommentTool;
@@ -873,6 +875,8 @@ fn recent_in_the_document_menu_opens_and_focuses() {
         h.run_steps(4);
     };
     pick(&mut h, "other.pdf");
+    // The file is read and prepared in the background; its tab opens on a later frame.
+    support::wait_until(&mut h, "other.pdf to open", |app| app.views.len() == 2);
     assert_eq!((h.state().views.len(), h.state().active), (2, Some(1)), "Recent opens the file");
     h.state_mut().active = Some(0);
     h.run_steps(2);

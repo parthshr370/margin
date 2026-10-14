@@ -173,9 +173,10 @@ fn continue_opens_the_book_at_its_saved_page() {
     let hero = h.state().margin_library.books().iter().find(|book| book.title == "A Novel").cloned().expect("listed");
     assert_eq!(hero.page, 6);
     h.get_by_label("Continue").click();
-    h.run_steps(6);
+    // The file is read and prepared in the background; its tab opens on a later frame.
+    assert!(step_until(&mut h, SCAN_BUDGET, |h| h.state().active.is_some()), "a book opened");
     let app = h.state();
-    let index = app.active.expect("a book opened");
+    let index = app.active.expect("a book is shown");
     assert_eq!(app.views[index].current, 6, "opened where it was left");
 }
 
@@ -476,9 +477,9 @@ fn the_details_sheet_tags_and_edits_a_book_and_in_text_search_opens_a_page() {
     let found = step_until(&mut h, SCAN_BUDGET, |h| h.query_all_by_label("Tagged Book, page 2").next().is_some());
     assert!(found, "the text of every page is searchable");
     h.get_by_label("Tagged Book, page 2").click();
-    h.run_steps(4);
+    assert!(step_until(&mut h, SCAN_BUDGET, |h| h.state().active.is_some()), "the book opened");
     let app = h.state();
-    let index = app.active.expect("the book opened");
+    let index = app.active.expect("the book is shown");
     assert_eq!(app.session.get(app.views[index].id).and_then(|doc| doc.path.as_deref()), Some(path.as_str()));
     assert_eq!(app.views[index].current, 1, "at the page of the hit");
 }
