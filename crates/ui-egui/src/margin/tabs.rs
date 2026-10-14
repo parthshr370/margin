@@ -48,7 +48,7 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str, args: &Value) -> bool {
     true
 }
 
-fn step(app: &mut PdfCraftApp, forward: bool) {
+pub(crate) fn step(app: &mut PdfCraftApp, forward: bool) {
     if let Some(index) = neighbour(app.active, app.views.len(), forward) {
         show(app, index);
     }
@@ -102,20 +102,6 @@ pub(crate) fn switch_sidebar_tab(chrome: &mut ReaderChrome, views: &[crate::DocV
         chrome.tab = *tab;
         // The search in the document left behind doesn't decide this one's tab.
         chrome.before_find = None;
-    }
-}
-
-/// Move the document at `from` to position `to`, keeping the active one active.
-fn move_tab(app: &mut PdfCraftApp, from: usize, to: usize) {
-    if from >= app.views.len() || from == to {
-        return;
-    }
-    let active = app.active_ids().map(|(_, id)| id);
-    let view = app.views.remove(from);
-    let to = to.min(app.views.len());
-    app.views.insert(to, view);
-    if let Some(id) = active {
-        app.active = app.views.iter().position(|view| view.id == id);
     }
 }
 
@@ -193,7 +179,7 @@ fn tabs(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, width: f32) -> boo
     }
     if let Some((from, true, slot)) = target {
         // `slot` counts the gaps with the dragged tab still in place; it leaves its place first.
-        move_tab(app, from, if slot > from { slot - 1 } else { slot });
+        app.move_tab(from, if slot > from { slot - 1 } else { slot });
     } else if let Some(index) = picked.show {
         show(app, index);
     }
@@ -379,7 +365,7 @@ mod tests {
         assert!(run(&mut app, "view.tab.go", &serde_json::json!({ "index": 9 })));
         assert_eq!(app.active, Some(2));
         assert!(!run(&mut app, "view.tab.go", &serde_json::json!({ "index": 0 })));
-        move_tab(&mut app, 2, 0);
+        app.move_tab(2, 0);
         assert_eq!(app.views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[2], ids[0], ids[1]]);
         assert_eq!(app.active, Some(0), "the active document moved with its tab");
         assert_eq!(app.views[1].current, 1, "each document keeps its own place");

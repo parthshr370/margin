@@ -70,6 +70,8 @@ impl SaveQueue {
                 for job in jobs {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let bytes = job.snapshot.bytes().map_err(|error| error.to_string())?;
+                        // Bytes that don't reopen as the document never replace its file (#1698).
+                        job.snapshot.check(&bytes).map_err(|error| error.to_string())?;
                         writer(&job.destination, &bytes)?;
                         Ok(job.snapshot.written(bytes))
                     }))

@@ -172,8 +172,20 @@ enum MapState {
 
 #[derive(Clone, Debug)]
 enum Query {
-    Inverse { doc: DocId, page: usize, x: f32, y: f32 },
-    Forward { pdf: PathBuf, source: PathBuf, line: u32, column: Option<u32> },
+    Inverse {
+        doc: DocId,
+        page: usize,
+        x: f32,
+        y: f32,
+    },
+    /// `opened`: the PDF was asked to open for this search (once; a failed open ends it).
+    Forward {
+        pdf: PathBuf,
+        source: PathBuf,
+        line: u32,
+        column: Option<u32>,
+        opened: bool,
+    },
 }
 
 impl Query {
@@ -231,7 +243,7 @@ impl SynctexState {
 
     /// Search forward from the command line of this launch.
     pub fn forward(&mut self, request: ForwardRequest) {
-        self.queued.push(Query::Forward { pdf: request.pdf, source: request.source, line: request.line, column: request.column });
+        self.queued.push(Query::Forward { pdf: request.pdf, source: request.source, line: request.line, column: request.column, opened: false });
     }
 }
 
@@ -319,12 +331,25 @@ fn read_request(path: &Path) -> Result<ForwardRequest, String> {
 }
 
 /// Run `query` once its PDF's SyncTeX file is read; until then it waits in the queue.
-fn run_query(app: &mut PdfCraftApp, ctx: &egui::Context, query: Query) {
-    if let Query::Forward { pdf, .. } = &query
+fn run_query(app: &mut PdfCraftApp, ctx: &egui::Context, mut query: Query) {
+    if let Query::Forward { pdf, opened, .. } = &mut query
         && find_view(app, pdf).is_none()
     {
-        open_for_forward(app, pdf);
+        // Asked once: an open that failed or waits for a password ends the search.
+        if *opened && !opening(app, pdf) {
+            return;
+        }
+        if !*opened {
+            if !opening(app, pdf) {
+                open_for_forward(app, pdf);
+            }
+            *opened = true;
+        }
         if find_view(app, pdf).is_none() {
+            // Read and prepared in the background: search once its tab has opened.
+            if opening(app, pdf) {
+                app.margin_synctex.queued.push(query);
+            }
             return;
         }
     }
@@ -348,6 +373,17 @@ fn open_for_forward(app: &mut PdfCraftApp, pdf: &Path) {
 #[cfg(target_arch = "wasm32")]
 fn open_for_forward(app: &mut PdfCraftApp, pdf: &Path) {
     app.notify(format!("Can't open {} here", pdf.display()));
+}
+
+/// Whether `pdf` is being read and prepared to open (`PdfCraftApp::open_path` once the app runs).
+#[cfg(not(target_arch = "wasm32"))]
+fn opening(app: &PdfCraftApp, pdf: &Path) -> bool {
+    app.pending_opens.iter().any(|open| open.path.as_deref().is_some_and(|path| Path::new(path) == pdf))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn opening(_: &PdfCraftApp, _: &Path) -> bool {
+    false
 }
 
 /// The open view showing the file `pdf` (the same file under any spelling of its path).
@@ -418,7 +454,7 @@ fn answer(app: &mut PdfCraftApp, map: &Synctex, query: Query) {
             Some(place) => open_in_editor(app, &place),
             None => app.notify("SyncTeX has no source line for that spot"),
         },
-        Query::Forward { pdf, source, line, column } => {
+        Query::Forward { pdf, source, line, column, .. } => {
             let Some(index) = find_view(app, &pdf) else { return };
             match map.forward(&source, line, column) {
                 Some(hit) => show_hit(app, index, &hit),

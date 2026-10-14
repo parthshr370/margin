@@ -58,5 +58,7 @@
       "3": ["annotation.color", { "color": "note" }], "4": ["annotation.color", { "color": "important" }] } },
   { "$pdfcraft_ignored": {
       "view.fit_visible": "Ctrl+3 shows the Pages sidebar tab in Margin (mockup keys); Fit visible stays in the palette",
-      "view.read_mode": "Ctrl+Cmd+H (Ctrl+H elsewhere) runs view.focus_mode.toggle, Margin's read mode, so the keysheet names it Focus mode" } }
+      "view.read_mode": "Ctrl+Cmd+H (Ctrl+H elsewhere) runs view.focus_mode.toggle, Margin's read mode, so the keysheet names it Focus mode",
+      "view.next_tab": "Ctrl+Tab runs view.tab.next, Margin's document step, which view.next_tab also runs in Margin",
+      "view.previous_tab": "Ctrl+Shift+Tab runs view.tab.prev, Margin's document step, which view.previous_tab also runs in Margin" } }
 ]

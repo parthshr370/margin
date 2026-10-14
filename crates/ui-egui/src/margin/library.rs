@@ -183,6 +183,9 @@ pub struct LibraryState {
     back_to: Option<usize>,
     /// The library showed last frame.
     shown: bool,
+    /// The page a book opening from the library asked for, shown once its tab opens (a file is
+    /// read and prepared in the background, so the tab may open on a later frame).
+    asked_page: Option<AskedPage>,
     /// Run scans on this thread (tests).
     pub run_inline: bool,
 }
@@ -313,7 +316,7 @@ pub(crate) fn book_key(app: &mut PdfCraftApp, index: usize) -> Option<String> {
 }
 
 /// A document opened into view `index` (from `reading::opened`): it joins the library, its
-/// cover is scanned if missing, and its stats key is set.
+/// cover is scanned if missing, its stats key is set, and it shows the page the library asked for.
 pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
     if app.flavor != Flavor::Margin {
         return;
@@ -354,6 +357,7 @@ pub(crate) fn opened(app: &mut PdfCraftApp, index: usize) {
         }
     }
     super::stats::opened(app, doc_id, book, &title, pages);
+    show_asked_page(app, index);
 }
 
 /// View `index` is closing (from `reading::closing`): keep where the reader stopped.
@@ -386,6 +390,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.flavor != Flavor::Margin || !ensure_db(app) {
         return;
     }
+    forget_failed_asked_page(app);
     if !app.margin_library.seeded {
         let settings = &app.margin_keys.settings().library;
         let (view, sort) = (settings.view, settings.sort);
@@ -1462,28 +1467,59 @@ fn cover_texture(app: &mut PdfCraftApp, ctx: &egui::Context, book: &Book) -> Opt
     state.covers.texture(ctx, &data, book, inline)
 }
 
+/// A page to show once the book at `path` opens.
+struct AskedPage {
+    path: String,
+    /// 0-based.
+    page: usize,
+    /// The page wins over the place the sidecar restores (a text search hit).
+    over_saved_place: bool,
+}
+
 /// Opens the book at `path` (or shows its tab). The sidecar restores the page as any open does;
 /// a book without a sidecar position opens at the page the library kept.
 pub(crate) fn open_book(app: &mut PdfCraftApp, path: &str) {
     let page = app.margin_library.books.iter().find(|book| book.path == path).map_or(0, |book| book.page);
     let was_open = app.views.iter().any(|view| app.session.get(view.id).and_then(|doc| doc.path.as_deref()) == Some(path));
+    if !was_open && page > 0 {
+        let page = usize::try_from(page).unwrap_or(usize::MAX);
+        app.margin_library.asked_page = Some(AskedPage { path: path.to_owned(), page, over_saved_place: false });
+    }
     app.open_recent(path);
-    if was_open || page == 0 {
-        return;
-    }
-    let Some(view) = app.active.and_then(|index| app.views.get_mut(index)) else { return };
-    if !super::reading::has_saved_place(view) {
-        view.go_to_page(usize::try_from(page).unwrap_or(usize::MAX));
-    }
 }
 
 /// Opens the book at `path` at `page` (0-based), from a text search hit: the page asked for wins
 /// over the place the reader left.
 fn open_book_at(app: &mut PdfCraftApp, path: &str, page: u32) {
+    let page = usize::try_from(page).unwrap_or(usize::MAX);
+    app.margin_library.asked_page = Some(AskedPage { path: path.to_owned(), page, over_saved_place: true });
     app.open_recent(path);
-    let Some(view) = app.active.and_then(|index| app.views.get_mut(index)) else { return };
-    if app.session.get(view.id).and_then(|doc| doc.path.as_deref()) == Some(path) {
-        view.go_to_page(usize::try_from(page).unwrap_or(usize::MAX));
+    // Open already: `open_recent` only brought its tab forward.
+    if let Some(index) = app.active {
+        show_asked_page(app, index);
+    }
+}
+
+/// Shows the page the library asked for when view `index` is the book it was asked for.
+fn show_asked_page(app: &mut PdfCraftApp, index: usize) {
+    let Some(view) = app.views.get_mut(index) else { return };
+    let path = app.session.get(view.id).and_then(|doc| doc.path.as_deref());
+    let Some(asked) = app.margin_library.asked_page.take_if(|asked| path == Some(asked.path.as_str())) else { return };
+    if asked.over_saved_place || !super::reading::has_saved_place(view) {
+        view.go_to_page(asked.page);
+    }
+}
+
+/// Forgets the asked page once its book is neither open nor being opened: the open failed or
+/// stopped at a password, so a later open of that file by another route keeps its own place.
+/// Runs after `PdfCraftApp::poll_pending_opens` has opened this frame's books.
+fn forget_failed_asked_page(app: &mut PdfCraftApp) {
+    let Some(asked) = &app.margin_library.asked_page else { return };
+    let path = Some(asked.path.as_str());
+    let open = app.views.iter().any(|view| app.session.get(view.id).and_then(|doc| doc.path.as_deref()) == path);
+    let opening = app.pending_opens.iter().any(|pending| pending.path.as_deref() == path);
+    if !open && !opening {
+        app.margin_library.asked_page = None;
     }
 }
 

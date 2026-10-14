@@ -58,6 +58,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # Margin's native menu bar (`margin::menu_bar`): the maintained safe wrapper over NSMenu
 # (MIT OR Apache-2.0), on the same objc2 crates.
 muda = { version = "0.21", default-features = false }
+# A plain fsync where a volume refuses the full flush `sync_all` asks for (SMB, FUSE); already in
+# the tree through pdfcraft-cli.
+rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 # Auto interface language: the Windows display language, without starting a process.
