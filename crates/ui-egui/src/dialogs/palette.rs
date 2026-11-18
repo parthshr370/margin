@@ -217,8 +217,8 @@ fn move_selection(ctx: &egui::Context, q: &str, count: usize, margin: bool) -> u
 fn hits(app: &PdfCraftApp, ctx: &egui::Context, q: &str, margin: bool) -> Vec<(usize, Hit)> {
     let mut hits: Vec<(usize, Hit)> = Vec::new();
     let active = app.active_ids().map(|(_, id)| id);
-    // Margin hides PdfCraft's updater (`help.check_updates` does nothing there).
-    for spec in pdfcraft_engine::commands::COMMANDS.iter().filter(|spec| !(margin && spec.id == "help.check_updates")) {
+    // Margin leaves out PdfCraft commands for chrome it doesn't draw (`margin::tools::offers`).
+    for spec in pdfcraft_engine::commands::COMMANDS.iter().filter(|spec| !margin || crate::margin::tools::offers(spec.id)) {
         let label = pdfcraft_engine::commands::current_label(spec, &app.session, active);
         let translated = crate::i18n::command_label(&label);
         if let Some(s) = score(&translated, q).or_else(|| score(&label, q)).or_else(|| score(spec.id, q).map(|s| s + 50)) {
@@ -326,5 +326,45 @@ mod search {
         assert_eq!(score("Insert Pages", &fold_case("ınsert")), Some(0));
         assert_eq!(score("Print", &fold_case("print")), Some(0));
         assert_eq!(score("Print", &fold_case("zz")), None);
+    }
+}
+
+#[cfg(test)]
+mod margin_hits {
+    use super::hits;
+    use crate::{Flavor, PdfCraftApp};
+    use pdfcraft_render::text::fold_case;
+
+    /// The commands found for `query` in `app`'s palette.
+    fn commands_for(app: &PdfCraftApp, query: &str, margin: bool) -> Vec<String> {
+        let ctx = egui::Context::default();
+        hits(app, &ctx, &fold_case(query), margin).into_iter().filter_map(|(_, hit)| hit.command).collect()
+    }
+
+    /// L2: Margin's palette leaves out PdfCraft's commands for chrome Margin doesn't draw:
+    /// split view, PdfCraft's interface, side panel and Tools pane, and the OCR Verify screen.
+    #[test]
+    fn margin_hides_commands_for_chrome_it_does_not_draw() {
+        let root = std::env::temp_dir().join(format!("margin-palette-{}", std::process::id()));
+        let mut margin = PdfCraftApp::with_flavor(Flavor::Margin);
+        margin.margin_keys.set_config_dir(root.join("config"));
+        margin.margin_keys.set_data_dir(root.join("data"));
+        let pdfcraft = PdfCraftApp::new();
+        let hidden = [
+            ("Split", "view.split"),
+            ("view.toggle_interface", "view.toggle_interface"),
+            ("view.side_panel", "view.side_panel"),
+            ("view.tools_pane", "view.tools_pane"),
+            ("Correct recognized text", "ocr.correct"),
+            ("Check for updates", "help.check_updates"),
+        ];
+        for (query, command) in hidden {
+            assert!(commands_for(&pdfcraft, query, false).iter().any(|found| found == command), "PdfCraft lists {command}");
+            assert!(!commands_for(&margin, query, true).iter().any(|found| found == command), "Margin hides {command}");
+        }
+        assert!(commands_for(&margin, "Recognize text", true).iter().any(|found| found == "ocr.recognize"), "Recognize text stays");
+        if root.exists() {
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }

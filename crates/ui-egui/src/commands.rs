@@ -601,6 +601,8 @@ impl PdfCraftApp {
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
             "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
+            // Margin draws no OCR Verify screen (`margin::tools::offers`): nothing to bring back.
+            "ocr.correct" if self.flavor == crate::Flavor::Margin => {}
             "ocr.correct" => self.ocr_verify.open = true,
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;

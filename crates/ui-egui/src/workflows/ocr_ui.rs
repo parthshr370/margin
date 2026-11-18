@@ -322,26 +322,30 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         }
                     });
                     ui.end_row();
-                    ui.label(tl!("Output"));
-                    let mode_name = match d.output_mode {
-                        OutputMode::Searchable => tl!("Searchable Image (Exact)"),
-                        OutputMode::EditableText => tl!("Editable text"),
-                    };
-                    craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
-                        let s = ui
-                            .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
-                            .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
-                        if s.clicked() {
-                            d.output_mode = OutputMode::Searchable;
-                        }
-                        let e = ui
-                            .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
-                            .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
-                        if e.clicked() {
-                            d.output_mode = OutputMode::EditableText;
-                        }
-                    });
-                    ui.end_row();
+                    // Margin draws no OCR Verify screen, where Editable text's result is accepted:
+                    // it recognizes into the searchable layer only (`start_ocr`).
+                    if !margin {
+                        ui.label(tl!("Output"));
+                        let mode_name = match d.output_mode {
+                            OutputMode::Searchable => tl!("Searchable Image (Exact)"),
+                            OutputMode::EditableText => tl!("Editable text"),
+                        };
+                        craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
+                            let s = ui
+                                .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
+                                .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
+                            if s.clicked() {
+                                d.output_mode = OutputMode::Searchable;
+                            }
+                            let e = ui
+                                .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
+                                .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
+                            if e.clicked() {
+                                d.output_mode = OutputMode::EditableText;
+                            }
+                        });
+                        ui.end_row();
+                    }
                     ui.label(tl!("Downsample to"));
                     craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
                         for v in [600, 300, 150, 72] {
@@ -458,14 +462,24 @@ impl PdfCraftApp {
         if self.web_models_missing(self.ocr_draft.engine) {
             return;
         }
+        let settings = self.chosen_ocr_settings();
         let d = &self.ocr_draft;
         let pages: Vec<usize> = match d.pages {
             OcrPages::All => Vec::new(),
             OcrPages::Current => vec![self.views[vi].current],
             OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
         };
-        let settings = d.settings();
         self.start_ocr_pages(id, &pages, settings, false);
+    }
+
+    /// The Recognize Text dialog's settings for a run. Margin draws no OCR Verify screen, where
+    /// Editable text's result is accepted (#6485): its runs always write the searchable layer,
+    /// so a remembered Editable text choice, which its dialog doesn't offer, is reset here.
+    fn chosen_ocr_settings(&mut self) -> OcrSettings {
+        if self.flavor == crate::Flavor::Margin {
+            self.ocr_draft.output_mode = OutputMode::Searchable;
+        }
+        self.ocr_draft.settings()
     }
 
     /// Edit on a scanned page: like Acrobat's "Converting scanned page to Editable Text and
@@ -636,7 +650,7 @@ impl PdfCraftApp {
         }
         // The settings showing now, not when the folder arrives. A remembered folder (the last
         // batch's pick, persisted with the preferences) is reused; otherwise the user is asked.
-        let settings = self.ocr_draft.settings();
+        let settings = self.chosen_ocr_settings();
         #[cfg(not(target_arch = "wasm32"))]
         match self.export_dir_override.clone().or_else(|| self.ocr_draft.output_folder.clone()) {
             Some(d) => self.ocr_files_into(files, settings, d.into()),
@@ -961,8 +975,9 @@ impl PdfCraftApp {
         };
         // The dialog's "Editable text" choice is honored: the recognition is not written as an
         // invisible layer here. It opens in the OCR Verify screen, whose Accept produces the
-        // editable document (a NEW file) the choice promises.
-        if editable && !automatic {
+        // editable document (a NEW file) the choice promises. Margin has no such screen: a
+        // review it can't show would hold the document's close and quit with no way out.
+        if editable && !automatic && self.flavor != crate::Flavor::Margin {
             self.ocr_verify.load(doc, guard, found);
             self.ocr_verify.open = true;
             self.notify_tr("Review the recognition, then Accept to write the editable document");
@@ -1577,5 +1592,69 @@ mod tests {
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
         assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
         assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);
+    }
+
+    /// A Margin app reading `pdf`, with its settings and data in a temporary folder.
+    fn margin_with(name: &str, pdf: Vec<u8>) -> (PdfCraftApp, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("margin-ocr-{name}-{}", std::process::id()));
+        let mut app = PdfCraftApp::with_flavor(crate::Flavor::Margin);
+        app.margin_keys.set_config_dir(root.join("config"));
+        app.margin_keys.set_data_dir(root.join("data"));
+        app.open_bytes("scan.pdf", None, pdf).unwrap();
+        (app, root)
+    }
+
+    /// A reading of page 0 with one word, as a run would bring back.
+    fn one_word() -> Vec<OcrPage> {
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "scanned".into(),
+            origin: [72.0, 700.0],
+            across: [60.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: Some(95.0),
+            source: "ocrs".into(),
+        };
+        vec![OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]
+    }
+
+    /// H1 (#6485): Margin draws no OCR Verify screen. Recognize text writes the searchable
+    /// layer there, whatever output was remembered, and an Editable text run never leaves a
+    /// review behind that would hold the tab's close and quit.
+    #[test]
+    fn margin_recognizes_into_the_searchable_layer_without_a_review() {
+        let (mut app, root) = margin_with("searchable", scan());
+        app.run_inline = true;
+        let id = app.active_ids().unwrap().1;
+        app.ocr_draft.output_mode = OutputMode::EditableText;
+        app.start_ocr();
+        assert_eq!(app.ocr_draft.output_mode, OutputMode::Searchable, "Margin's runs are searchable");
+        app.ocr_run = None;
+        let guard = app.session.ocr_guard(id).unwrap();
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(one_word())), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
+        app.poll_ocr();
+        assert!(!app.ocr_verify.open && !app.ocr_verify.holds_reading_of(id), "no review Margin can't show");
+        assert!(app.session.get(id).unwrap().can_undo().is_some(), "the words are in the searchable layer");
+        remove_margin_folder(root);
+    }
+
+    /// H1: a review left over in Margin never holds the tab's close (nor Close all and quit).
+    #[test]
+    fn margin_never_holds_a_close_for_an_ocr_review() {
+        let (mut app, root) = margin_with("close", scan());
+        let id = app.active_ids().unwrap().1;
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_verify.load(id, guard, one_word());
+        assert!(app.ocr_verify.holds_reading_of(id));
+        app.request_close_tab(0);
+        assert!(app.views.is_empty(), "the tab closes");
+        remove_margin_folder(root);
+    }
+
+    /// Remove the temporary folder `margin_with` gave Margin, if Margin wrote anything there.
+    fn remove_margin_folder(root: std::path::PathBuf) {
+        if root.exists() {
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }

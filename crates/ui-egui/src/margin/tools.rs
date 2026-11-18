@@ -43,10 +43,21 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// Whether Margin offers `item`: ready in this build and a registered command (anything else
-/// only says it isn't available yet).
+/// PdfCraft commands for chrome Margin doesn't draw: split view, PdfCraft's interface, side
+/// panel and Tools pane, the OCR Verify screen, and the updater. Running one would change state
+/// nothing on screen shows, so Margin's palette and Tools tab leave them out; the keymap
+/// unbinds their keys (`$pdfcraft_ignored` in `keymap.jsonc`).
+const NOT_IN_MARGIN: &[&str] = &["view.split", "view.toggle_interface", "view.side_panel", "view.tools_pane", "ocr.correct", "help.check_updates"];
+
+/// Whether Margin offers PdfCraft command `command` ([`NOT_IN_MARGIN`]).
+pub(crate) fn offers(command: &str) -> bool {
+    !NOT_IN_MARGIN.contains(&command)
+}
+
+/// Whether Margin offers `item`: ready in this build, a registered command (anything else only
+/// says it isn't available yet), and one whose result Margin shows.
 fn working(item: &ToolItem) -> bool {
-    item.availability == Availability::Ready && commands::command(item.command).is_some()
+    item.availability == Availability::Ready && commands::command(item.command).is_some() && offers(item.command)
 }
 
 /// Whether `group` has at least one working item it lists.
@@ -147,5 +158,22 @@ fn row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, trailing: Option<
     match why_not {
         Some(reason) => look::tooltip(resp, &format!("{label}: {reason}"), None),
         None => resp,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(command: &str) -> &'static ToolItem {
+        TOOL_GROUPS.iter().flat_map(|group| group.sections).flat_map(|section| section.items).find(|item| item.command == command).unwrap()
+    }
+
+    /// H1: the Tools tab offers Recognize text but not Correct recognized text, whose OCR Verify
+    /// screen Margin doesn't draw.
+    #[test]
+    fn the_tools_tab_leaves_out_the_ocr_review() {
+        assert!(working(item("ocr.recognize")));
+        assert!(!working(item("ocr.correct")));
     }
 }

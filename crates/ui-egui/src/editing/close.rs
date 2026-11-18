@@ -54,10 +54,11 @@ impl PdfCraftApp {
     /// A document whose OCR review is still open (a run, or a reading not yet accepted or
     /// rejected) does not close under it: closing would leave the review with nothing to apply
     /// to (#6485). The document comes to the front with its review, and a notice says what to
-    /// do. Whether the close was held.
+    /// do. Whether the close was held. Never in Margin, which draws no review screen to accept
+    /// or reject it in: holding would keep the tab and the app open with no way out.
     pub(crate) fn hold_close_for_ocr_review(&mut self, index: usize) -> bool {
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
-        if !self.ocr_verify.holds_reading_of(id) {
+        if self.flavor == crate::Flavor::Margin || !self.ocr_verify.holds_reading_of(id) {
             return false;
         }
         self.active = Some(index);
