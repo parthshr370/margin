@@ -51,4 +51,6 @@ fn compare_with_from_the_document_menu_shows_both_files_side_by_side() {
     let (old, new) = (half("v1.pdf"), half("v2.pdf"));
     assert!(old.right() <= new.left() + 1.0, "old {old:?} left of new {new:?}");
     assert!(new.width() < WINDOW.x / 2.0 && old.width() < WINDOW.x / 2.0, "each takes half: old {old:?}, new {new:?}");
+    // One annotate rail, not one per half.
+    assert_eq!(h.query_all_by_label("Freehand-Highlight").count(), 1, "one rail");
 }

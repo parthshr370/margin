@@ -4083,10 +4083,12 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     // the quick tools come back with the window.
     // A document that hides the toolbars (`HideToolbar`) hides this one too.
     // Margin draws its scroll-step marker and annotate rail instead (`margin::rail` hides itself in
-    // focus mode).
+    // focus mode); one rail, beside the active document, when a comparison shows two side by side.
     if app.flavor == crate::Flavor::Margin {
         crate::margin::scroll_step::show_marker(app, index, ui);
-        crate::margin::rail::show(app, avail, ui);
+        if app.active == Some(index) {
+            crate::margin::rail::show(app, avail, ui);
+        }
     } else if !app.hotbar_hidden() && !app.views.get(index).is_some_and(|v| v.interface.hidden.toolbar) {
         // The page nearest the left edge, whose margin the bar sits in.
         let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
