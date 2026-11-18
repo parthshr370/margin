@@ -85,9 +85,10 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - **Layouts**: Scroll, Single and Two-up, fit to width, page or reading width.
 - **Trim margins** automatically or by hand, without changing the PDF.
 - **Back after a jump**, from links, the outline, search or the scrubber.
-- **Focus mode** (<kbd>F</kbd>) and **full screen** (<kbd>Ctrl</kbd>+<kbd>L</kbd>).
+- **Focus mode** (<kbd>F</kbd>) and **full screen** (<kbd>Ctrl</kbd>+<kbd>L</kbd>), which keeps your layout and zoom.
 - **Tabs** for several documents, each keeping its own place.
-- **Sidebar**: Contents, Highlights, Pages, Bookmarks, Find and Tools.
+- **Sidebar**: Contents, Highlights, Pages, Bookmarks, Find and Tools, plus Attachments and Layers for a PDF that has them.
+- **Compare with…** shows two versions side by side, and **Word Count…** counts a document's words (both in the document menu).
 - **Contents** keeps the PDF outline's bold and italic titles and adjusts their colours for the theme.
 - **OCR** for scanned pages, run locally.
 - **Live reload** when another program rewrites the file.
@@ -97,7 +98,7 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 
 ### Highlights and notes
 
-- **Selection bar**: copy, four colours, underline, comment and copy as callout.
+- **Selection bar**: copy, four colours, underline, comment and copy as callout, also for text selected across a page break (one mark per page, one undo).
 - **Real annotations**: highlights, underlines, notes, ink, text boxes and shapes.
 - **Read-only PDFs** keep highlights in a sidecar; **Save a copy with highlights** writes them in.
 - **Page notes** (<kbd>Shift</kbd>+<kbd>N</kbd>) and **bookmarks** (<kbd>B</kbd>).
