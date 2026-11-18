@@ -430,6 +430,12 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 ui.disable();
                 ui.set_opacity(opacity);
             }
+            // A side-by-side comparison (`doc.compare`) shows both files, as PdfCraft's page
+            // area does; Margin's page overlays are for reading one document.
+            if let Some((old, new)) = crate::compare_ui::side_by_side(app, i) {
+                crate::compare_ui::compare_area(app, old, new, ui);
+                return;
+            }
             crate::canvas::document_area(app, i, ui);
             marks::paint(app, ui, i);
             if !dismissing {
