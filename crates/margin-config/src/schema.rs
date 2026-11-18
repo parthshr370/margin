@@ -306,6 +306,14 @@ mod tests {
         assert!(text.contains("\"view\": { // [doc] how a document is shown"), "{text}");
     }
 
+    #[test]
+    fn default_rail_lists_freehand_highlight_next_to_text_highlight() {
+        let text = default_settings_jsonc();
+        let parsed = crate::jsonc::parse(&text).unwrap().value.unwrap();
+        let rail = parsed["ui"]["rail"]["items"].as_array().expect("default rail items");
+        assert!(rail.windows(2).any(|pair| pair == [json!("comment.highlight"), json!("comment.freehand_highlight")]));
+    }
+
     /// Keys come out in struct order, not sorted: `view` is documented before `reader`.
     #[test]
     fn default_settings_keep_struct_order() {

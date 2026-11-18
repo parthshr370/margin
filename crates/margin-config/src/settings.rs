@@ -448,10 +448,11 @@ pub struct Rail {
 }
 
 /// The mockup's default rail (`RAIL_DEF`).
-const DEFAULT_RAIL: [&str; 11] = [
+const DEFAULT_RAIL: [&str; 12] = [
     "reader.tool.select",
     "edit.snapshot",
     "comment.highlight",
+    "comment.freehand_highlight",
     "comment.underline",
     "comment.note",
     "comment.ink",

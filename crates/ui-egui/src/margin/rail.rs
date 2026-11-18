@@ -49,6 +49,8 @@ impl<'a> RailItem<'a> {
         match self {
             Self::Select => "mouse-pointer-2",
             Self::Command("edit.snapshot") => "square-dashed-mouse-pointer",
+            // The registry uses the same highlighter glyph for both tools; the rail puts them side by side.
+            Self::Command("comment.freehand_highlight") => "pen-line",
             Self::Command(id) => commands::command(id)
                 .map(|command| command.icon)
                 .or_else(|| app.margin_keys.registry()?.margin_entries().find(|entry| entry.id.as_str() == id)?.icon.as_deref())
