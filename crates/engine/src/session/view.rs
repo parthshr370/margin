@@ -39,7 +39,7 @@ impl Session {
 
     /// Seconds to add to UTC for the local time of this session: the injected zone, else 0 under
     /// the test clock (which is already local), else the system's.
-    pub(super) fn local_offset(&self) -> i64 {
+    pub fn local_offset(&self) -> i64 {
         match (self.utc_offset, self.clock) {
             (Some(zone), _) => zone(),
             (None, Some(_)) => 0,

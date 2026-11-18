@@ -1874,6 +1874,7 @@ mod tests {
             author: None,
             contents: None,
             modified: None,
+            modified_unix: None,
             name: None,
             in_reply_to: None,
             // User space, y up: view y 10–20 is user y 80–90; x 6–42 covers b, c and d.

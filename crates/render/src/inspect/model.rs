@@ -368,6 +368,9 @@ pub struct Annotation {
     pub author: Option<String>,
     pub contents: Option<String>,
     pub modified: Option<String>,
+    /// `/M` as seconds since the Unix epoch, when it says its time zone (`Z` or `±HH'mm'`);
+    /// `None` when it has none (local time of an unknown place) or isn't a PDF date.
+    pub modified_unix: Option<i64>,
     /// `/NM` of this annotation, and of the one it replies to (`/IRT`).
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
@@ -919,6 +922,7 @@ mod review_state_tests {
                 author: Some(author.into()),
                 contents: None,
                 modified: None,
+                modified_unix: None,
                 name: Some(nm.into()),
                 in_reply_to: irt.map(Into::into),
                 parent: irt.map(|k| (0, specs.iter().position(|s| s.0 == k).unwrap_or(usize::MAX))),

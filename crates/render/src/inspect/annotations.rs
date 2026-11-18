@@ -1,4 +1,4 @@
-use super::core::{limited_pdf_string, pretty_date, spend};
+use super::core::{limited_pdf_string, pdf_date_unix, pretty_date, spend};
 use super::model::{
     Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, Popup, RemoteDestination, fill_group_text, link_replies,
     state_or_default,
@@ -305,6 +305,7 @@ impl<'a> Inspector<'a> {
                     open: p.get(b"Open").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false),
                 })
             });
+            let written_date = self.text(d, b"M");
             let annotation = Annotation {
                 page,
                 subtype,
@@ -312,7 +313,8 @@ impl<'a> Inspector<'a> {
                 // Acrobat ends lines with CR, which the interface would draw as nothing (keep
                 // in step with `pdfcraft_annot::summaries`).
                 contents: self.text(d, b"Contents").map(|s| s.replace("\r\n", "\n").replace('\r', "\n")),
-                modified: self.text(d, b"M").map(|m| pretty_date(&m)),
+                modified_unix: written_date.as_deref().and_then(pdf_date_unix),
+                modified: written_date.map(|date| pretty_date(&date)),
                 name: self.text(d, b"NM"),
                 in_reply_to,
                 parent,

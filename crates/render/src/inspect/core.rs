@@ -467,6 +467,76 @@ pub fn pretty_date(s: &str) -> String {
     }
 }
 
+const SECS_PER_MINUTE: i64 = 60;
+const SECS_PER_HOUR: i64 = 60 * SECS_PER_MINUTE;
+const SECS_PER_DAY: i64 = 24 * SECS_PER_HOUR;
+/// Digits of a PDF date's fields: `YYYY` alone up to `YYYYMMDDHHmmSS`.
+const DATE_DIGITS: std::ops::RangeInclusive<usize> = 4..=14;
+
+/// Seconds since the Unix epoch of a PDF date that says its time zone (ISO 32000-2 §7.9.4:
+/// `D:YYYYMMDDHHmmSS`, every field after the year optional, then `Z` or `±HH'mm'`). `None` for a
+/// date without a zone (local time of an unknown place) and for anything that isn't a date.
+pub fn pdf_date_unix(raw: &str) -> Option<i64> {
+    let text = raw.trim();
+    let text = text.strip_prefix("D:").unwrap_or(text);
+    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+    if !DATE_DIGITS.contains(&digits) || digits % 2 != 0 {
+        return None;
+    }
+    // ASCII digits end on a character boundary.
+    let (date, zone) = text.split_at(digits);
+    let field = |at: usize, absent: i64| date.get(at..at + 2).map_or(Some(absent), |two| two.parse::<i64>().ok());
+    let year = date[..4].parse::<i64>().ok()?;
+    let (month, day, hour, minute, second) = (field(4, 1)?, field(6, 1)?, field(8, 0)?, field(10, 0)?, field(12, 0)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    // 31 February and the like: no such day.
+    if pdfcraft_cos::civil_from_days(days) != (year, month as u32, day as u32) {
+        return None;
+    }
+    let east = zone_east(zone)?;
+    Some(days * SECS_PER_DAY + hour * SECS_PER_HOUR + minute * SECS_PER_MINUTE + second - east)
+}
+
+/// Seconds east of UTC of a PDF date's zone: `Z` (with or without a zero offset after it) or
+/// `±HH'mm'`, the apostrophes and minutes optional. `None` when there is no zone or it's malformed.
+fn zone_east(zone: &str) -> Option<i64> {
+    let (sign, rest) = zone.split_at_checked(1)?;
+    let offset: String = rest.chars().filter(|&c| c != '\'').collect();
+    if !offset.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    match (sign, offset.len()) {
+        ("Z", 0 | 2 | 4) => Some(0),
+        ("+" | "-", 2 | 4) => {
+            let hours = offset[..2].parse::<i64>().ok()?;
+            let minutes = offset.get(2..4).map_or(Some(0), |two| two.parse::<i64>().ok())?;
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            let east = hours * SECS_PER_HOUR + minutes * SECS_PER_MINUTE;
+            Some(if sign == "-" { -east } else { east })
+        }
+        _ => None,
+    }
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's `days_from_civil`: the
+/// year counted from March, in 400-year eras of 146 097 days; 719 468 days from 0000-03-01 to the
+/// epoch).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    const YEARS_PER_ERA: i64 = 400;
+    const DAYS_PER_ERA: i64 = 146_097;
+    const MARCH_ZERO_TO_EPOCH: i64 = 719_468;
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(YEARS_PER_ERA);
+    let year_of_era = year - era * YEARS_PER_ERA;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    era * DAYS_PER_ERA + year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year - MARCH_ZERO_TO_EPOCH
+}
+
 /// "1.7" from the parser's version name ("Pdf17", "V1_7", …).
 fn version_label(name: &str) -> String {
     let digits: Vec<char> = name.chars().filter(char::is_ascii_digit).collect();

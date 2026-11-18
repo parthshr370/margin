@@ -475,6 +475,7 @@ fn quoted(view: &DocView, doc: &Document, page: usize, user_quads: &[[f64; 8]]) 
         author: None,
         contents: None,
         modified: None,
+        modified_unix: None,
         name: None,
         in_reply_to: None,
         rect: [0.0; 4],

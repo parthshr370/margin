@@ -456,6 +456,7 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         author: None,
         contents: None,
         modified: None,
+        modified_unix: None,
         name: None,
         in_reply_to: None,
         parent: None,
@@ -2494,6 +2495,72 @@ fn dates_are_prettified() {
 }
 
 #[test]
+fn dates_with_a_zone_are_instants() {
+    use super::core::pdf_date_unix;
+    // 2026-11-18 18:43:00 UTC.
+    const EVENING_UTC: i64 = 1_795_027_380;
+    assert_eq!(pdf_date_unix("D:20261118184300Z"), Some(EVENING_UTC));
+    assert_eq!(pdf_date_unix("D:20261118184300Z00'00'"), Some(EVENING_UTC));
+    assert_eq!(pdf_date_unix("D:20261119001300+05'30'"), Some(EVENING_UTC), "the same instant written in IST");
+    assert_eq!(pdf_date_unix("D:20261119001300+0530"), Some(EVENING_UTC));
+    assert_eq!(pdf_date_unix("D:20261118131300-05'30'"), Some(EVENING_UTC));
+    assert_eq!(pdf_date_unix("D:20261118184300+05"), Some(EVENING_UTC - 5 * 3600));
+    assert_eq!(pdf_date_unix("D:202611181843Z"), Some(EVENING_UTC), "seconds may be left out");
+    assert_eq!(pdf_date_unix("D:2026Z"), Some(1_767_225_600), "1 January 2026, midnight UTC");
+    assert_eq!(pdf_date_unix("D:20240229000000Z"), Some(1_709_164_800), "a leap day");
+    assert_eq!(pdf_date_unix("D:19691231230000Z"), Some(-3600), "before the epoch");
+    for without in [
+        "D:20261118184300",
+        "D:2026111818430",
+        "D:20260231120000Z",
+        "D:20261318120000Z",
+        "D:20261118250000Z",
+        "D:20261118184300+24'00'",
+        "D:20261118184300+05'60'",
+        "D:20261118184300+5",
+        "D:20261118184300Y",
+        "D:20261118184300Z junk",
+        "yesterday",
+        "",
+    ] {
+        assert_eq!(pdf_date_unix(without), None, "{without}");
+    }
+}
+
+#[test]
+fn an_annotation_date_with_a_zone_is_kept_as_an_instant() {
+    use lopdf::dictionary;
+
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let note = |date: &str| {
+        dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![10.into(), 10.into(), 30.into(), 30.into()],
+            "M" => Object::string_literal(date),
+        }
+    };
+    let zoned = doc.add_object(note("D:20261118184300Z"));
+    let local = doc.add_object(note("D:20261118184300"));
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+        "Annots" => vec![zoned.into(), local.into()],
+    });
+    doc.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 }.into());
+    let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).expect("write synthetic fixture");
+
+    let info = inspect(Arc::new(bytes), None).expect("opens");
+    let dates: Vec<_> = info.annotations.iter().map(|a| (a.modified.as_deref(), a.modified_unix)).collect();
+    assert_eq!(dates, [(Some("2026-11-18 18:43"), Some(1_795_027_380)), (Some("2026-11-18 18:43"), None)]);
+}
+
+#[test]
 fn jspdf_high_precision_mediabox_does_not_overflow_dimensions() {
     let pdf = b"%PDF-1.3
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -2520,6 +2587,7 @@ mod group_tests {
             author: None,
             contents: None,
             modified: None,
+            modified_unix: None,
             name: Some(index.to_string()),
             in_reply_to: parent.map(|p| p.to_string()),
             parent: parent.map(|p| (0, p)),
