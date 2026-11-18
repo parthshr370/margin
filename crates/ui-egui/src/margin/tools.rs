@@ -34,6 +34,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             Some(group) => detail(app, ui, t, group),
             None => app.left = LeftPanel::AllTools,
         },
+        // Forms' Calculation order command opens PdfCraft's calculation order pane here.
+        LeftPanel::CalculationOrder => crate::calc_order_ui::panel(app, ui, t),
     }
     // A tool's own options may close PdfCraft's tool panel; in Margin that closes the sidebar.
     if !app.left_open {
@@ -127,7 +129,7 @@ fn disabled_reason(needs: Needs) -> &'static str {
 fn row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, trailing: Option<&str>, why_not: Option<&str>) -> egui::Response {
     let enabled = why_not.is_none();
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     if enabled {
         look::row_fill(ui, t, rect, &resp, false);
     }

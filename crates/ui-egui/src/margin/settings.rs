@@ -79,7 +79,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let body_room = (screen.height() - look::sheet_top(ctx) - SCREEN_INSET - chrome_height).max(MIN_BODY);
     let mut close = false;
     let mut done = false;
-    let modal = look::modal(ctx, egui::Id::new("margin-settings"), &t).frame(look::modal_frame(&t)).show(ctx, |ui| {
+    let modal = look::modal(ctx, egui::Id::unique("margin-settings"), &t).frame(look::modal_frame(&t)).show(ctx, |ui| {
         ui.set_width(width);
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         close |= header(ui, &t);
@@ -224,7 +224,7 @@ struct RowText<'a> {
 /// (`control`, given the row's name for screen readers) on the right; both centred in a row of at
 /// least [`ROW_MIN_HEIGHT`].
 fn row(ui: &mut egui::Ui, t: &Tokens, text: RowText<'_>, control: impl FnOnce(&mut egui::Ui, &str)) {
-    let id = ui.id().with(("margin-settings-row", text.id));
+    let id = ui.scope_id().with(("margin-settings-row", text.id));
     let width = ui.available_width();
     let control_width = CONTROL_SLOT.min(width);
     let text_width = (width - control_width - ROW_GAP).max(0.0);
@@ -269,7 +269,7 @@ fn language_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, name:
     let selected = i18n::Lang::from_code(&app.language).map_or(i18n::t("Auto"), i18n::Lang::name);
     let before = app.language.clone();
     let chevron = t.icon;
-    let dropdown = egui::ComboBox::from_id_salt("interface-language")
+    let dropdown = craft_ui::ComboBox::from_id_salt("interface-language")
         .width(DROPDOWN_WIDTH)
         .icon(move |ui, rect, _, _| crate::icons::paint(ui, rect, "chevron-down", CHEVRON_SIZE, chevron))
         .selected_text(RichText::new(selected).font(theme::regular(FIELD_TEXT)).color(t.text))
@@ -283,7 +283,7 @@ fn language_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, name:
                 }
             }
         });
-    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
+    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), name));
     if app.language != before {
         i18n::set_current(i18n::Lang::from_pref(&app.language));
     }
@@ -308,7 +308,7 @@ fn field_style(ui: &mut egui::Ui, t: &Tokens) {
 
 /// The name new comments are signed with, in Margin's one text field (a control tall).
 fn name_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, name: &str) {
-    let id = egui::Id::new("margin-settings-author");
+    let id = egui::Id::unique("margin-settings-author");
     look::field_well(ui, id, vec2(NAME_FIELD_WIDTH, CONTROL_HEIGHT), |ui| {
         let edit = egui::TextEdit::singleline(&mut app.comment_prefs.author)
             .id(id)

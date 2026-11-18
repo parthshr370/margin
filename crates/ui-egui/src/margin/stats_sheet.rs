@@ -285,7 +285,7 @@ fn draw(app: &mut PdfCraftApp, ctx: &egui::Context, sheet: &mut Sheet) -> Option
     let mut action = None;
     // Pinned to its size (below), so it is centred once and never moves.
     let top = (screen.height() - outer.y) / 2.0;
-    let modal = look::modal_at(egui::Id::new("margin-stats"), &t, top).frame(frame).show(ctx, |ui| {
+    let modal = look::modal_at(egui::Id::unique("margin-stats"), &t, top).frame(frame).show(ctx, |ui| {
         ui.set_min_size(size);
         ui.set_max_size(size);
         ui.spacing_mut().item_spacing = Vec2::ZERO;
@@ -483,7 +483,7 @@ fn metric_cards(ui: &mut egui::Ui, t: &Tokens, overview: &Overview) {
 /// Card fill, the theme's edge, no shadow: these are numbers, not buttons.
 fn metric_card(ui: &mut egui::Ui, t: &Tokens, metric: &Metric, width: f32) {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, metric.accessible()));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, metric.accessible()));
     ui.painter().rect(rect, CornerRadius::same(look::RADIUS_CARD), t.card, look::edge_stroke(t.border), egui::StrokeKind::Inside);
     let inner = rect.shrink(INNER_PAD);
     let painter = ui.painter_at(inner);
@@ -613,7 +613,7 @@ fn calendar(ui: &mut egui::Ui, t: &Tokens, overview: &Overview, grid: &CalendarG
             painter.rect_stroke(cell.expand(TODAY_RING), ring, Stroke::new(TODAY_RING, t.text), egui::StrokeKind::Outside);
         }
         let cell_resp = ui.interact(cell, resp.id.with(day), Sense::hover());
-        cell_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, day_label(overview, day)));
+        cell_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, day_label(overview, day)));
     }
     let hovered = if resp.contains_pointer() { ui.input(|i| i.pointer.hover_pos()).and_then(|pos| grid.day_at(origin, pos)) } else { None };
     let mut day = cursor.unwrap_or(grid.today).clamp(grid.first, grid.today);
@@ -639,7 +639,7 @@ fn calendar(ui: &mut egui::Ui, t: &Tokens, overview: &Overview, grid: &CalendarG
     }
     *cursor = Some(day);
     look::focus_ring(ui, t, grid.cell(origin, day), &resp, CELL_RADIUS);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, format!("Reading calendar. {}", day_label(overview, day))));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, format!("Reading calendar. {}", day_label(overview, day))));
     if let Some(shown) = hovered.or_else(|| (*pinned || resp.has_focus()).then_some(day)) {
         look::detail_card(&resp, grid.cell(origin, shown), resp.id.with("day-card"), |ui| day_card(ui, t, overview, shown));
     }
@@ -677,8 +677,8 @@ fn legend(ui: &mut egui::Ui, t: &Tokens, busiest: i64) {
     let width = less_size.x + INNER_GAP + cells + INNER_GAP + more_size.x;
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), LEGEND_ROW), Sense::hover());
     let rect = Rect::from_min_size(pos2(row.right() - width, row.top()), vec2(width, LEGEND_ROW));
-    let resp = ui.interact(rect, ui.id().with("margin-stats-legend"), Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, "Less to more reading"));
+    let resp = ui.interact(rect, ui.scope_id().with("margin-stats-legend"), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Less to more reading"));
     let y = rect.center().y;
     let mut x = rect.left();
     ui.painter().galley(pos2(x, y - less_size.y / 2.0), less, t.text_muted);
@@ -808,9 +808,8 @@ fn week_chart(ui: &mut egui::Ui, t: &Tokens, overview: &Overview) {
         let slot_resp = ui.interact(slot_rect, resp.id.with(offset), Sense::hover());
         let full = WEEKDAY_NAMES.get(offset as usize).copied().unwrap_or("");
         let spoken = if day > overview.today { "still to come".to_owned() } else { short_duration(day_seconds) };
-        slot_resp.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{full}{}: {spoken}", if today { ", today" } else { "" }))
-        });
+        slot_resp
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{full}{}: {spoken}", if today { ", today" } else { "" })));
     }
     if busiest == 0 {
         painter.text(plot.center(), Align2::CENTER_CENTER, "No reading recorded this week", theme::regular(BODY_TEXT), t.text_muted);
@@ -915,8 +914,9 @@ fn table_header(ui: &mut egui::Ui, t: &Tokens, rect: Rect, columns: &[(Column, e
     for &(column, range, align) in columns.iter().filter(|(column, _, _)| *column != Column::Cover) {
         let cell = Rect::from_x_y_ranges(range, rect.y_range());
         let active = sort.column == column;
-        let resp = ui.interact(cell.expand2(vec2(HEADER_BUTTON_INSET.x, 0.0)), ui.id().with(("margin-stats-sort", column.heading())), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, format!("Sort by {}", column.heading())));
+        let resp =
+            ui.interact(cell.expand2(vec2(HEADER_BUTTON_INSET.x, 0.0)), ui.scope_id().with(("margin-stats-sort", column.heading())), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, format!("Sort by {}", column.heading())));
         let button = cell.expand2(vec2(HEADER_BUTTON_INSET.x, -HEADER_BUTTON_INSET.y));
         look::state_fill(ui, t, button, &resp, false, t.radius);
         look::focus_ring(ui, t, button, &resp, t.radius);
@@ -948,8 +948,8 @@ fn table_row(
     entry: Option<&Book>,
 ) {
     let title = display_title(book, entry);
-    let resp = ui.interact(row, ui.id().with(("margin-stats-book", &book.book)), Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, title));
+    let resp = ui.interact(row, ui.scope_id().with(("margin-stats-book", &book.book)), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, title));
     look::state_fill(ui, t, row.shrink(look::EDGE), &resp, false, 0);
     let text = theme::regular(BODY_TEXT);
     for &(column, range, align) in columns {

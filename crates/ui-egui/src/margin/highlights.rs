@@ -662,7 +662,7 @@ fn must_draw(view: &DocView, entry: &Entry) -> bool {
 /// right while a filter is on) and the filter button, on one compact row that never changes
 /// height.
 fn controls(ui: &mut egui::Ui, t: &Tokens, list: &mut List, notes: &Notes) {
-    let id = egui::Id::new("margin-highlights-search");
+    let id = egui::Id::unique("margin-highlights-search");
     let filtering = !list.filter.query.trim().is_empty() || list.filter.narrows();
     let shown = filtering.then(|| {
         list.shown_for.as_ref().filter(|shown| **shown == list.filter).map_or_else(|| select(&list.rows, &list.filter).len(), |_| list.shown.len())
@@ -745,7 +745,7 @@ fn filter_menu(ui: &mut egui::Ui, t: &Tokens, filter: &mut Filter, notes: &Notes
 /// nothing as it appears and shrinks away when it goes (`look::collapsible`), so the list under
 /// it slides instead of jumping. `true` when Save was pressed.
 fn draft(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut DocView) -> bool {
-    let editor_id = egui::Id::new("margin-new-page-note");
+    let editor_id = egui::Id::unique("margin-new-page-note");
     let open = view.margin.marks.draft.is_some();
     let outcome = look::collapsible(ui, editor_id.with("margin-draft-card"), open, |ui| {
         // While it slides away the note is gone: an empty card shrinks.
@@ -990,7 +990,7 @@ fn card(ui: &mut egui::Ui, input: &CardInput<'_>, view: &mut DocView, out: &mut 
         Entry::Mark(Pick::Note(_)) => format!("Page note, p. {}: {}", input.page_label, row.note.as_deref().unwrap_or_default()),
         _ => format!("{colour} {}, p. {}: {}", row.label.to_lowercase(), input.page_label, row.quote),
     };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     resp.context_menu(|ui| {
         if let Some(picked) = menu(ui, input) {
             action = Some(picked);
@@ -1085,7 +1085,7 @@ fn meta_row(ui: &mut egui::Ui, input: &CardInput<'_>, actions_shown: f32) -> Opt
             let (rect, swatch) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
             if row.subtype != NOTE_SUBTYPE {
                 let colour = color_name(input.shared.notes, row.color);
-                swatch.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Colour: {colour}")));
+                swatch.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("Colour: {colour}")));
                 let edge = Stroke::new(1.0, Color32::from_black_alpha(SWATCH_EDGE_ALPHA));
                 ui.painter().circle(rect.center(), SWATCH / 2.0, shown_color(input.shared.notes, row.color), edge);
             }
@@ -1164,7 +1164,7 @@ fn actions(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
             ui.add_space(ACTION);
         } else {
             let colour = look::color_button(ui, ACTION, shown_color(input.shared.notes, row.color), "Change colour", None);
-            look::popover(&colour, egui::Id::new(("margin-highlight-colour", &row.entry))).show(|ui| {
+            look::popover(&colour, egui::Id::unique(("margin-highlight-colour", &row.entry))).show(|ui| {
                 if let Some(i) = color_row(ui, input) {
                     action = Some(Action::Color(i));
                 }
@@ -1273,7 +1273,7 @@ fn body(ui: &mut egui::Ui, input: &CardInput<'_>, selected: bool, editing: bool)
         return;
     }
     if !quote.is_empty() {
-        let expanded_id = ui.id().with("margin-quote-expanded");
+        let expanded_id = ui.scope_id().with("margin-quote-expanded");
         let expanded = ui.data(|d| d.get_temp::<bool>(expanded_id)).unwrap_or(false);
         let rows = if expanded { usize::MAX } else { QUOTE_ROWS };
         let color = look::row_text(t, selected, t.text);

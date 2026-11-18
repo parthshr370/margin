@@ -481,6 +481,12 @@ fn quoted(view: &DocView, doc: &Document, page: usize, user_quads: &[[f64; 8]]) 
         locked: false,
         intent: None,
         fill_sign: false,
+        parent: None,
+        grouped: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
     };
     Some(super::obsidian::marked_text(&text, info, &probe)).filter(|quote| !quote.is_empty())
 }

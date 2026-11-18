@@ -119,6 +119,7 @@ fn the_settings_window_switches_the_mode() {
         delta: egui::vec2(0.0, SCROLL_TO_END),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(3);
 

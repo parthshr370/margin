@@ -901,7 +901,9 @@ fn render_cover(bytes: &Arc<Vec<u8>>, width_pt: f32) -> CoverOut {
     if page.error.is_some() || page.width == 0 || page.height == 0 {
         return CoverOut::Failed;
     }
-    match pdfcraft_engine::export::encode_jpeg(page.width, page.height, &page.rgba, COVER_QUALITY) {
+    // The cover's resolution: PDF points are 1/72 inch, drawn `scale` pixels each.
+    let dpi = 72.0 * f64::from(scale);
+    match pdfcraft_engine::export::encode_jpeg(page.width, page.height, &page.rgba, COVER_QUALITY, dpi) {
         Ok(jpeg) => CoverOut::Jpeg(jpeg),
         Err(_) => CoverOut::Failed,
     }

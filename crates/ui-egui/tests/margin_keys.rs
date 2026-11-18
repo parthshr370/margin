@@ -251,7 +251,7 @@ fn page_field_text(h: &Harness<'static, PdfCraftApp>) -> String {
 }
 
 fn page_field_focused(h: &Harness<'static, PdfCraftApp>) -> bool {
-    h.ctx.memory(|m| m.has_focus(egui::Id::new("page-input")))
+    h.get_by_label("Go to page").is_focused()
 }
 
 /// G, then `typed` into the page field (G selects what it holds, so the typing replaces it),
@@ -374,6 +374,7 @@ fn screen_steps_glide_add_up_and_yield_to_the_wheel() {
         delta: egui::Vec2::ZERO,
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.try_run().expect("idle");
     let moved = top - first_page_top(&h);

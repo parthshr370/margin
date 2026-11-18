@@ -226,7 +226,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: 
                     job.wrap.max_width = (ui.available_width() - GAP_LARGE).max(GAP);
                     let resp = ui.add(egui::Label::new(job).sense(Sense::click()));
                     let accessible = format!("{}, page {}", book.title, hit.page.saturating_add(1));
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &accessible));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &accessible));
                     if resp.hovered() {
                         ui.painter().hline(resp.rect.x_range(), resp.rect.bottom(), Stroke::new(look::EDGE, t.divider));
                     }

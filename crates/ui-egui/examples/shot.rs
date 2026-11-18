@@ -11,6 +11,9 @@
 //! `--margin-home DIR` gives Margin `DIR/config` and `DIR/data` (a prepared library or stats
 //! history) instead of an empty temporary data folder. `--integrated-titlebar` (no value) draws
 //! the title bar as `apps/margin` does on macOS and Linux (Margin's window buttons on Linux).
+//! `--ocr-verify on` ignores any file and instead builds a synthetic scanned page, recognizes
+//! it with the real engines (models required: `cargo xtask models`) and opens the OCR Verify
+//! screen on the result, as a reviewer sees it.
 //! Any other `--key value` pair is passed to `PdfCraftApp::set_option` (the same verbs as the
 //! desktop app's command-line flags and the future control channel).
 
@@ -18,7 +21,52 @@ use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use pdfcraft_engine::ocr::{MergeStrategy, OcrSettings};
+use pdfcraft_engine::{Session, export};
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
+
+/// Build a one-page PDF that is only a picture of a sentence (as a scanner would produce),
+/// recognize it with the engines named in `settings` and open the OCR Verify screen on the
+/// result — the same path the review tests use, with a real recognition behind it. The toolbar
+/// dropdowns are seeded to the ensemble the shot ran.
+fn load_ocr_verify(app: &mut PdfCraftApp) -> Result<(), String> {
+    let mut s = Session::new();
+    let text = s
+        .create_from_text(
+            "t",
+            "Scanned pages are pictures of words.\nThe Verify screen reads them back before anything is applied.\nReview the uncertain words, then Accept.",
+        )
+        .map_err(|e| e.to_string())?;
+    let id = s.open("text.pdf", None, text, None).map_err(|e| e.to_string())?;
+    let png = export::Exporter::new(s.get(id).ok_or("the document is gone")?).png(0, 150.0).map_err(|e| e.to_string())?;
+    // Keep the text block of the rendered page, so the scan is a short note-sized picture:
+    // the whole page and the confidence legend fit in the shot's source-page pane.
+    let page = craft_image_codecs::decode(&png).map_err(|e| e.to_string())?;
+    let crop_h = ((page.height() as f32 * 0.34) as u32).max(1);
+    let bpp = page.layout().channels() as usize;
+    let row_bytes = page.width() as usize * bpp;
+    let cropped_data = page.as_u8().ok_or("expected 8-bit PNG")?[..crop_h as usize * row_bytes].to_vec();
+    let cropped = craft_image_codecs::Image::from_u8(page.width(), crop_h, page.layout(), cropped_data).map_err(|e| e.to_string())?;
+    let scan_png = craft_image_codecs::encode(&cropped, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
+        .map_err(|e| e.to_string())?;
+    let scan = s.create_from_images(&[("scan.png".into(), scan_png)]).map_err(|e| e.to_string())?.to_vec();
+    let settings =
+        OcrSettings { engine: pdfcraft_engine::ocr::EngineChoice::Auto, strategy: MergeStrategy::ConfidenceWeighted, ..OcrSettings::default() };
+    app.ocr_draft.engine = settings.engine;
+    app.ocr_draft.strategy = settings.strategy;
+    app.open_bytes("scan.pdf", None, scan).map_err(|e| e.to_string())?;
+    app.run_inline = true;
+    if !app.execute("ocr.correct") {
+        return Err("ocr.correct did not run".into());
+    }
+    let Some((_, id)) = app.active_ids() else { return Err("no open document".into()) };
+    let job = app.session.ocr_job(id, &[], settings.clone()).ok_or("the OCR job could not be captured")?;
+    let recognizers = pdfcraft_engine::ocr::recognizers(&settings)?;
+    let guard = job.guard.clone();
+    let pages = job.run(&recognizers, |_, _| true);
+    app.ocr_verify.load(id, guard, pages);
+    Ok(())
+}
 
 fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
@@ -26,6 +74,7 @@ fn main() -> Result<(), String> {
     let (mut file, mut opts) = (None, Vec::new());
     let (mut size, mut scale) = (egui::vec2(1440.0, 900.0), 2.0f32);
     let mut width: Option<u32> = None;
+    let mut ocr_verify = false;
     let mut flavor = Flavor::PdfCraft;
     let mut margin_runs = Vec::new();
     let mut pointer = Vec::new();
@@ -41,6 +90,7 @@ fn main() -> Result<(), String> {
             }
             Some("scale") => scale = args.next().and_then(|v| v.parse().ok()).ok_or("bad --scale")?,
             Some("width") => width = Some(args.next().and_then(|v| v.parse().ok()).ok_or("bad --width")?),
+            Some("ocr-verify") => ocr_verify = args.next().is_some_and(|v| v == "on"),
             Some("flavor") => {
                 flavor = match args.next().as_deref() {
                     Some("margin") => Flavor::Margin,
@@ -84,7 +134,13 @@ fn main() -> Result<(), String> {
                 None => app.margin_keys.set_data_dir(std::env::temp_dir().join(format!("margin-shot-data-{}", std::process::id()))),
             }
         }
-        if let Some(f) = &file {
+        if ocr_verify {
+            if let Err(e) = load_ocr_verify(&mut app) {
+                eprintln!("shot: --ocr-verify: {e}");
+                // an empty Verify screen must not pass for the documentation's screenshot
+                std::process::exit(1);
+            }
+        } else if let Some(f) = &file {
             let bytes = std::fs::read(f).unwrap_or_default();
             let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let path = (flavor == Flavor::PdfCraft).then(|| f.clone());
@@ -133,6 +189,7 @@ fn main() -> Result<(), String> {
                     delta: egui::vec2(0.0, -points),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Unknown,
                 });
             }
         }
@@ -145,8 +202,12 @@ fn main() -> Result<(), String> {
         let h = (image.height() as f64 * w as f64 / image.width() as f64).round() as u32;
         image = image::imageops::resize(&image, w, h, image::imageops::FilterType::Lanczos3);
     }
-    image.save(&out).map_err(|e| e.to_string())?;
-    eprintln!("shot: wrote {out} ({}×{})", image.width(), image.height());
+    let (w, h) = (image.width(), image.height());
+    let out_img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, image.into_raw()).map_err(|e| e.to_string())?;
+    let encoded = craft_image_codecs::encode(&out_img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&out, encoded).map_err(|e| e.to_string())?;
+    eprintln!("shot: wrote {out} ({w}×{h})");
     Ok(())
 }
 

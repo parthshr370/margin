@@ -152,7 +152,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill: Option<Rect
     let t = Tokens::get(ctx);
     let offers_undo = app.margin_chrome.notices.undo.is_some();
     let mut clicked = Clicked::default();
-    egui::Area::new(egui::Id::new("margin-toast"))
+    egui::Area::new(egui::Id::unique("margin-toast"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(pos2(area.center().x, bottom))
@@ -257,9 +257,9 @@ pub(crate) fn progress(app: &PdfCraftApp, ctx: &egui::Context, notice: &crate::w
         .unwrap_or_else(|| ctx.content_rect());
     let width = PROGRESS_WIDTH.min(area.width() - 2.0 * GAP_SECTION).max(0.0);
     let fraction = if notice.fraction.is_finite() { notice.fraction.clamp(0.0, 1.0) } else { 0.0 };
-    let shown = ctx.animate_value_with_time(egui::Id::new("margin-progress-bar"), fraction, PROGRESS_EASE);
+    let shown = ctx.animate_value_with_time(egui::Id::unique("margin-progress-bar"), fraction, PROGRESS_EASE);
     let mut cancel = false;
-    let drawn = egui::Area::new(egui::Id::new("margin-progress-notice"))
+    let drawn = egui::Area::new(egui::Id::unique("margin-progress-notice"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(pos2(area.center().x, area.bottom() - PILL_LIFT))
@@ -279,7 +279,7 @@ pub(crate) fn progress(app: &PdfCraftApp, ctx: &egui::Context, notice: &crate::w
                 });
                 let (track, resp) = ui.allocate_exact_size(egui::vec2(width, PROGRESS_BAR), egui::Sense::hover());
                 resp.widget_info(|| {
-                    let mut info = egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator);
+                    let mut info = egui::WidgetInfo::new(egui::Role::ProgressIndicator);
                     info.value = Some(f64::from(fraction) * 100.0);
                     info
                 });

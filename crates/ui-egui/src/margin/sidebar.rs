@@ -12,8 +12,9 @@ use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
 use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, reading, window_chrome};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
-use crate::{DocView, PdfCraftApp, icons};
+use crate::{PdfCraftApp, icons};
 
+const SIDEBAR_SALT: &str = "margin_sidebar";
 const DEFAULT_WIDTH: f32 = 296.0;
 const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 440.0;
@@ -56,7 +57,9 @@ const BOOKMARK_LABEL_TEXT: f32 = 11.0;
 /// and starts closed ([`super::ReaderChrome::start_narrow`]).
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let id = egui::Id::new("margin_sidebar");
+    crate::app::migrate_panel_state_from(ui, SIDEBAR_SALT);
+    // The overlay and both halves of the slide use the same stored width as the docked panel.
+    let id = ui.scope_id().with_salt(egui::IdSalt::new(SIDEBAR_SALT));
     let window = ui.ctx().content_rect();
     let threshold = app.margin_keys.settings().ui.sidebar.overlay_below_px as f32;
     let was_narrow = ui.ctx().data(|d| d.get_temp::<bool>(id.with("narrow"))).unwrap_or(false);
@@ -97,7 +100,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     // Each panel draws its own divider line (egui's separator, in the theme's divider colour)
     // where the theme has frame edges; the Black palette parts the sidebar by fill alone.
-    egui::Panel::left(id)
+    egui::Panel::left(SIDEBAR_SALT)
         .resizable(true)
         .show_separator_line(look::has_edges(&t))
         .default_size(DEFAULT_WIDTH)
@@ -139,7 +142,16 @@ fn overlay(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id,
 fn floating(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens, id: egui::Id, shown: f32, full: Rect, open: bool) -> Rect {
     let rect = full.translate(vec2(-(1.0 - shown) * full.width(), 0.0));
     let visible = Rect::from_min_max(egui::pos2(full.left(), full.top()), rect.right_bottom());
-    egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).show(ctx, |ui| {
+    let area = egui::Area::new(id.with("overlay")).order(egui::Order::Foreground).fixed_pos(visible.min).interactable(open).fade_in(false);
+    // The slide already knows its exact bounds. Don't let Area hide its first frame to measure
+    // them: a sidebar closing for the first time would disappear and then reappear mid-slide.
+    ctx.memory_mut(|memory| {
+        memory.areas_mut().set_state(
+            area.layer(),
+            egui::AreaState { pivot_pos: Some(visible.min), size: Some(visible.size()), interactable: open, ..Default::default() },
+        );
+    });
+    area.show(ctx, |ui| {
         let painter = ui.painter();
         painter.add(t.surfaces.shadow_modal.as_shape(visible, CornerRadius::ZERO));
         // The overlay's own divider line where the theme has frame edges, none in the Black palette.
@@ -166,7 +178,12 @@ fn sections(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     #[cfg(target_arch = "wasm32")]
     let summary = None;
     let body = ui.max_rect();
-    window_chrome::drag_area(app, ui, Rect::from_min_size(body.min, vec2(body.width(), super::header::HEIGHT)), ui.id().with("margin-sidebar-drag"));
+    window_chrome::drag_area(
+        app,
+        ui,
+        Rect::from_min_size(body.min, vec2(body.width(), super::header::HEIGHT)),
+        ui.scope_id().with("margin-sidebar-drag"),
+    );
     // Under the traffic lights the buttons share the header's row: centred on it, after them.
     let traffic_lights = window_chrome::traffic_lights_inset(ui.ctx(), Rect::from_min_max(body.min + vec2(GAP_LARGE, 0.0), body.max));
     let top_margin = if traffic_lights > 0.0 { ((super::header::HEIGHT - TOP_BUTTON) / 2.0) as i8 } else { edge };
@@ -273,7 +290,8 @@ fn document_card(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, summary: Opti
                         let bar_width = (ui.available_width() - count_width - GAP).max(GAP);
                         let (bar, _) = ui.allocate_exact_size(vec2(bar_width, PROGRESS_BAR_HEIGHT), Sense::hover());
                         ui.painter().rect_filled(bar, CornerRadius::same(PROGRESS_BAR_RADIUS), t.surfaces.track);
-                        let share = motion::follow(ui.ctx(), egui::Id::new(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
+                        let share =
+                            motion::follow(ui.ctx(), egui::Id::unique(("margin-card-progress", view.id)), percent as f32 / 100.0, motion::SLIDE);
                         let fill = Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height()));
                         ui.painter().rect_filled(fill, CornerRadius::same(PROGRESS_BAR_RADIUS), t.accent);
                         ui.label(meta(&count));
@@ -332,7 +350,7 @@ fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         for tab in SidebarTab::STRIP {
             let on = app.margin_chrome.tab == tab;
             let (rect, resp) = ui.allocate_exact_size(vec2(width, TAB_HEIGHT), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tab.label()));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tab.label()));
             look::row_fill(ui, t, rect, &resp, on);
             icons::paint(ui, rect, tab.icon(), 16.0, look::icon_tint(t, on, resp.hovered()));
             // The keymap opens a tab with `view.sidebar.tab` and its key (Ctrl+1…4 by default).
@@ -390,17 +408,23 @@ fn highlights(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize
     let mut empty_lines = vec!["No highlights yet.", "Pick Highlight in the rail, then select text."];
     empty_lines.extend(note_hint.as_deref());
     let nav = super::highlights::show(app, ui, t, index, &empty_lines);
-    navigate(app.views.get_mut(index), nav);
+    navigate(app, index, nav);
 }
 
-fn navigate(view: Option<&mut DocView>, nav: Option<Nav>) {
-    let Some(view) = view else { return };
+fn navigate(app: &mut PdfCraftApp, index: usize, nav: Option<Nav>) {
+    let Some(view) = app.views.get_mut(index) else { return };
     match nav {
         // Highlight cards name pages, not destinations; a destination's page is where to go.
         Some(Nav::Page(p) | Nav::Dest(p, _)) => view.go_to_page(p),
         Some(Nav::Flash(p, r)) => {
             view.go_to_page(p);
             view.flash = Some((p, r, 0.0));
+        }
+        // Run as a clicked link's action is, as PdfCraft's bookmark pane does.
+        Some(Nav::Action(target)) => {
+            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target)) {
+                app.open_remote_link(source, file, destination);
+            }
         }
         None => {}
     }
@@ -433,7 +457,7 @@ fn page_bookmarks(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: u
     let Some(view) = app.views.get(index) else { return };
     let Some(doc) = app.session.get(view.id) else { return };
     let scroll_id = ("margin-page-bookmarks", view.id.0);
-    let renaming_id = egui::Id::new(("margin-bookmark-rename", view.id.0));
+    let renaming_id = egui::Id::unique(("margin-bookmark-rename", view.id.0));
     let info = &doc.info;
     // Unnamed bookmarks show the section they are in.
     let rows: Vec<BookmarkRow> = view
@@ -532,7 +556,7 @@ fn bookmark_row(
 ) {
     let here = row.page == current;
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, here, &row.title));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, here, &row.title));
     look::row_fill(ui, t, rect, &resp, here);
     let icon = Rect::from_center_size(egui::pos2(rect.left() + ROW_PAD + 7.0, rect.center().y), vec2(14.0, 14.0));
     icons::paint(ui, icon, "bookmark", 13.0, t.text_muted);
@@ -541,7 +565,7 @@ fn bookmark_row(
     let side = Rect::from_center_size(rect.right_center() - vec2(ROW_PAD + ROW_BUTTON / 2.0, 0.0), vec2(ROW_BUTTON, ROW_BUTTON));
     let mut removing = false;
     if resp.hovered() || ui.rect_contains_pointer(side) {
-        let x = ui.interact(side, ui.id().with(("remove-page-bookmark", &row.id)), Sense::click());
+        let x = ui.interact(side, ui.scope_id().with(("remove-page-bookmark", &row.id)), Sense::click());
         icons::paint(ui, side, "x", look::glyph_size(ROW_BUTTON), look::icon_tint(t, false, x.hovered()));
         if look::tooltip(x, "Remove bookmark", None).clicked() {
             removing = true;

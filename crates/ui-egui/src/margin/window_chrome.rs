@@ -48,13 +48,13 @@ const RESIZE_CORNER: f32 = 12.0;
 /// The memory key of the room the traffic lights take this frame, in egui points from the
 /// window's left edge (0 when they don't show over the content).
 fn traffic_lights_id() -> Id {
-    Id::new("margin-traffic-lights-width")
+    Id::unique("margin-traffic-lights-width")
 }
 
 /// The memory key of the room Margin's window buttons take this frame, in egui points from the
 /// window's right edge, the gap before them included (0 when they don't show).
 fn window_buttons_id() -> Id {
-    Id::new("margin-window-buttons-width")
+    Id::unique("margin-window-buttons-width")
 }
 
 fn stored_width(ctx: &egui::Context, id: Id) -> f32 {
@@ -146,7 +146,7 @@ pub(crate) fn place(app: &PdfCraftApp, ctx: &egui::Context, top_row_shown: bool)
 /// first frame sends it too: the window opened as [`starts_undecorated`] read the file, and this
 /// frame's settings are the ones that count.
 fn follow_titlebar_setting(ctx: &egui::Context, undecorated: bool) {
-    let id = Id::new("margin-window-undecorated");
+    let id = Id::unique("margin-window-undecorated");
     if ctx.data(|data| data.get_temp::<bool>(id)) == Some(undecorated) {
         return;
     }
@@ -209,28 +209,31 @@ fn window_buttons(ctx: &egui::Context) {
     let origin = pos2(screen.right() - WINDOW_BUTTON_COUNT * WINDOW_BUTTON_WIDTH, screen.top());
     let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
     let zoom = if maximized { WindowButton::Restore } else { WindowButton::Maximize };
-    egui::Area::new(Id::new("margin-window-buttons")).order(Order::Tooltip).fixed_pos(origin).sense(Sense::hover()).fade_in(false).show(ctx, |ui| {
-        ui.spacing_mut().item_spacing = Vec2::ZERO;
-        ui.horizontal(|ui| {
-            if window_button(ui, &t, WindowButton::Minimize).clicked() {
-                ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
-            }
-            if window_button(ui, &t, zoom).clicked() {
-                mac::toggle_zoom(ctx);
-            }
-            if window_button(ui, &t, WindowButton::Close).clicked() {
-                // The same request as the desktop's close button: unsaved edits are asked about.
-                ctx.send_viewport_cmd(ViewportCommand::Close);
-            }
-        });
-    });
+    egui::Area::new(Id::unique("margin-window-buttons")).order(Order::Tooltip).fixed_pos(origin).sense(Sense::hover()).fade_in(false).show(
+        ctx,
+        |ui| {
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            ui.horizontal(|ui| {
+                if window_button(ui, &t, WindowButton::Minimize).clicked() {
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+                }
+                if window_button(ui, &t, zoom).clicked() {
+                    mac::toggle_zoom(ctx);
+                }
+                if window_button(ui, &t, WindowButton::Close).clicked() {
+                    // The same request as the desktop's close button: unsaved edits are asked about.
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+            });
+        },
+    );
 }
 
 /// A flat button the header row's height: the theme's hover fill under the pointer (red with a
 /// white icon for close), the pressed fill while held.
 fn window_button(ui: &mut egui::Ui, t: &Tokens, button: WindowButton) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(WINDOW_BUTTON_WIDTH, super::header::HEIGHT), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, button.label()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, button.label()));
     let pressed = response.is_pointer_button_down_on();
     let lit = motion::hover(ui.ctx(), response.id, response.hovered() || pressed);
     let is_close = button == WindowButton::Close;
@@ -277,7 +280,7 @@ fn resize_edges(ctx: &egui::Context, buttons_shown: bool) {
     ];
     for (index, (direction, cursor, rect)) in grips.into_iter().enumerate() {
         if rect.is_positive() {
-            resize_grip(ctx, Id::new("margin-resize-grip").with(index), direction, cursor, rect);
+            resize_grip(ctx, Id::unique("margin-resize-grip").with(index), direction, cursor, rect);
         }
     }
 }

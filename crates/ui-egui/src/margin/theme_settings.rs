@@ -90,7 +90,7 @@ fn theme_dropdown(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, appearance: 
     };
     let chevron = t.icon;
     let mut picked = None;
-    let dropdown = egui::ComboBox::from_id_salt(salt)
+    let dropdown = craft_ui::ComboBox::from_id_salt(salt)
         .width(DROPDOWN_WIDTH)
         .truncate()
         .icon(move |ui, rect, _, _| crate::icons::paint(ui, rect, "chevron-down", CHEVRON_SIZE, chevron))
@@ -104,6 +104,6 @@ fn theme_dropdown(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, appearance: 
                 }
             }
         });
-    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
+    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), label));
     picked.filter(|picked| picked != current)
 }

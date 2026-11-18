@@ -321,7 +321,7 @@ pub(crate) fn reserved_label(ui: &mut egui::Ui, text: &str, template: &str, font
         Align::Center => rect.center().x - galley.size().x / 2.0,
         Align::Max => rect.right() - galley.size().x,
     };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     ui.painter().galley(egui::pos2(x, rect.top()), galley, color);
     resp
 }
@@ -424,9 +424,9 @@ pub(crate) fn menu_row(ui: &mut egui::Ui, icon: Option<&str>, label: &str, short
     // Only a checked row reports a toggle state; the rest are plain buttons to screen readers.
     resp.widget_info(|| {
         if checked {
-            egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, true, label)
+            egui::WidgetInfo::selected(egui::Role::Button, enabled, true, label)
         } else {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
+            egui::WidgetInfo::labeled(egui::Role::Button, enabled, label)
         }
     });
     if enabled {
@@ -472,7 +472,7 @@ pub(crate) fn submenu<R>(ui: &mut egui::Ui, icon: &str, label: &str, keep_open: 
         spacing.icon_spacing = GAP;
         spacing.interact_size.y = MENU_ROW;
         let text = egui::RichText::new(label).font(theme::regular(MENU_TEXT));
-        let button = egui::Button::image_and_text(icons::image(icon, MENU_ICON, t.text_muted), text).right_text(SubMenuButton::RIGHT_ARROW);
+        let button = egui::Button::image_and_text(icons::image(icon, MENU_ICON, t.text_muted), text).right_text(SubMenuButton::arrow_atom(None));
         let (resp, _) = SubMenuButton::from_button(button).config(MenuConfig::new().close_behavior(close)).ui(ui, |ui| {
             menu_body(ui);
             add(ui)
@@ -706,7 +706,7 @@ pub(crate) fn command_keys_where<'a>(
         }
     }
     let spec = commands::command(command).filter(|_| args.is_null())?;
-    spec.shortcut.filter(|_| app.margin_keys.falls_back(spec)).map(CommandKeys::Static)
+    spec.shortcut_for(keysheet::is_mac()).filter(|_| app.margin_keys.falls_back(spec)).map(CommandKeys::Static)
 }
 
 /// [`command_keys`] as the keyboard sheet writes them.
@@ -846,7 +846,7 @@ pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, la
     let t = Tokens::get(ui.ctx());
     let enabled = ui.is_enabled();
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, label));
     if enabled {
         state_fill(ui, &t, rect, &resp, on, t.radius);
     }
@@ -867,7 +867,7 @@ pub(crate) fn glyph_size(size: f32) -> f32 {
 pub(crate) fn color_button(ui: &mut egui::Ui, size: f32, color: Color32, label: &str, shortcut: Option<&str>) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
     focus_ring(ui, &t, rect, &resp, t.radius);
     paint_dot(ui, rect.center(), color);
@@ -903,7 +903,7 @@ pub(crate) fn color_dots_in(ui: &mut egui::Ui, dots: &[ColorDot<'_>], cell: f32)
         ui.spacing_mut().item_spacing.x = COLOR_CELL_GAP;
         for (i, dot) in dots.iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(Vec2::splat(cell), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), dot.selected, dot.name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), dot.selected, dot.name));
             ui.painter().rect_filled(rect, CornerRadius::same(t.radius), button_fill(ui.ctx(), &t, &resp, false));
             focus_ring(ui, &t, rect, &resp, t.radius);
             paint_dot(ui, rect.center(), dot.color);
@@ -960,7 +960,7 @@ pub(crate) fn icon_tint(t: &Tokens, on: bool, hovered: bool) -> Color32 {
 pub(crate) fn switch(ui: &mut egui::Ui, on: bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(SWITCH_SIZE, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), on, label));
     let how_on = motion::toggle(ui.ctx(), resp.id.with("margin-switch"), on, motion::FADE);
     let radius = rect.height() / 2.0;
     ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), t.pressed.lerp_to_gamma(t.accent, how_on));
@@ -1138,7 +1138,7 @@ impl<'a> Button<'a> {
         let galley = self.fitted_galley(ui, self.label_galley(ui));
         let (rect, resp) = ui.allocate_exact_size(vec2(self.width_for(galley.as_deref()), spec.height), Sense::click());
         let name = self.name.unwrap_or(self.label);
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, self.selected, name));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, self.selected, name));
         let lift = motion::hover(ui.ctx(), resp.id, enabled && resp.hovered());
         let pressed = enabled && resp.is_pointer_button_down_on();
         let radius = CornerRadius::same(t.radius);
@@ -1268,8 +1268,8 @@ pub(crate) fn segmented_sized(ui: &mut egui::Ui, segments: &[Segment<'_>], heigh
     for (i, ((segment, galley), width)) in segments.iter().zip(galleys).zip(widths).enumerate() {
         let rect = Rect::from_min_size(egui::pos2(x, well.top() + SEGMENT_INSET), vec2(width, height - 2.0 * SEGMENT_INSET));
         x += width + SEGMENT_INSET;
-        let resp = ui.interact(rect, ui.id().with(("segment", segment.label)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), segment.selected, segment.label));
+        let resp = ui.interact(rect, ui.scope_id().with(("segment", segment.label)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), segment.selected, segment.label));
         let shown = motion::hover(ui.ctx(), resp.id, resp.hovered());
         let (fill, edge) =
             if segment.selected { (t.selected, edge_stroke(surfaces.selected_edge)) } else { (t.hover.gamma_multiply(shown), Stroke::NONE) };

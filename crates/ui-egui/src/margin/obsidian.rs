@@ -22,7 +22,7 @@ mod format;
 use format::TemplateContext;
 #[path = "notes_worker.rs"]
 mod worker;
-use margin_config::settings::{ExportTarget, NoteUpdateMode};
+use margin_config::settings::ExportTarget;
 use worker::WorkerState;
 
 use pdfcraft_engine::{DocId, Document};
@@ -993,7 +993,7 @@ pub(crate) fn panel_block(ui: &mut egui::Ui, t: &Tokens, notes: &mut NotesUi) {
         vault_prompt(ui, t, notes);
         ui.add_space(look::GAP);
     }
-    let folded_id = egui::Id::new("margin-notes-box-folded");
+    let folded_id = egui::Id::unique("margin-notes-box-folded");
     let folded = ui.data(|d| d.get_temp::<bool>(folded_id)).unwrap_or(false);
     look::card_frame(t).inner_margin(look::GAP_LARGE).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -1159,7 +1159,7 @@ fn export_row(ui: &mut egui::Ui, notes: &mut NotesUi) {
             .fixed_width(width)
             .show(ui);
         let mut selected = notes.target;
-        look::popover(&picker, egui::Id::new("margin-export-target")).show(|ui| {
+        look::popover(&picker, egui::Id::unique("margin-export-target")).show(|ui| {
             look::menu_body(ui);
             for target in TARGETS {
                 if look::menu_row(ui, None, target_label(target), None, target == selected).clicked() {
@@ -1199,7 +1199,7 @@ pub(crate) fn swatches(ctx: &egui::Context) -> Option<Vec<(String, [f64; 3])>> {
 }
 
 fn palette_id() -> egui::Id {
-    egui::Id::new("margin-notes-palette")
+    egui::Id::unique("margin-notes-palette")
 }
 
 /// Once per frame in Margin: hand the palette to the comment tools, refresh every view's notes
@@ -1865,6 +1865,7 @@ mod tests {
             glyphs: vec![glyph("a", 0.0), glyph("b", 8.0), glyph("c", 24.0), glyph("d", 32.0), glyph("e", 48.0)],
             line_of: vec![0; 5],
             space_before: vec![false, false, true, false, true],
+            truncated: false,
         };
         let page = PageInfo { width: 100.0, height: 100.0, label: "1".into(), crop: [0.0, 0.0, 100.0, 100.0], rotation: 0 };
         let a = Annotation {
@@ -1884,6 +1885,12 @@ mod tests {
             locked: false,
             intent: None,
             fill_sign: false,
+            parent: None,
+            grouped: false,
+            no_rotate: false,
+            points: Vec::new(),
+            text_box: None,
+            popup: None,
         };
         assert_eq!(marked_text(&text, &page, &a), "b cd");
     }

@@ -236,6 +236,7 @@ fn display_rows_line_up_and_scroll_in_a_short_window() {
             delta: egui::vec2(0.0, -200.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(1);
     }

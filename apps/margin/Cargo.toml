@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
+# PdfCraft's logging.rs, shared by path, dates its log lines with the engine's calendar.
+pdfcraft-engine = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

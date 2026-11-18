@@ -504,7 +504,17 @@ mod tests {
     use pdfcraft_render::OutlineItem;
 
     fn item(title: &str, page: Option<usize>, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page, view: pdfcraft_render::DestView::Top, children, open: false }
+        OutlineItem {
+            title: title.into(),
+            page,
+            view: pdfcraft_render::DestView::Top,
+            action: None,
+            children,
+            open: false,
+            color: None,
+            italic: false,
+            bold: false,
+        }
     }
 
     #[test]

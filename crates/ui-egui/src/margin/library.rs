@@ -585,7 +585,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let hero_line = hero.map(|index| hero_meta(app, index));
     let mut actions = Vec::new();
     let full = ui.available_rect_before_wrap();
-    window_chrome::drag_area(app, ui, Rect::from_min_size(full.min, vec2(full.width(), super::header::HEIGHT)), ui.id().with("margin-library-drag"));
+    window_chrome::drag_area(
+        app,
+        ui,
+        Rect::from_min_size(full.min, vec2(full.width(), super::header::HEIGHT)),
+        ui.scope_id().with("margin-library-drag"),
+    );
     // With window buttons over the window, the bar shares their row (the reader's header row).
     let top_pad = if window_chrome::window_buttons_shown(&ctx) { (super::header::HEIGHT - BUTTON) / 2.0 } else { TOP_PAD };
     let width = (full.width() - 2.0 * SIDE_PAD).clamp(0.0, MAX_WIDTH);
@@ -924,7 +929,7 @@ fn top_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, insets: BarInse
 }
 
 fn search_field(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, width: f32) {
-    let id = egui::Id::new(SEARCH_ID);
+    let id = egui::Id::unique(SEARCH_ID);
     look::field_well(ui, id, vec2(width, BUTTON), |ui| {
         ui.spacing_mut().item_spacing.x = GAP;
         let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
@@ -1042,7 +1047,7 @@ fn shelf_filter(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &
     let button = look::Button::secondary(ButtonSize::Compact, &text).trailing("chevron-down").tip(&text);
     let width = button.width(ui).min(FILTER_MAX_WIDTH);
     let button = button.fixed_width(width).show(ui);
-    look::popover(&button, egui::Id::new(("margin-shelf-filter", noun))).show(|ui| {
+    look::popover(&button, egui::Id::unique(("margin-shelf-filter", noun))).show(|ui| {
         look::menu_body(ui);
         match app.margin_library.shelf {
             Shelf::Folders => folder_choices(app, ui),
@@ -1136,7 +1141,7 @@ fn tag_choices(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, actions: &m
 fn new_collection_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     look::control_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        let id = egui::Id::new("margin-new-collection");
+        let id = egui::Id::unique("margin-new-collection");
         let resp = look::text_field(ui, id, &mut app.margin_library.new_collection, "New collection", COLLECTION_FIELD_WIDTH);
         ui.ctx().accesskit_node_builder(resp.id, |node| node.set_label("Collection name"));
         let named = !app.margin_library.new_collection.trim().is_empty();
@@ -1169,7 +1174,7 @@ fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// How many columns of at least [`CELL_MIN`] fit `width`, kept from the last frame while the
 /// width is within [`COLUMN_HYSTERESIS`] of where the count changes.
 fn grid_columns(ctx: &egui::Context, width: f32) -> usize {
-    let id = egui::Id::new("margin-library-columns");
+    let id = egui::Id::unique("margin-library-columns");
     let fit = |width: f32| (((width + CELL_GAP_X) / (CELL_MIN + CELL_GAP_X)).floor().max(0.0) as usize).max(1);
     let fresh = fit(width);
     let columns = match ctx.data(|d| d.get_temp::<usize>(id)) {
@@ -1207,8 +1212,8 @@ fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], v
 /// lifting to the hover state under the pointer.
 fn book_cell(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, cell: Rect, cover_h: f32, actions: &mut Vec<Action>) {
     let Some(book) = app.margin_library.books.get(index).cloned() else { return };
-    let resp = ui.interact(cell, ui.id().with(("book", book.id)), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
+    let resp = ui.interact(cell, ui.scope_id().with(("book", book.id)), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &book.title));
     let radius = CornerRadius::same(look::RADIUS_CARD);
     ui.painter().add(t.surfaces.shadow_card.as_shape(cell, radius));
     let lift = super::motion::hover(ui.ctx(), resp.id, resp.hovered());
@@ -1275,8 +1280,8 @@ fn list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, order: &[usize], v
 /// row reserves (so every title is cut at the same x), and the status on the right.
 fn list_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, rect: Rect, actions: &mut Vec<Action>) {
     let Some(book) = app.margin_library.books.get(index).cloned() else { return };
-    let resp = ui.interact(rect, ui.id().with(("book-row", book.id)), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &book.title));
+    let resp = ui.interact(rect, ui.scope_id().with(("book-row", book.id)), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &book.title));
     look::row_fill(ui, t, rect, &resp, false);
     ui.painter().hline(rect.x_range(), rect.bottom() + look::EDGE / 2.0, Stroke::new(look::EDGE, t.divider));
     let cover = Rect::from_min_size(pos2(rect.left() + GAP, rect.center().y - LIST_COVER.y / 2.0), LIST_COVER);
@@ -1288,9 +1293,9 @@ fn list_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, 
     let slot_right = status.left() - GAP_LARGE;
     paint_pills(ui, t, &pills, pos2(slot_right - pills.width, rect.center().y - PILL_HEIGHT / 2.0));
     let text_width = (slot_right - LIST_PILLS_WIDTH - GAP_LARGE - text_left).max(GAP);
-    crate::widgets::row_text(ui, pos2(text_left, rect.top() + 17.0), crate::bidi::visual(&book.title), theme::medium(13.0), t.text, text_width);
+    crate::widgets::row_text(ui, pos2(text_left, rect.top() + 17.0), book.title.as_str(), theme::medium(13.0), t.text, text_width);
     let detail = if book.author.is_empty() { book.path.clone() } else { book.author.clone() };
-    crate::widgets::row_text(ui, pos2(text_left, rect.top() + 35.0), crate::bidi::visual(&detail), theme::regular(11.5), t.text_muted, text_width);
+    crate::widgets::row_text(ui, pos2(text_left, rect.top() + 35.0), detail, theme::regular(11.5), t.text_muted, text_width);
     status_line(ui, t, &book, status);
     if resp.clicked() {
         actions.push(Action::Open(book.path.clone()));
@@ -1405,7 +1410,7 @@ fn tags_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, book: &Book, actions: &mu
         if !app.margin_library.tags.is_empty() {
             ui.separator();
         }
-        let resp = look::text_field(ui, egui::Id::new(("margin-new-tag", book.id)), &mut app.margin_library.new_tag, "New tag", TAG_FIELD_WIDTH);
+        let resp = look::text_field(ui, egui::Id::unique(("margin-new-tag", book.id)), &mut app.margin_library.new_tag, "New tag", TAG_FIELD_WIDTH);
         let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if entered && !app.margin_library.new_tag.trim().is_empty() {
             actions.push(Action::TagWith(book.id, std::mem::take(&mut app.margin_library.new_tag)));

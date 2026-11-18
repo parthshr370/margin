@@ -109,7 +109,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     if app.margin_chrome.focus_mode || app.margin_keys.settings().ui.rail.items.is_empty() {
         return;
     }
-    let id = egui::Id::new("margin-rail");
+    let id = egui::Id::unique("margin-rail");
     let open = app.margin_chrome.rail_open;
     let shown = motion::toggle(ui.ctx(), id.with("open"), open, motion::SLIDE);
     if shown <= 0.0 {
@@ -263,7 +263,7 @@ fn popover(button: &egui::Response, which: &str, side: margin_config::RailSide, 
         margin_config::RailSide::Left => egui::RectAlign::RIGHT_START,
         margin_config::RailSide::Right => egui::RectAlign::LEFT_START,
     };
-    look::popover(button, egui::Id::new(("margin-rail-popover", which)))
+    look::popover(button, egui::Id::unique(("margin-rail-popover", which)))
         .align(align)
         // Clear of the rail's own padding, then the small step.
         .gap(f32::from(PADDING) + look::GAP)

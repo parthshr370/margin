@@ -109,7 +109,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize) {
     let area = view.viewport_rect();
     let width = PROMPT_WIDTH.min(area.width() - 2.0 * PROMPT_INSET).max(0.0);
     let position = area.center_top() + egui::vec2(0.0, PROMPT_INSET);
-    let closed = egui::Area::new(egui::Id::new(("margin-scan-prompt", view.id)))
+    let closed = egui::Area::new(egui::Id::unique(("margin-scan-prompt", view.id)))
         .order(egui::Order::Foreground)
         .pivot(egui::Align2::CENTER_TOP)
         .fixed_pos(position)

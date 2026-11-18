@@ -118,7 +118,7 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show_separator_line(look::has_edges(&t))
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin::symmetric(GAP_LARGE as i8, 0)))
         .show(ui, |ui| {
-            let frozen_id = egui::Id::new("margin-tabs-frozen-width");
+            let frozen_id = egui::Id::unique("margin-tabs-frozen-width");
             let pointer_in = ui.rect_contains_pointer(ui.max_rect());
             if !pointer_in {
                 ui.data_mut(|d| d.remove::<f32>(frozen_id));
@@ -206,7 +206,7 @@ fn tab(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, width: f3
         Some(word) => format!("{name} ({word})"),
         None => name.clone(),
     };
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, &a11y));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, &a11y));
     look::state_fill(ui, t, rect, &resp, active, TAB_RADIUS);
     look::focus_ring(ui, t, rect, &resp, TAB_RADIUS);
     let painter = ui.painter_at(rect);
@@ -277,7 +277,7 @@ fn status_dot(ui: &egui::Ui, t: &Tokens, center: egui::Pos2, status: SaveStatus)
 pub(crate) fn open_now(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mut show_index = None;
     let mut close_index = None;
-    look::collapsible(ui, egui::Id::new("margin-open-now"), !app.views.is_empty(), |ui| {
+    look::collapsible(ui, egui::Id::unique("margin-open-now"), !app.views.is_empty(), |ui| {
         ui.add(egui::Label::new(look::section_caps(t, "Open now", Some(app.views.len()))).selectable(false));
         ui.add_space(GAP);
         ui.horizontal_wrapped(|ui| {

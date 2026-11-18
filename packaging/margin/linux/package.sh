@@ -64,7 +64,7 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$MARGIN_ASSETS/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/margin"
 copy_margin_docs "$STAGE/usr/share/doc/margin"
-copy_margin_models "$STAGE/usr/share/margin/models"
+stage_models "$STAGE/usr/share/margin/models"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"

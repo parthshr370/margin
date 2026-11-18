@@ -126,7 +126,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
     let total = (top - ROW_GAP).max(0.0);
     let dots = highlight_dots(info, &view.comments.notes.markup_indices, &view.margin.marks, &app.notes);
 
-    let seen_id = egui::Id::new(("margin-pages-seen", view.id.0));
+    let seen_id = egui::Id::unique(("margin-pages-seen", view.id.0));
     let pass = ui.ctx().cumulative_pass_nr();
     let previous: Option<Seen> = ui.data(|d| d.get_temp(seen_id));
     let reveal = previous.is_none_or(|seen| seen.pass + 1 < pass || seen.current != view.current);
@@ -169,7 +169,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
                     texture: view.thumb(i).map(|tex| tex.id()),
                     dots: dots.get(&i).map_or(&[][..], Vec::as_slice),
                 };
-                let resp = ui.interact(cell, ui.id().with(("page", i)), Sense::click());
+                let resp = ui.interact(cell, ui.scope_id().with(("page", i)), Sense::click());
                 paint_cell(ui, t, &resp, &cell_input);
                 if resp.clicked() {
                     let modifiers = ui.input(|input| input.modifiers);
@@ -201,7 +201,7 @@ struct Cell<'a> {
 
 fn paint_cell(ui: &egui::Ui, t: &Tokens, resp: &egui::Response, cell: &Cell<'_>) {
     let name = format!("Page {}", cell.label);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, cell.picked, &name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, cell.picked, &name));
     look::row_fill(ui, t, cell.rect, resp, cell.picked);
     let painter = ui.painter();
     let thumb = Rect::from_min_size(pos2(cell.rect.center().x - cell.thumb.x / 2.0, cell.rect.top() + CELL_PAD), cell.thumb);

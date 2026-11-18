@@ -112,7 +112,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, i: usize, viewpor
 /// and a bar with no mark closes with its selection.
 fn track(view: &mut DocView, info: &pdfcraft_render::DocInfo, ctx: &egui::Context) {
     let selection = view.selection_range();
-    let bar_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(BAR_ID));
+    let bar_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(BAR_ID));
     let pressed_outside = ctx
         .input(|input| input.pointer.any_pressed().then(|| input.pointer.press_origin()).flatten())
         .is_some_and(|origin| ctx.layer_id_at(origin) != Some(bar_layer));
@@ -197,7 +197,7 @@ fn draw(app: &PdfCraftApp, ctx: &egui::Context, i: usize, viewport: Rect) -> Opt
     let notes = &view.comments.notes;
     let t = Tokens::get(ctx);
     let mut clicked = None;
-    egui::Area::new(egui::Id::new(BAR_ID))
+    egui::Area::new(egui::Id::unique(BAR_ID))
         .order(egui::Order::Foreground)
         .pivot(pivot)
         .fixed_pos(pos)
@@ -461,7 +461,8 @@ fn mark(app: &mut PdfCraftApp, i: usize, kind: Markup, color: Option<[f64; 3]>) 
             app.notify(NOT_ALLOWED);
             return None;
         }
-        let (page, quads) = view.selection_quads(&doc.info)?;
+        // The bar opens only on a one-page selection (`DocView::selection_range`).
+        let (page, quads) = view.selection_quads(&doc.info).into_iter().next()?;
         let author = app.comment_prefs.author.clone();
         let shape = Shape::TextMarkup { kind, quads };
         if !app.apply_edit(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: String::new(), author })) {

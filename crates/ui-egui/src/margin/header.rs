@@ -108,7 +108,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
         .show(ui, |ui| {
             let full = ui.max_rect();
             // The whole bar, its padding too, moves the window where nothing else takes the press.
-            window_chrome::drag_area(app, ui, full.expand2(egui::vec2(GAP_LARGE, 0.0)), ui.id().with("margin-header-drag"));
+            window_chrome::drag_area(app, ui, full.expand2(egui::vec2(GAP_LARGE, 0.0)), ui.scope_id().with("margin-header-drag"));
             let traffic_lights = window_chrome::traffic_lights_inset(ui.ctx(), full);
             let window_buttons = window_chrome::window_buttons_inset(ui.ctx(), full);
             let mut left_end = full.left();
@@ -175,7 +175,7 @@ fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if look::icon_button(ui, "maximize", BUTTON, app.full_screen, "Full screen", keys.as_deref()).clicked() {
         app.execute("view.full_screen");
     }
-    let display_id = egui::Id::new("margin-display-popover");
+    let display_id = egui::Id::unique("margin-display-popover");
     let display_open = egui::Popup::is_id_open(ui.ctx(), display_id);
     let display = look::icon_button(ui, "contrast", BUTTON, display_open, "Page colour and layout", None);
     let popup = look::popover(&display, display_id).frame(crate::margin::display::popover_frame(ui.style()));
@@ -260,7 +260,7 @@ pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui
         }
     }
     let identity = Identity { name, file: doc.path.clone().unwrap_or_else(|| doc.name.clone()), section, unsaved: doc.dirty };
-    let resp = ui.interact(rect, ui.id().with("margin-header-title"), egui::Sense::hover());
+    let resp = ui.interact(rect, ui.scope_id().with("margin-header-title"), egui::Sense::hover());
     look::tooltip_ui(&resp, |ui| identity.show(ui));
 }
 

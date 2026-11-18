@@ -21,8 +21,17 @@ trailer << /Root 1 0 R >>
 /// A Margin window on the fixture with `tool` picked, its settings, keymap and databases in a
 /// temporary folder.
 fn harness(tool: &str) -> Harness<'static, PdfCraftApp> {
+    harness_with_sidebar_width(tool, None)
+}
+
+fn harness_with_sidebar_width(tool: &str, legacy_width: Option<f32>) -> Harness<'static, PdfCraftApp> {
     let tool = tool.to_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        if let Some(width) = legacy_width {
+            // egui 0.36 saved the width under a global ID. It must survive the upgrade to 0.37.
+            let outer_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
+            cc.egui_ctx.data_mut(|data| data.insert_persisted(egui::Id::unique("margin_sidebar"), egui::PanelState { outer_rect }));
+        }
         let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
         app.set_option("language", "en").unwrap();
         let dir = std::env::temp_dir().join(format!("margin-highlights-{}-{tool}", std::process::id()));
@@ -145,15 +154,18 @@ fn a_deletion_offers_undo_in_a_toast_above_the_footer() {
 #[test]
 fn highlight_dates_are_short_and_never_squeezed() {
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let mut h = harness("highlight");
+    let mut h = harness_with_sidebar_width("highlight", Some(240.0));
     mark(&mut h, 4, 14);
     let (year, month, day) = h.state().session.today();
     let today = format!("{day} {}", MONTHS[month as usize - 1]);
     for width in [240.0_f32, 296.0, 440.0] {
-        // The width the reader dragged the sidebar to, as egui keeps it.
-        let outer_rect = egui::Rect::from_min_size(egui::pos2(0.0, 44.0), egui::vec2(width, 800.0));
-        h.ctx.data_mut(|d| d.insert_persisted(egui::Id::new("margin_sidebar"), egui::PanelState { outer_rect }));
-        h.run_steps(3);
+        if width > 240.0 {
+            let available = h.ctx.content_rect().width();
+            h.get_by_label("Resize panel").set_value_accesskit(f64::from(width / available));
+            h.run_steps(3);
+        }
+        let edge = h.get_by_label("Resize panel").rect().center().x;
+        assert!((edge - width).abs() <= 0.5, "the splitter sits at the requested width: {width} vs {edge}");
         let page = h.get_by_label("p. 1").rect();
         let actions_end = h.get_by_label("Delete highlight").rect().right();
         assert!(actions_end <= width && actions_end > width - 40.0, "the sidebar is {width} wide: actions end at {actions_end}");
@@ -174,6 +186,12 @@ fn highlight_dates_are_short_and_never_squeezed() {
         h.hover_at(egui::pos2(width + 400.0, 450.0));
         h.run_steps(3);
     }
+    // The narrow-window overlay uses the same saved width as the docked sidebar.
+    let docked_actions = h.get_by_label("Delete highlight").rect();
+    h.set_size(egui::vec2(1000.0, 900.0));
+    h.run_steps(3);
+    let overlay_actions = h.get_by_label("Delete highlight").rect();
+    assert!((overlay_actions.right() - docked_actions.right()).abs() <= 0.5, "overlay keeps the last width: {overlay_actions:?}");
 }
 
 #[test]

@@ -73,7 +73,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         empty(ui, t, &["This document has no table of contents.", "Pages and Find still get you around."]);
         return;
     }
-    let tree_id = egui::Id::new(("margin-contents", view.id.0));
+    let tree_id = egui::Id::unique(("margin-contents", view.id.0));
     let mut tree: Tree = ui.data(|d| d.get_temp(tree_id)).unwrap_or_default();
     let pass = ui.ctx().cumulative_pass_nr();
     let history = (view.back.len(), view.back.last().copied());
@@ -187,7 +187,7 @@ impl Rows<'_> {
         let marked = self.current == path.as_slice() || (!open && self.current.starts_with(path));
         let title = item.title.trim();
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, marked, title));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, marked, title));
         look::row_fill(ui, t, rect, &resp, marked);
         if marked {
             self.marked_in_view = ui.clip_rect().contains_rect(rect);
@@ -198,9 +198,9 @@ impl Rows<'_> {
         let left = rect.left() + ROW_PAD / 2.0 + depth * INDENT;
         if !item.children.is_empty() {
             let twisty = Rect::from_center_size(egui::pos2(left + TWISTY / 2.0, rect.center().y), vec2(TWISTY, TWISTY));
-            let click = ui.interact(twisty, ui.id().with(("toc-twisty", path.as_slice())), Sense::click());
+            let click = ui.interact(twisty, ui.scope_id().with(("toc-twisty", path.as_slice())), Sense::click());
             let action = if open { "Collapse" } else { "Expand" };
-            click.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{action} {title}")));
+            click.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{action} {title}")));
             icons::paint(ui, twisty, if open { "chevron-down" } else { "chevron-right" }, 12.0, look::icon_tint(t, false, click.hovered()));
             if look::tooltip(click, action, None).clicked() {
                 self.flip = Some((path.clone(), !open));

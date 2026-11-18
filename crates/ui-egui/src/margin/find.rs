@@ -194,7 +194,7 @@ pub(crate) fn floating(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let area = view.viewport_rect();
     let t = Tokens::get(ctx);
     let width = area.width().min(FIELD_MAX_WIDTH) - 2.0 * GAP_LARGE;
-    egui::Area::new(egui::Id::new("margin-find-floating"))
+    egui::Area::new(egui::Id::unique("margin-find-floating"))
         .order(egui::Order::Foreground)
         .pivot(egui::Align2::CENTER_TOP)
         .fixed_pos(area.center_top() + vec2(0.0, GAP_LARGE))
@@ -227,7 +227,7 @@ fn field(ui: &mut egui::Ui, view: &mut DocView, pages: usize, keys: &FindKeys) -
     let mut out = FieldOutcome::default();
     let Some(find) = view.find.as_mut() else { return out };
     let rect = ui.max_rect();
-    let id = Id::new(INPUT_ID);
+    let id = Id::unique(INPUT_ID);
     look::paint_input_well(ui, &t, rect, look::input_focused(ui, id));
     ui.spacing_mut().item_spacing.x = GAP / 2.0;
     ui.add_space(GAP);
@@ -294,7 +294,7 @@ fn select_all(ctx: &egui::Context, id: Id, chars: usize) {
 /// on, bright and the pill when hovered.
 fn option_toggle(ui: &mut egui::Ui, t: &Tokens, text: &str, underline: bool, on: bool, label: &str) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::Vec2::splat(FIELD_BUTTON), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), on, label));
     let shown = crate::margin::motion::hover(ui.ctx(), resp.id, resp.hovered() || on);
     ui.painter().rect_filled(rect, CornerRadius::same(t.radius), t.hover.gamma_multiply(shown));
     let color = if on {
@@ -433,7 +433,7 @@ fn list(ui: &mut egui::Ui, t: &Tokens, view: &DocView, info: &DocInfo) -> Option
     }
     let total: f32 = rows.iter().map(|r| r.height()).sum();
     // Scroll to the current match once each time it changes.
-    let seen_id = Id::new(("margin-find-seen", view.id.0));
+    let seen_id = Id::unique(("margin-find-seen", view.id.0));
     let seen: Option<Option<usize>> = ui.data(|d| d.get_temp(seen_id));
     let reveal = seen != Some(find.current);
     ui.data_mut(|d| d.insert_temp(seen_id, find.current));
@@ -486,7 +486,7 @@ fn group_row(ui: &egui::Ui, t: &Tokens, info: &DocInfo, page: usize, rect: Rect)
 /// when clicked.
 fn hit_row(ui: &mut egui::Ui, t: &Tokens, view: &DocView, info: &DocInfo, i: usize, current: bool, rect: Rect) -> bool {
     let Some((page, range)) = view.find.as_ref().and_then(|f| f.matches.get(i)) else { return false };
-    let resp = ui.interact(rect, ui.id().with(("margin-find-hit", i)), Sense::click());
+    let resp = ui.interact(rect, ui.scope_id().with(("margin-find-hit", i)), Sense::click());
     look::row_fill(ui, t, rect, &resp, current);
     let snippet = view.texts.get(page).map(|text| {
         let n = text.glyphs.len();
@@ -498,7 +498,7 @@ fn hit_row(ui: &mut egui::Ui, t: &Tokens, view: &DocView, info: &DocInfo, i: usi
     });
     let Some((before, hit, after)) = snippet else { return resp.clicked() };
     let label = info.pages.get(*page).map_or_else(|| page.saturating_add(1).to_string(), |p| p.label.clone());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current, format!("p. {label}: {before} {hit} {after}")));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, format!("p. {label}: {before} {hit} {after}")));
     let context = if current { t.text } else { t.text_muted };
     let plain = TextFormat { font_id: theme::regular(SNIPPET_TEXT), color: context, ..Default::default() };
     let marked = TextFormat {

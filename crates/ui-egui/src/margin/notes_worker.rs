@@ -1,7 +1,19 @@
 //! Note jobs (Copy all, Write to note, highlight and paper exports, vault snapshots) run on a
 //! worker thread with an immutable snapshot of the document; the UI only polls their progress.
-use super::*;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use margin_config::settings::{ExportTarget, NoteUpdateMode};
 use pdfcraft_engine::export::{ExportSource, MarkdownOptions};
+use pdfcraft_render::{Annotation, DocInfo, PageRenderer, PageText, RenderRequest, RequestKind};
+
+use super::{
+    DocNotes, Highlight, MAX_NOTE_BYTES, Notes, PdfLink, cached_markup, context_for, display_text, file_url, format, highlight_of, markup_indices,
+    note_path, obsidian_uri, percent_encode, read_note, refresh_view, resolve_note, sidecar_entries, slug, write_atomically, write_bytes_atomically,
+};
+use crate::PdfCraftApp;
 
 /// The most highlight text (quotes and notes) one Copy all or highlight export takes on; the
 /// output of every format is a small multiple of it.
@@ -411,16 +423,25 @@ fn paper(input: &Input, destination: PaperDestination) -> Result<Completed, Stri
     let options = MarkdownOptions { title: &input.context.title, obsidian: into_vault, image_prefix: &image_prefix };
     let pages: Vec<usize> = (0..input.source.pages).collect();
     let exported = pdfcraft_engine::export::markdown(&input.source, &pages, &options)?;
-    let images: Vec<(PathBuf, &[u8])> = exported.images.iter().map(|(name, bytes)| (folder.join(name), bytes.as_slice())).collect();
+    let note = &exported.note;
+    let images: Vec<(PathBuf, &[u8])> = note.images.iter().map(|(name, bytes)| (folder.join(name), &bytes[..])).collect();
     if into_vault && let Some((taken, _)) = images.iter().find(|(image, _)| image.exists()) {
         return Err(format!("{} already exists; Margin never replaces a file in the vault.", taken.display()));
     }
     for (image, bytes) in &images {
         write_bytes_atomically(image, bytes).map_err(|error| format!("Couldn't write {}: {error}", image.display()))?;
     }
-    write_atomically(&path, &exported.text).map_err(|error| format!("Couldn't write {}: {error}", path.display()))?;
+    write_atomically(&path, &note.text).map_err(|error| format!("Couldn't write {}: {error}", path.display()))?;
     let with_images = if images.is_empty() { String::new() } else { format!(" with {}", count(images.len(), "image")) };
-    Ok(Completed::said(format!("Exported the paper to {}{with_images}", path.display())))
+    // Pages whose pictures or nested forms the export had to leave out are named, not dropped
+    // silently (1-based, as the reader counts them).
+    let left_out = if exported.truncated_pages.is_empty() {
+        String::new()
+    } else {
+        let pages: Vec<String> = exported.truncated_pages.iter().map(|page| page.saturating_add(1).to_string()).collect();
+        format!("; some pictures or forms on {} {} were too large to include", if pages.len() == 1 { "page" } else { "pages" }, pages.join(", "))
+    };
+    Ok(Completed::said(format!("Exported the paper to {}{with_images}{left_out}", path.display())))
 }
 
 /// Renders the selected area of `page` (view space, points) at 300 DPI, saves it as a PNG under
@@ -493,6 +514,8 @@ fn resolve_asset(vault: &Path, relative: &str) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn context() -> DocNotes {

@@ -232,11 +232,11 @@ impl MarginKeys {
     /// nor the keystroke (an unbind counts). Before the keymap loads, every static shortcut applies.
     pub(crate) fn falls_back(&self, spec: &CommandSpec) -> bool {
         let Some(loaded) = self.loaded.as_ref().filter(|loaded| loaded.compiled.is_some()) else { return true };
-        let Some(shortcut) = &spec.shortcut else { return true };
+        let Some(shortcut) = spec.shortcut_for(Os::current() == Os::Macos) else { return true };
         if loaded.bound_ids.contains(spec.id) {
             return false;
         }
-        margin_config::canonical(&zed_keystroke(shortcut), Os::current()).map_or(true, |stroke| !loaded.bound_strokes.contains(&stroke))
+        margin_config::canonical(&zed_keystroke(&shortcut), Os::current()).map_or(true, |stroke| !loaded.bound_strokes.contains(&stroke))
     }
 }
 
@@ -636,7 +636,7 @@ pub(crate) fn context_stack(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<Conte
         _ if super::annotate_mode(app) => stack.push(node("AnnotateMode", &[("tool", "reader.tool.select")])),
         _ => {}
     }
-    let find_focused = ctx.memory(|memory| memory.focused()) == Some(egui::Id::new(super::find::INPUT_ID));
+    let find_focused = ctx.memory(|memory| memory.focused()) == Some(egui::Id::unique(super::find::INPUT_ID));
     if find_focused {
         stack.push(node("Find", &[]));
         stack.push(node("TextInput", &[]));
@@ -690,6 +690,8 @@ pub(crate) fn run(app: &mut PdfCraftApp, ctx: &egui::Context, id: &str, args: &V
         "app.close_layer" => close_layer(app, ctx),
         "app.key_context" => app.margin_keys.key_context_open = !app.margin_keys.key_context_open,
         "help.shortcuts" => app.margin_keys.toggle_sheet(),
+        // PdfCraft's updater would install a PdfCraft release over Margin: nothing runs it here.
+        "help.check_updates" => {}
         "reader.tool.select" => select_tool(app),
         _ if commands::command(id).is_some() || is_catalog(id) => run_pdfcraft(app, ctx, id),
         _ if is_view_command(id) => {
