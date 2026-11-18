@@ -373,7 +373,7 @@ from your keymap. On macOS the menu bar shows each command's <kbd>Cmd</kbd> shor
 | Scroll a line | <kbd>J</kbd> / <kbd>K</kbd>, <kbd>↓</kbd> / <kbd>↑</kbd> (in Single, <kbd>J</kbd> / <kbd>K</kbd> turn the page) |
 | Scroll a screen | <kbd>Space</kbd> / <kbd>Shift</kbd>+<kbd>Space</kbd>, <kbd>PgDn</kbd> / <kbd>PgUp</kbd> |
 | Next / previous page | <kbd>→</kbd> / <kbd>←</kbd> |
-| First / last page | <kbd>Home</kbd> / <kbd>End</kbd> |
+| Start / end of document | <kbd>Home</kbd> / <kbd>End</kbd> |
 | Go to page | <kbd>G</kbd> |
 | Back / forward | <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd>, <kbd>Ctrl</kbd>+<kbd>[</kbd> / <kbd>Ctrl</kbd>+<kbd>]</kbd> |
 | Zoom in / out / 100% | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |

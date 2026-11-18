@@ -849,7 +849,7 @@ fn view_command(view: &mut DocView, id: &str, args: &Value, settings: &margin_co
         "reader.page.next" => view.step_page(true),
         "reader.page.prev" => view.step_page(false),
         "reader.page.first" => view.go_to_page(0),
-        "reader.page.last" => view.go_to_page(usize::MAX),
+        "reader.page.last" => view.go_to_end(),
         _ => return false,
     }
     true
