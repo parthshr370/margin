@@ -265,6 +265,9 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
     app.comments_panel_closed = true;
     // Margin wears its own themes, whatever PdfCraft's light/dark preference says.
     app.theme = crate::theme::ThemeKind::Margin;
+    // Full screen keeps the reader's layout and zoom, only the chrome goes (owner's choice): no
+    // one-page-at-a-time presentation. Saved PdfCraft preferences don't turn it back on.
+    app.view_defaults.full_screen_fill = false;
 }
 
 /// Run a Margin-only action (the keymap's ids): `view.focus_mode.toggle` (also `view.read_mode`),

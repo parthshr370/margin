@@ -332,7 +332,8 @@ impl PdfCraftApp {
         if let Some(show) = v["default_page_gaps"].as_bool() {
             self.view_defaults.show_page_gaps = show;
         }
-        if let Some(fill) = v["full_screen_fill"].as_bool() {
+        // Margin's full screen keeps the reader's display (`margin::apply_defaults`).
+        if let Some(fill) = v["full_screen_fill"].as_bool().filter(|_| self.flavor != crate::Flavor::Margin) {
             self.view_defaults.full_screen_fill = fill;
         }
         if let Some(exits) = v["full_screen_escape_exits"].as_bool() {
