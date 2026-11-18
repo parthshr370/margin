@@ -153,9 +153,10 @@ impl Drop for SaveQueue {
 
 impl PdfCraftApp {
     /// Write document `id` over `destination` (its own file) without asking: autosave and
-    /// Margin's own callers. The document's Will Save scripts run first, as for any save (#6969).
+    /// Margin's own callers. Will Save scripts run on explicit saves only
+    /// (`queue_explicit_margin_save`): a script that alerts would otherwise interrupt reading
+    /// after every debounced autosave.
     pub(crate) fn queue_margin_save(&mut self, id: DocId, destination: String, after: Option<AfterSave>) -> bool {
-        self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
         self.request_margin_save(id, Request { destination, after: after.into_iter().collect(), approved: None })
     }
 
