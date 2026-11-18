@@ -153,6 +153,7 @@ const MENUS: &[(&str, Role, &[Row])] = &[
             command("Choose Obsidian Vault…", "app.choose_vault"),
             Row::Separator,
             command("Document Properties…", "file.properties"),
+            command("Word Count…", "file.word_count"),
             command("Print…", "print.dialog"),
             Row::Separator,
             command("Close", "file.close"),

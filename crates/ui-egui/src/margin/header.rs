@@ -50,6 +50,7 @@ const DOCUMENT_MENU: &[Entry] = &[
     Command("Save a Copy with Highlights…", "reader.save_with_highlights", "copy-plus"),
     Export,
     Command("Document Properties…", "file.properties", "file-text"),
+    Command("Word Count…", "file.word_count", "hash"),
     Command("Compare with…", "doc.compare", "git-compare"),
     Command("Print…", "print.dialog", "printer"),
     Separator,

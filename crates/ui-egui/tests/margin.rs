@@ -205,6 +205,15 @@ fn contents_footer_and_document_menu_work() {
     assert!(matches!(h.state().dialog, Some(Dialog::Properties(_))));
 }
 
+/// The document menu's "Word Count…" opens PdfCraft's word count.
+#[test]
+fn document_menu_counts_words() {
+    let mut h = harness(Flavor::Margin);
+    click(&mut h, "Document: save, export, print, settings");
+    click(&mut h, "Word Count…");
+    assert!(matches!(h.state().dialog, Some(Dialog::WordCount)));
+}
+
 #[test]
 fn margin_actions_run_by_id() {
     let mut h = harness(Flavor::Margin);
