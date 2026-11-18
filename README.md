@@ -88,6 +88,7 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - **Focus mode** (<kbd>F</kbd>) and **full screen** (<kbd>Ctrl</kbd>+<kbd>L</kbd>).
 - **Tabs** for several documents, each keeping its own place.
 - **Sidebar**: Contents, Highlights, Pages, Bookmarks, Find and Tools.
+- **Contents** keeps the PDF outline's bold and italic titles and adjusts their colours for the theme.
 - **OCR** for scanned pages, run locally.
 - **Live reload** when another program rewrites the file.
 - **SyncTeX** jumps between source and PDF (see [LaTeX](#latex-and-synctex)).

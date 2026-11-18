@@ -578,6 +578,20 @@ pub(crate) fn row_fill(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response, s
     focus_ring(ui, t, rect, resp, t.radius);
 }
 
+/// The fill [`state_fill`] gives a row at rest (no hover fade): pressed, selected, hovered, or
+/// none. Text drawn on the row measures its contrast against it.
+pub(crate) fn state_color(t: &Tokens, resp: &Response, selected: bool) -> Color32 {
+    if resp.is_pointer_button_down_on() {
+        t.pressed
+    } else if selected {
+        t.selected
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        Color32::TRANSPARENT
+    }
+}
+
 /// The hover or selected state of a row, card or ghost control at `rect` (§2), without the focus
 /// ring: selected wins over hovered; pressed darkens either.
 pub(crate) fn state_fill(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &Response, selected: bool, radius: u8) {
