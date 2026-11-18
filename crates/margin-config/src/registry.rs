@@ -268,6 +268,17 @@ mod tests {
         }
     }
 
+    /// `view.sidebar.tab` names every keyed sidebar tab, the ones only some documents show too.
+    #[test]
+    fn sidebar_tab_accepts_attachments_and_layers() {
+        let registry = Registry::load().unwrap();
+        let entry = registry.margin_entries().find(|entry| entry.id.as_str() == "view.sidebar.tab").expect("view.sidebar.tab is listed");
+        let tabs = &entry.args.as_ref().expect("view.sidebar.tab takes args")["properties"]["tab"]["enum"];
+        for tab in ["contents", "highlights", "pages", "bookmarks", "attachments", "layers", "find", "tools"] {
+            assert!(tabs.as_array().is_some_and(|values| values.iter().any(|value| value == tab)), "{tab} in {tabs}");
+        }
+    }
+
     #[test]
     fn margin_ids_never_redefine_upstream_ones() {
         let err = Registry::from_text(r#"[{ "id": "view.palette", "title": "x", "group": "View" }]"#).unwrap_err();

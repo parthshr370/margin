@@ -40,7 +40,7 @@
 
   { "id": "view.sidebar.toggle", "title": "Toggle sidebar", "icon": "panel-left", "group": "View", "when": "Reader" },
   { "id": "view.sidebar.tab", "title": "Sidebar tab", "group": "Go", "when": "Reader",
-    "args": { "type": "object", "required": ["tab"], "properties": { "tab": { "enum": ["contents", "highlights", "pages", "bookmarks", "find", "tools"] } } } },
+    "args": { "type": "object", "required": ["tab"], "properties": { "tab": { "enum": ["contents", "highlights", "pages", "bookmarks", "attachments", "layers", "find", "tools"] } } } },
 
   { "id": "reader.annotate.toggle", "title": "Annotate tools", "icon": "pen-tool", "group": "Mark", "when": "Reader && format == pdf" },
   { "id": "reader.find.next", "title": "Next match", "group": "Find", "when": "Reader", "in_text": true },

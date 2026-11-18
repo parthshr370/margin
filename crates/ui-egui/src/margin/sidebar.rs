@@ -9,7 +9,7 @@
 use egui::{Align2, CornerRadius, Rect, Sense, vec2};
 
 use crate::margin::look::{self, GAP, GAP_LARGE, ROW_PAD, RowLook};
-use crate::margin::{SidebarTab, current_section, motion, open_tab, outline_at, reading, window_chrome};
+use crate::margin::{SidebarTab, active_info, current_section, motion, open_tab, outline_at, reading, window_chrome};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons};
@@ -341,13 +341,16 @@ fn stats_lines(parts: &[String], width: f32, measure: impl Fn(&str) -> f32) -> V
 }
 
 /// The tabs: the shown one gets the hover fill and an accent icon, like a selected row.
+/// Attachments and Layers join the strip only for a document that has some.
 fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let gap = 4.0;
-    let count = SidebarTab::STRIP.len() as f32;
+    let info = active_info(app);
+    let shown = SidebarTab::KEYED.map(|tab| tab.in_strip(info));
+    let count = shown.iter().filter(|in_strip| **in_strip).count() as f32;
     let width = ((ui.available_width() - gap * (count - 1.0)) / count).max(TAB_HEIGHT);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
-        for tab in SidebarTab::STRIP {
+        for (tab, _) in SidebarTab::KEYED.into_iter().zip(shown).filter(|(_, in_strip)| *in_strip) {
             let on = app.margin_chrome.tab == tab;
             let (rect, resp) = ui.allocate_exact_size(vec2(width, TAB_HEIGHT), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tab.label()));
@@ -387,7 +390,7 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         // The thumbnail grid (`margin::pages`); PdfCraft's Pages panel stays PdfCraft's.
         SidebarTab::Pages => super::pages::show(app, ui, t, index),
-        SidebarTab::Other(_) => {
+        SidebarTab::Attachments | SidebarTab::Layers | SidebarTab::Other(_) => {
             // PdfCraft's panel, its title row a pane header here (`look::RowLook::Ember`), the
             // Comments panel's cards too.
             if let Some(view) = app.views.get_mut(index) {
