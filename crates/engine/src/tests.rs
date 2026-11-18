@@ -10762,6 +10762,28 @@ fn a_full_rewrite_save_continues_editing_from_the_written_file() {
     assert!(next.starts_with(&saved), "later saves append to the written file instead of rewriting it");
 }
 
+/// #1937 for Margin's background save: a repaired file saved without edits is written in full,
+/// as `save_bytes` writes it, not as the damaged bytes it was opened from.
+#[test]
+fn a_background_save_writes_a_repaired_file_even_without_edits() {
+    let mut damaged = fixture(2);
+    let xref = damaged.windows(5).position(|window| window == b"xref\n").unwrap();
+    damaged.truncate(xref);
+    damaged.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("broken.pdf", None, Arc::new(damaged.clone()), None).unwrap();
+    assert!(!session.get(id).unwrap().repair_log().is_empty(), "the fixture needs repair");
+    assert!(!session.get(id).unwrap().dirty, "a repair is not an edit");
+    let snapshot = session.save_snapshot(id).unwrap();
+    let saved = snapshot.bytes().unwrap();
+    assert_ne!(&saved[..], &damaged[..], "the damaged bytes are not what Save writes");
+    let reopened = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+    let written = snapshot.written(saved);
+    assert_eq!(session.acknowledge_save(snapshot, written, None).unwrap(), SaveAck::Reopened);
+    assert!(session.get(id).unwrap().repair_log().is_empty(), "editing continues from the repaired file");
+}
+
 #[test]
 fn configured_undo_depth_trims_existing_history_and_allows_zero() {
     let (mut session, id) = session_with(1);

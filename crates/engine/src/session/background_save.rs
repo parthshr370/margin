@@ -42,8 +42,11 @@ pub enum SaveAck {
 impl SaveSnapshot {
     /// The file to write: the document as opened plus one incremental revision with every
     /// change, without typed Password-field values (#3926), as [`Session::save_bytes`] writes them.
+    /// A file whose cross-reference data had to be rebuilt is written in full even without edits,
+    /// as [`Session::save_bytes`] does, so the repair reaches the disk (#1937); a signed file,
+    /// which that rule exempts, never gets a snapshot.
     pub fn bytes(&self) -> Result<Arc<Vec<u8>>, EditError> {
-        let Some(cos) = self.cos.as_ref().filter(|cos| cos.is_modified()) else { return Ok(self.bytes.clone()) };
+        let Some(cos) = self.cos.as_ref().filter(|cos| needs_writing(cos)) else { return Ok(self.bytes.clone()) };
         let cos = writable(cos)?;
         guard(|| write_incremental(&cos, &self.options)).map_err(EditError::Write)?.map(Arc::new).map_err(|err| EditError::Write(err.to_string()))
     }
@@ -63,9 +66,15 @@ impl SaveSnapshot {
         let rewrote = self
             .cos
             .as_ref()
-            .is_some_and(|cos| cos.is_modified() && (cos.revisions().is_empty() || cos.encryption_changed() || cos.full_save_required()));
+            .is_some_and(|cos| needs_writing(cos) && (cos.revisions().is_empty() || cos.encryption_changed() || cos.full_save_required()));
         SavedFile { bytes, rewrote }
     }
+}
+
+/// Whether a snapshot of `cos` writes anything but the file as opened: it was edited, or it was
+/// repaired when opened (#1937).
+fn needs_writing(cos: &pdfcraft_cos::Document) -> bool {
+    cos.is_modified() || cos.reconstructed()
 }
 
 impl Session {
