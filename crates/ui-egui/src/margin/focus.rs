@@ -43,7 +43,7 @@ struct Session {
 /// The bar over the full-screen page. Call every full-screen frame.
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     motion::sync(ctx, app.margin_keys.settings().ui.reduce_motion);
-    let id = egui::Id::new("margin-focus");
+    let id = egui::Id::unique("margin-focus");
     let (now, frame) = (ctx.input(|i| i.time), ctx.cumulative_frame_nr());
     let session = ctx
         .data(|d| d.get_temp::<Session>(id))

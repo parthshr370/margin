@@ -116,7 +116,7 @@ pub(crate) fn show(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, marks: &Ma
     let painter = ui.painter();
     painter.hline(rect.left()..=knob, y, Stroke::new(2.0, t.accent));
     painter.circle_filled(pos2(knob, y), egui::lerp(KNOB_RADIUS..=KNOB_RADIUS_HOVER, grown), t.accent);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, format!("Page {} of {pages}", view.current + 1)));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, format!("Page {} of {pages}", view.current + 1)));
     let previewing = resp.hovered() || resp.dragged();
     pointer_page.filter(|_| previewing).map(|page| (resp, page))
 }

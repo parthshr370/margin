@@ -3,7 +3,7 @@ name = "margin"
 description = "Margin: a reader-first PDF app built on PdfCraft's interface"
 # Margin's own release version (tags v<version>, packaging/margin/); the PdfCraft crates it
 # builds on keep the workspace version.
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 
@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
+# PdfCraft's logging.rs, shared by path, dates its log lines with the engine's calendar.
+pdfcraft-engine = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

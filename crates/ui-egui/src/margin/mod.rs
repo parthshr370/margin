@@ -165,21 +165,28 @@ impl ReaderChrome {
     }
 }
 
-/// The sidebar's tabs, in the order of its tab strip; `Other` shows a PdfCraft panel that has no
-/// tab of its own (Signatures, Layers…), opened from the palette.
+/// The sidebar's tabs, in the order of its tab strip; Attachments and Layers show only for a
+/// document that has some ([`SidebarTab::in_strip`]). `Other` shows a PdfCraft panel that has no
+/// tab of its own (Signatures, Form fields…), opened from the palette.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarTab {
     Contents,
     Highlights,
     Pages,
     Bookmarks,
+    Attachments,
+    Layers,
     Find,
     Tools,
     Other(RightPanel),
 }
 
 impl SidebarTab {
+    /// The tabs every document shows.
     pub const STRIP: [Self; 6] = [Self::Contents, Self::Highlights, Self::Pages, Self::Bookmarks, Self::Find, Self::Tools];
+    /// Every tab with a [`Self::key`], in the strip's order.
+    pub const KEYED: [Self; 8] =
+        [Self::Contents, Self::Highlights, Self::Pages, Self::Bookmarks, Self::Attachments, Self::Layers, Self::Find, Self::Tools];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -187,6 +194,8 @@ impl SidebarTab {
             Self::Highlights => "Highlights",
             Self::Pages => "Pages",
             Self::Bookmarks => "Bookmarks",
+            Self::Attachments => "Attachments",
+            Self::Layers => "Layers",
             Self::Find => "Find",
             Self::Tools => "Tools",
             Self::Other(_) => "Panel",
@@ -199,6 +208,8 @@ impl SidebarTab {
             Self::Highlights => "highlighter",
             Self::Pages => "layout-grid",
             Self::Bookmarks => "bookmark",
+            Self::Attachments => "paperclip",
+            Self::Layers => "layers",
             Self::Find => "search",
             Self::Tools => "wrench",
             Self::Other(_) => "panel-left",
@@ -212,6 +223,8 @@ impl SidebarTab {
             Self::Highlights => Some(RightPanel::Comments),
             Self::Pages => Some(RightPanel::Pages),
             Self::Bookmarks => Some(RightPanel::Bookmarks),
+            Self::Attachments => Some(RightPanel::Attachments),
+            Self::Layers => Some(RightPanel::Layers),
             Self::Find => Some(RightPanel::Search),
             Self::Other(p) => Some(p),
             Self::Contents | Self::Tools => None,
@@ -223,6 +236,8 @@ impl SidebarTab {
             RightPanel::Comments => Self::Highlights,
             RightPanel::Pages => Self::Pages,
             RightPanel::Bookmarks => Self::Bookmarks,
+            RightPanel::Attachments => Self::Attachments,
+            RightPanel::Layers => Self::Layers,
             RightPanel::Search => Self::Find,
             other => Self::Other(other),
         }
@@ -235,15 +250,32 @@ impl SidebarTab {
             Self::Highlights => Some("highlights"),
             Self::Pages => Some("pages"),
             Self::Bookmarks => Some("bookmarks"),
+            Self::Attachments => Some("attachments"),
+            Self::Layers => Some("layers"),
             Self::Find => Some("find"),
             Self::Tools => Some("tools"),
             Self::Other(_) => None,
         }
     }
 
-    /// The strip's tab whose [`Self::key`] is `key`.
+    /// The tab whose [`Self::key`] is `key`.
     pub fn from_key(key: &str) -> Option<Self> {
-        Self::STRIP.into_iter().find(|tab| tab.key() == Some(key))
+        Self::KEYED.into_iter().find(|tab| tab.key() == Some(key))
+    }
+
+    /// Whether `doc` has what this tab lists: Attachments and Layers only show for a document
+    /// with embedded files or optional-content layers.
+    pub fn shows_for(self, doc: &pdfcraft_render::DocInfo) -> bool {
+        match self {
+            Self::Attachments => !doc.attachments.is_empty(),
+            Self::Layers => !doc.layers.is_empty(),
+            _ => true,
+        }
+    }
+
+    /// Whether the tab strip shows this tab for `doc` (with no document, the usual tabs).
+    pub fn in_strip(self, doc: Option<&pdfcraft_render::DocInfo>) -> bool {
+        doc.map_or(Self::STRIP.contains(&self), |doc| self.shows_for(doc))
     }
 
     /// The tab the `ui.sidebar.tab` setting names.
@@ -265,11 +297,15 @@ pub(crate) fn apply_defaults(app: &mut PdfCraftApp) {
     app.comments_panel_closed = true;
     // Margin wears its own themes, whatever PdfCraft's light/dark preference says.
     app.theme = crate::theme::ThemeKind::Margin;
+    // Full screen keeps the reader's layout and zoom, only the chrome goes (owner's choice): no
+    // one-page-at-a-time presentation. Saved PdfCraft preferences don't turn it back on.
+    app.view_defaults.full_screen_fill = false;
 }
 
 /// Run a Margin-only action (the keymap's ids): `view.focus_mode.toggle` (also `view.read_mode`),
 /// `view.sidebar.toggle`, `view.sidebar.tab` with `{"tab": "contents" | "highlights" | "pages" |
-/// "bookmarks" | "find" | "tools"}`, `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
+/// "bookmarks" | "attachments" | "layers" | "find" | "tools"}` (attachments and layers only for a
+/// document that has them), `reader.annotate.toggle` (the rail), `reader.bookmark.toggle`
 /// (a page bookmark on the current page), `view.trim.toggle`, the page notes' `note.*` and "Save a
 /// copy with highlights" (`margin::marks`), `reader.export_markdown` (the paper as Markdown),
 /// `app.choose_vault`, the library's `library.open`, `library.search`, `library.import`,
@@ -283,7 +319,9 @@ pub fn run(app: &mut PdfCraftApp, id: &str, args: &serde_json::Value) -> bool {
         "view.sidebar.toggle" => app.margin_chrome.sidebar_open = !app.margin_chrome.sidebar_open,
         "reader.annotate.toggle" => app.margin_chrome.rail_open = !app.margin_chrome.rail_open,
         "view.sidebar.tab" => match args.get("tab").and_then(serde_json::Value::as_str).and_then(SidebarTab::from_key) {
-            Some(tab) => open_tab(app, tab),
+            Some(tab) if active_info(app).is_none_or(|doc| tab.shows_for(doc)) => open_tab(app, tab),
+            // A document without attachments or layers has no such tab: the key says why.
+            Some(tab) => app.notify(format!("This document has no {}.", tab.label().to_lowercase())),
             None => return false,
         },
         // Without a document the key is spent, as PdfCraft's view keys are.
@@ -337,6 +375,11 @@ pub(crate) fn open_tab(app: &mut PdfCraftApp, tab: SidebarTab) {
     chrome.tab = tab;
 }
 
+/// What the active document holds (its outline, attachments, layers…), once it is open.
+pub(crate) fn active_info(app: &PdfCraftApp) -> Option<&pdfcraft_render::DocInfo> {
+    app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|doc| &doc.info)
+}
+
 /// Keep PdfCraft's panel state and the sidebar in step, once per frame before drawing.
 ///
 /// The first frame of a first start opens the sidebar as `ui.sidebar` says. Another document
@@ -380,6 +423,12 @@ pub(crate) fn sync(app: &mut PdfCraftApp) {
             }
             None => chrome.sidebar_open = false,
         }
+    }
+    // A tab this document has nothing for (Attachments, Layers) gives way to Contents.
+    if let Some(info) = doc.and_then(|id| app.session.get(id)).map(|shown| &shown.info)
+        && !chrome.tab.shows_for(info)
+    {
+        chrome.tab = SidebarTab::Contents;
     }
     let wanted = if chrome.sidebar_open { chrome.tab.panel() } else { None };
     chrome.synced_right = wanted;
@@ -426,6 +475,12 @@ pub(crate) fn ui(app: &mut PdfCraftApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 let opacity = ui.opacity();
                 ui.disable();
                 ui.set_opacity(opacity);
+            }
+            // A side-by-side comparison (`doc.compare`) shows both files, as PdfCraft's page
+            // area does; Margin's page overlays are for reading one document.
+            if let Some((old, new)) = crate::compare_ui::side_by_side(app, i) {
+                crate::compare_ui::compare_area(app, old, new, ui);
+                return;
             }
             crate::canvas::document_area(app, i, ui);
             marks::paint(app, ui, i);
@@ -504,7 +559,17 @@ mod tests {
     use pdfcraft_render::OutlineItem;
 
     fn item(title: &str, page: Option<usize>, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page, view: pdfcraft_render::DestView::Top, children, open: false }
+        OutlineItem {
+            title: title.into(),
+            page,
+            view: pdfcraft_render::DestView::Top,
+            action: None,
+            children,
+            open: false,
+            color: None,
+            italic: false,
+            bold: false,
+        }
     }
 
     #[test]

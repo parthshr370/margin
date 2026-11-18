@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use egui::{Align, Align2, Rect, Sense, vec2};
+use egui::{Align, Align2, Color32, Rect, Sense, TextFormat, vec2};
 use pdfcraft_render::{DocInfo, OutlineItem};
 
 use super::look::{self, ROW_PAD};
@@ -73,7 +73,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         empty(ui, t, &["This document has no table of contents.", "Pages and Find still get you around."]);
         return;
     }
-    let tree_id = egui::Id::new(("margin-contents", view.id.0));
+    let tree_id = egui::Id::unique(("margin-contents", view.id.0));
     let mut tree: Tree = ui.data(|d| d.get_temp(tree_id)).unwrap_or_default();
     let pass = ui.ctx().cumulative_pass_nr();
     let history = (view.back.len(), view.back.last().copied());
@@ -187,7 +187,7 @@ impl Rows<'_> {
         let marked = self.current == path.as_slice() || (!open && self.current.starts_with(path));
         let title = item.title.trim();
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, marked, title));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, marked, title));
         look::row_fill(ui, t, rect, &resp, marked);
         if marked {
             self.marked_in_view = ui.clip_rect().contains_rect(rect);
@@ -198,25 +198,34 @@ impl Rows<'_> {
         let left = rect.left() + ROW_PAD / 2.0 + depth * INDENT;
         if !item.children.is_empty() {
             let twisty = Rect::from_center_size(egui::pos2(left + TWISTY / 2.0, rect.center().y), vec2(TWISTY, TWISTY));
-            let click = ui.interact(twisty, ui.id().with(("toc-twisty", path.as_slice())), Sense::click());
+            let click = ui.interact(twisty, ui.scope_id().with(("toc-twisty", path.as_slice())), Sense::click());
             let action = if open { "Collapse" } else { "Expand" };
-            click.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{action} {title}")));
+            click.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{action} {title}")));
             icons::paint(ui, twisty, if open { "chevron-down" } else { "chevron-right" }, 12.0, look::icon_tint(t, false, click.hovered()));
             if look::tooltip(click, action, None).clicked() {
                 self.flip = Some((path.clone(), !open));
             }
         }
         // The page column stays muted, selected or not, against the right edge.
-        let label = item.page.and_then(|p| self.info.pages.get(p)).map(|p| p.label.clone()).unwrap_or_default();
-        let label_width = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), theme::regular(LABEL_TEXT), t.text_muted).size().x);
-        ui.painter().text(rect.right_center() - vec2(ROW_PAD, 0.0), Align2::RIGHT_CENTER, &label, theme::regular(LABEL_TEXT), t.text_muted);
+        let label = item.page.and_then(|page| self.info.pages.get(page)).map_or("", |page| page.label.as_str());
+        let label = ui.painter().layout_no_wrap(label.to_owned(), theme::regular(LABEL_TEXT), t.text_muted);
+        let label_rect = Align2::RIGHT_CENTER.anchor_size(rect.right_center() - vec2(ROW_PAD, 0.0), label.size());
+        ui.painter().galley(label_rect.min, label, t.text_muted);
         let text_left = left + TWISTY + 4.0;
-        let max_width = (rect.right() - ROW_PAD * 2.0 - label_width - text_left).max(0.0);
-        let font = theme::regular(TITLE_TEXT);
-        let title_width = ui.fonts_mut(|f| f.layout_no_wrap(title.to_owned(), font.clone(), t.text).size().x);
-        crate::widgets::row_text(ui, egui::pos2(text_left, rect.center().y), title, font, look::row_text(t, marked, t.text), max_width);
-        // A cut title shows in full on hover.
-        let resp = if title_width > max_width { look::tooltip(resp, title, None) } else { resp };
+        let max_width = (label_rect.left() - ROW_PAD - text_left).max(0.0);
+        let row_fill = look::state_color(t, &resp, marked);
+        let color = title_color(item.color, t.panel.blend(row_fill), look::row_text(t, marked, t.text));
+        let font_id = if item.bold { theme::semibold(TITLE_TEXT) } else { theme::regular(TITLE_TEXT) };
+        let format = TextFormat { font_id, color, italics: item.italic, ..Default::default() };
+        let mut job = egui::text::LayoutJob::single_section(title.to_owned(), format);
+        job.break_on_newline = false;
+        job.direction = egui::epaint::text::TextDirection::LeftToRight;
+        job.wrap = egui::text::TextWrapping::truncate_at_width(max_width);
+        let galley = ui.painter().layout_job(job);
+        let title_rect = Align2::LEFT_CENTER.anchor_size(egui::pos2(text_left, rect.center().y), galley.size());
+        let elided = galley.elided;
+        ui.painter().galley(title_rect.min, galley, color);
+        let resp = if elided { look::tooltip(resp, title, None) } else { resp };
         if resp.clicked()
             && let Some(page) = item.page
         {
@@ -230,6 +239,48 @@ impl Rows<'_> {
             }
         }
     }
+}
+
+/// Keep a PDF title's hue by tinting toward white or shading toward black only as far as needed.
+/// An absent title colour uses the normal Margin text role, including the current section's accent.
+fn title_color(pdf_rgb: Option<[f32; 3]>, background: Color32, default: Color32) -> Color32 {
+    let Some(rgb) = pdf_rgb else { return default };
+    let [red, green, blue] = rgb.map(|channel| (channel * f32::from(u8::MAX)).round() as u8);
+    let original = Color32::from_rgb(red, green, blue);
+    let background = relative_luminance(background) + CONTRAST_OFFSET;
+    let readable = |color| {
+        let foreground = relative_luminance(color) + CONTRAST_OFFSET;
+        foreground.max(background) >= TEXT_CONTRAST * foreground.min(background)
+    };
+    if readable(original) {
+        return original;
+    }
+    let white_contrast = (1.0 + CONTRAST_OFFSET) / background;
+    let black_contrast = background / CONTRAST_OFFSET;
+    let endpoint = if white_contrast >= black_contrast { Color32::WHITE } else { Color32::BLACK };
+
+    // Search the quantized sRGB ramp so the final painted colour meets the contrast target.
+    let tint = |blend| original.lerp_to_gamma(endpoint, f32::from(blend) / f32::from(u8::MAX));
+    let (mut low, mut high) = (0, u8::MAX);
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if readable(tint(mid)) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    tint(high)
+}
+
+/// WCAG AA for normal-sized text.
+const TEXT_CONTRAST: f32 = 4.5;
+const CONTRAST_OFFSET: f32 = 0.05;
+
+/// WCAG relative luminance from linear sRGB.
+fn relative_luminance(color: Color32) -> f32 {
+    let linear = egui::Rgba::from(color);
+    0.2126 * linear.r() + 0.7152 * linear.g() + 0.0722 * linear.b()
 }
 
 /// The last section start at or before the reading line, including starts on the
@@ -269,4 +320,46 @@ pub fn current_section_at(info: &pdfcraft_render::DocInfo, spot: reading::Spot, 
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DARK_PANEL: Color32 = Color32::from_gray(0x26);
+    const LIGHT_PANEL: Color32 = Color32::from_gray(0xfa);
+    const PDF_RED: [f32; 3] = [1.0, 0.0, 0.0];
+
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let (a, b) = (relative_luminance(a) + 0.05, relative_luminance(b) + 0.05);
+        a.max(b) / a.min(b)
+    }
+
+    #[test]
+    fn a_black_title_lightens_on_a_dark_panel() {
+        let title = title_color(Some([0.0; 3]), DARK_PANEL, Color32::WHITE);
+        assert!(title.r() > DARK_PANEL.r());
+        assert_eq!([title.g(), title.b()], [title.r(); 2]);
+        assert!(contrast(title, DARK_PANEL) >= 4.5);
+    }
+
+    #[test]
+    fn red_keeps_its_hue_and_reaches_readable_contrast_on_both_themes() {
+        let on_dark = title_color(Some(PDF_RED), DARK_PANEL, Color32::WHITE);
+        assert_eq!(on_dark.r(), u8::MAX);
+        assert!(on_dark.g() > 0);
+        assert_eq!(on_dark.g(), on_dark.b());
+        assert!(contrast(on_dark, DARK_PANEL) >= 4.5);
+
+        let on_light = title_color(Some(PDF_RED), LIGHT_PANEL, Color32::BLACK);
+        assert!((0..u8::MAX).contains(&on_light.r()));
+        assert_eq!([on_light.g(), on_light.b()], [0; 2]);
+        assert!(contrast(on_light, LIGHT_PANEL) >= 4.5);
+    }
+
+    #[test]
+    fn readable_pdf_color_and_default_text_are_kept() {
+        assert_eq!(title_color(Some(PDF_RED), Color32::BLACK, Color32::WHITE), Color32::RED);
+        assert_eq!(title_color(None, DARK_PANEL, Color32::LIGHT_GRAY), Color32::LIGHT_GRAY);
+    }
 }

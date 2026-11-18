@@ -350,11 +350,11 @@ mod tests {
         for os in [Os::Linux, Os::Windows, Os::Macos] {
             let compiled = compile_shipped(&registry, &CompileOptions { os, ..options() });
             for spec in COMMANDS {
-                let Some(shortcut) = &spec.shortcut else { continue };
+                let Some(shortcut) = spec.shortcut_for(os == Os::Macos) else { continue };
                 if compiled.pdfcraft_ignored.get(spec.id).is_some_and(|reason| !reason.trim().is_empty()) {
                     continue;
                 }
-                let keys = keystroke::canonical_chord(&zed_keystroke(shortcut), os).unwrap();
+                let keys = keystroke::canonical_chord(&zed_keystroke(&shortcut), os).unwrap();
                 let bound = compiled.keymap.bindings.iter().any(|b| b.keys == keys && b.command.as_deref() == Some(spec.id));
                 assert!(bound, "{os:?}: PdfCraft {} ({}) is neither bound nor in $pdfcraft_ignored", spec.id, shortcut.label(os == Os::Macos));
             }

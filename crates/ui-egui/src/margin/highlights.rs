@@ -31,7 +31,7 @@ use egui::{Align, Color32, Layout, Rect, Sense, Stroke, UiBuilder, Vec2, vec2};
 use margin_config::marks as records;
 use margin_config::{HighlightStyle, Locator};
 use pdfcraft_engine::{Edit, Markup, NewAnnotation, Shape};
-use pdfcraft_render::{Annotation, DocInfo, PageText};
+use pdfcraft_render::{Annotation, DocInfo, PageText, pretty_date};
 use serde_json::Value;
 
 use super::look::{self, BUTTON_HEIGHT, ColorDot, GAP, GAP_LARGE};
@@ -261,6 +261,8 @@ struct Source {
     marks: u64,
     quotes: usize,
     palette: u64,
+    /// The reader's UTC offset the dates were shown in (it changes with daylight saving).
+    utc_offset: i64,
 }
 
 /// The Highlights tab's list of one document: the filter, the gathered rows, the cards shown and
@@ -303,10 +305,20 @@ fn palette_key(notes: &Notes) -> u64 {
     })
 }
 
-/// A date as cards compare and show it: PdfCraft's "2026-10-10 12:30", or a sidecar's RFC 3339
-/// "2026-10-10T12:30:00Z" made the same.
-fn card_date(date: &str) -> String {
-    date.replacen('T', " ", 1).chars().take(DATE_CHARS).collect()
+/// A date as cards compare and show it, "2026-10-10 12:30". An instant (a PDF `/M` that says its
+/// zone, a sidecar's RFC 3339 time) is shown in the reader's local time, `utc_offset` seconds east
+/// of UTC; any other date as written (a PDF date without a zone is already someone's local time).
+fn card_date(written: &str, instant: Option<i64>, utc_offset: i64) -> String {
+    match instant {
+        Some(secs) => pretty_date(&pdfcraft_cos::pdf_date(secs.saturating_add(utc_offset))),
+        None => written.replacen('T', " ", 1).chars().take(DATE_CHARS).collect(),
+    }
+}
+
+/// [`card_date`] of a sidecar's RFC 3339 time ("2026-10-10T12:30:00Z").
+fn sidecar_date(written: &str, utc_offset: i64) -> String {
+    let instant = chrono::DateTime::parse_from_rfc3339(written).ok().map(|time| time.timestamp());
+    card_date(written, instant, utc_offset)
 }
 
 /// The palette index of `rgb`.
@@ -343,7 +355,7 @@ fn markup_subtype(subtype: &str) -> &'static str {
 }
 
 /// Gather every card's row of a document, in reading order.
-fn gather(info: &DocInfo, quotes: &Quotes, marks: &Marks, notes: &Notes) -> Vec<Row> {
+fn gather(info: &DocInfo, quotes: &Quotes, marks: &Marks, notes: &Notes, utc_offset: i64) -> Vec<Row> {
     let mut rows = Vec::new();
     for a in info.annotations.iter().filter(|a| obsidian::is_markup(a)) {
         let quote = quotes.text.get(&(a.page, a.index)).cloned().unwrap_or_default();
@@ -365,7 +377,7 @@ fn gather(info: &DocInfo, quotes: &Quotes, marks: &Marks, notes: &Notes) -> Vec<
             haystack: haystack(&quote, note.as_deref()),
             quote,
             note,
-            date: a.modified.as_deref().map(card_date),
+            date: a.modified.as_deref().map(|written| card_date(written, a.modified_unix, utc_offset)),
             flash: a.rect,
             locked: a.locked,
             kind_refused: kind_change_refused(info, a),
@@ -392,7 +404,7 @@ fn gather(info: &DocInfo, quotes: &Quotes, marks: &Marks, notes: &Notes) -> Vec<
             haystack: haystack(&quote, h.note.as_deref()),
             quote,
             note: h.note.clone(),
-            date: Some(card_date(h.modified.as_deref().unwrap_or(&h.created))),
+            date: Some(sidecar_date(h.modified.as_deref().unwrap_or(&h.created), utc_offset)),
             flash: marks::user_rect(info_page, h).unwrap_or_default(),
             locked: false,
             kind_refused: None,
@@ -412,7 +424,7 @@ fn gather(info: &DocInfo, quotes: &Quotes, marks: &Marks, notes: &Notes) -> Vec<
             haystack: haystack("", Some(&n.text)),
             quote: String::new(),
             note: Some(n.text.clone()),
-            date: Some(card_date(n.modified.as_deref().unwrap_or(&n.created))),
+            date: Some(sidecar_date(n.modified.as_deref().unwrap_or(&n.created), utc_offset)),
             flash: marks::note_user_rect(info_page, n),
             locked: false,
             kind_refused: None,
@@ -549,16 +561,22 @@ impl CardInput<'_> {
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: usize, empty_lines: &[&str]) -> Option<Nav> {
     let keys = Keys::of(app);
     let this_year = app.session.today().0;
+    let utc_offset = app.session.local_offset();
     let palette = palette_key(&app.notes);
     let view = app.views.get_mut(index)?;
     let doc = app.session.get(view.id)?;
     let info = &doc.info;
     view.margin.quotes.refresh(doc.edit_generation(), info, &view.texts);
     let mut list = std::mem::take(&mut view.margin.list);
-    let source =
-        Source { edit_generation: doc.edit_generation(), marks: view.margin.marks.generation(), quotes: view.margin.quotes.text.len(), palette };
+    let source = Source {
+        edit_generation: doc.edit_generation(),
+        marks: view.margin.marks.generation(),
+        quotes: view.margin.quotes.text.len(),
+        palette,
+        utc_offset,
+    };
     if list.source != Some(source) {
-        list.rows = gather(info, &view.margin.quotes, &view.margin.marks, &app.notes);
+        list.rows = gather(info, &view.margin.quotes, &view.margin.marks, &app.notes, utc_offset);
         list.source = Some(source);
         list.shown_for = None;
     }
@@ -629,10 +647,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         match action {
             MarkAction::Color(id, i) => {
                 if let Some(rgb) = app.notes.colors.get(i).map(obsidian::NoteColor::rgb_f64) {
-                    marks::recolor(app, index, &id, rgb);
+                    marks::recolor(app, index, std::slice::from_ref(&id), rgb);
                 }
             }
-            MarkAction::Style(id, style) => marks::restyle(app, index, &id, style),
+            MarkAction::Style(id, style) => marks::restyle(app, index, std::slice::from_ref(&id), style),
             MarkAction::Delete(pick) => marks::delete(app, index, &pick),
             MarkAction::SaveNote(pick, text) => marks::set_note(app, index, &pick, text),
         }
@@ -662,7 +680,7 @@ fn must_draw(view: &DocView, entry: &Entry) -> bool {
 /// right while a filter is on) and the filter button, on one compact row that never changes
 /// height.
 fn controls(ui: &mut egui::Ui, t: &Tokens, list: &mut List, notes: &Notes) {
-    let id = egui::Id::new("margin-highlights-search");
+    let id = egui::Id::unique("margin-highlights-search");
     let filtering = !list.filter.query.trim().is_empty() || list.filter.narrows();
     let shown = filtering.then(|| {
         list.shown_for.as_ref().filter(|shown| **shown == list.filter).map_or_else(|| select(&list.rows, &list.filter).len(), |_| list.shown.len())
@@ -745,7 +763,7 @@ fn filter_menu(ui: &mut egui::Ui, t: &Tokens, filter: &mut Filter, notes: &Notes
 /// nothing as it appears and shrinks away when it goes (`look::collapsible`), so the list under
 /// it slides instead of jumping. `true` when Save was pressed.
 fn draft(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut DocView) -> bool {
-    let editor_id = egui::Id::new("margin-new-page-note");
+    let editor_id = egui::Id::unique("margin-new-page-note");
     let open = view.margin.marks.draft.is_some();
     let outcome = look::collapsible(ui, editor_id.with("margin-draft-card"), open, |ui| {
         // While it slides away the note is gone: an empty card shrinks.
@@ -793,7 +811,7 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str, args: &Value) -> bool {
     if let Some(pick) = app.views.get(index).and_then(|view| view.margin.marks.selected.clone()) {
         match (id, pick, color) {
             (DELETE_ID, pick, _) => marks::delete(app, index, &pick),
-            (_, Pick::Highlight(mark), Some(rgb)) => marks::recolor(app, index, &mark, rgb),
+            (_, Pick::Highlight(mark), Some(rgb)) => marks::recolor(app, index, std::slice::from_ref(&mark), rgb),
             (_, Pick::Highlight(_), None) => app.notify(format!("{COLOR_ID}: no colour named \"{wanted}\" in notes.colors")),
             (_, Pick::Note(_), _) => {}
         }
@@ -883,47 +901,64 @@ fn kind_change_refused(info: &DocInfo, a: &Annotation) -> Option<&'static str> {
 /// that kind already). Refused, with a message, when the PDF takes no comment changes or the
 /// mark has replies or is locked.
 pub(crate) fn change_kind(app: &mut PdfCraftApp, i: usize, page: usize, index: usize, kind: Markup) -> Option<usize> {
+    change_kinds(app, i, &[(page, index)], kind)?.first().map(|(_, new)| *new)
+}
+
+/// [`change_kind`] for marks on different pages (a highlight across pages) together, as one undo
+/// step. Returns each mark's `(page, index)` after the change, in order; the first is selected.
+pub(crate) fn change_kinds(app: &mut PdfCraftApp, i: usize, marks: &[(usize, usize)], kind: Markup) -> Option<Vec<(usize, usize)>> {
     let (subtype, tool) = kind_parts(kind)?;
     let doc = app.session.get(app.views.get(i)?.id)?;
-    let a = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && obsidian::is_markup(a))?;
-    if a.subtype == subtype {
-        return Some(index);
+    let mut edits = Vec::new();
+    let mut changed = Vec::with_capacity(marks.len());
+    for &(page, index) in marks {
+        let a = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && obsidian::is_markup(a))?;
+        if a.subtype == subtype {
+            changed.push(false);
+            continue;
+        }
+        other_kind(a)?;
+        if !doc.allows_annotation() {
+            app.notify(NOT_ALLOWED);
+            return None;
+        }
+        if let Some(why) = kind_change_refused(&doc.info, a) {
+            let message = format!("Can't change this {}: {why}.", kind_label(a).to_lowercase());
+            app.notify(message);
+            return None;
+        }
+        let mut style = app.comment_prefs.style(tool);
+        if let Some(color) = a.color {
+            style.color = color.map(f64::from);
+        }
+        let mark = NewAnnotation {
+            page,
+            shape: Shape::TextMarkup { kind, quads: a.quads.iter().map(|quad| quad.map(f64::from)).collect() },
+            style,
+            contents: a.contents.clone().unwrap_or_default(),
+            author: a.author.clone().unwrap_or_else(|| app.comment_prefs.author.clone()),
+        };
+        edits.extend([Edit::DeleteAnnotation { page, index }, Edit::AddAnnotation(mark)]);
+        changed.push(true);
     }
-    other_kind(a)?;
-    if !doc.allows_annotation() {
-        app.notify(NOT_ALLOWED);
+    if edits.is_empty() {
+        return Some(marks.to_vec());
+    }
+    if !app.apply_edit(Edit::Batch { label: format!("Change to {}", subtype.to_lowercase()), edits }) {
         return None;
     }
-    if let Some(why) = kind_change_refused(&doc.info, a) {
-        let message = format!("Can't change this {}: {why}.", kind_label(a).to_lowercase());
-        app.notify(message);
-        return None;
-    }
-    let mut style = app.comment_prefs.style(tool);
-    if let Some(color) = a.color {
-        style.color = color.map(f64::from);
-    }
-    let mark = NewAnnotation {
-        page,
-        shape: Shape::TextMarkup { kind, quads: a.quads.iter().map(|quad| quad.map(f64::from)).collect() },
-        style,
-        contents: a.contents.clone().unwrap_or_default(),
-        author: a.author.clone().unwrap_or_else(|| app.comment_prefs.author.clone()),
-    };
-    let edit = Edit::Batch {
-        label: format!("Change to {}", subtype.to_lowercase()),
-        edits: vec![Edit::DeleteAnnotation { page, index }, Edit::AddAnnotation(mark)],
-    };
-    if !app.apply_edit(edit) {
-        return None;
-    }
-    // Added last, so the page's last comment.
+    // A changed mark is added last, so its page's last comment.
     let view = app.views.get_mut(i)?;
     let doc = app.session.get(view.id)?;
-    let new = doc.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max()?;
-    view.comments.selected = Some((page, new));
+    let last_on = |page: usize| doc.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max();
+    let now: Vec<(usize, usize)> = marks
+        .iter()
+        .zip(changed)
+        .map(|(&(page, index), changed)| Some((page, if changed { last_on(page)? } else { index })))
+        .collect::<Option<_>>()?;
+    view.comments.selected = now.first().copied();
     view.comments.reveal = true;
-    Some(new)
+    Some(now)
 }
 
 /// Whether `entry` is the selected mark of `view`.
@@ -990,7 +1025,7 @@ fn card(ui: &mut egui::Ui, input: &CardInput<'_>, view: &mut DocView, out: &mut 
         Entry::Mark(Pick::Note(_)) => format!("Page note, p. {}: {}", input.page_label, row.note.as_deref().unwrap_or_default()),
         _ => format!("{colour} {}, p. {}: {}", row.label.to_lowercase(), input.page_label, row.quote),
     };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     resp.context_menu(|ui| {
         if let Some(picked) = menu(ui, input) {
             action = Some(picked);
@@ -1085,7 +1120,7 @@ fn meta_row(ui: &mut egui::Ui, input: &CardInput<'_>, actions_shown: f32) -> Opt
             let (rect, swatch) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
             if row.subtype != NOTE_SUBTYPE {
                 let colour = color_name(input.shared.notes, row.color);
-                swatch.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Colour: {colour}")));
+                swatch.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("Colour: {colour}")));
                 let edge = Stroke::new(1.0, Color32::from_black_alpha(SWATCH_EDGE_ALPHA));
                 ui.painter().circle(rect.center(), SWATCH / 2.0, shown_color(input.shared.notes, row.color), edge);
             }
@@ -1164,7 +1199,7 @@ fn actions(ui: &mut egui::Ui, input: &CardInput<'_>) -> Option<Action> {
             ui.add_space(ACTION);
         } else {
             let colour = look::color_button(ui, ACTION, shown_color(input.shared.notes, row.color), "Change colour", None);
-            look::popover(&colour, egui::Id::new(("margin-highlight-colour", &row.entry))).show(|ui| {
+            look::popover(&colour, egui::Id::unique(("margin-highlight-colour", &row.entry))).show(|ui| {
                 if let Some(i) = color_row(ui, input) {
                     action = Some(Action::Color(i));
                 }
@@ -1273,7 +1308,7 @@ fn body(ui: &mut egui::Ui, input: &CardInput<'_>, selected: bool, editing: bool)
         return;
     }
     if !quote.is_empty() {
-        let expanded_id = ui.id().with("margin-quote-expanded");
+        let expanded_id = ui.scope_id().with("margin-quote-expanded");
         let expanded = ui.data(|d| d.get_temp::<bool>(expanded_id)).unwrap_or(false);
         let rows = if expanded { usize::MAX } else { QUOTE_ROWS };
         let color = look::row_text(t, selected, t.text);
@@ -1413,6 +1448,34 @@ mod tests {
         }
     }
 
+    /// 2026-11-18 18:43:00 UTC, which is 00:13 on 19 November in India (UTC+05:30).
+    const EVENING_UTC: i64 = 1_795_027_380;
+    const IST_EAST: i64 = 5 * 3600 + 30 * 60;
+
+    #[test]
+    fn card_dates_are_local_when_the_instant_is_known() {
+        let session = pdfcraft_engine::Session::new().with_wall_clock(|| EVENING_UTC, || IST_EAST);
+        let (offset, this_year) = (session.local_offset(), session.today().0);
+        assert_eq!(session.today(), (2026, 11, 19));
+        // PdfCraft writes `/M` in UTC: the card shows the reader's day and time.
+        let utc = "D:20261118184300Z";
+        let shown = card_date(&pretty_date(utc), pdfcraft_render::pdf_date_unix(utc), offset);
+        assert_eq!(shown, "2026-11-19 00:13");
+        assert_eq!(short_date(&shown, this_year).as_deref(), Some("19 Nov"));
+        // The same instant written with its zone by another producer.
+        let ist = "D:20261119001300+05'30'";
+        assert_eq!(card_date(&pretty_date(ist), pdfcraft_render::pdf_date_unix(ist), offset), "2026-11-19 00:13");
+        // No zone: someone's local time, shown as written.
+        let unzoned = "D:20261118184300";
+        let shown = card_date(&pretty_date(unzoned), pdfcraft_render::pdf_date_unix(unzoned), offset);
+        assert_eq!(shown, "2026-11-18 18:43");
+        assert_eq!(short_date(&shown, this_year).as_deref(), Some("18 Nov"));
+        // Sidecar times are RFC 3339 with their zone.
+        assert_eq!(sidecar_date("2026-11-18T18:43:00Z", offset), "2026-11-19 00:13");
+        assert_eq!(sidecar_date("2026-11-19T00:13:00+05:30", 0), "2026-11-18 18:43");
+        assert_eq!(sidecar_date("2026-11-18 18:43", offset), "2026-11-18 18:43", "not RFC 3339: as written");
+    }
+
     fn row(entry: Entry, page: usize, subtype: &'static str, palette: Option<usize>, quote: &str, note: Option<&str>, date: &str) -> Row {
         Row {
             entry,
@@ -1424,7 +1487,7 @@ mod tests {
             palette,
             quote: quote.to_owned(),
             note: note.map(str::to_owned),
-            date: Some(card_date(date)),
+            date: Some(card_date(date, None, 0)),
             flash: [0.0; 4],
             locked: false,
             kind_refused: None,

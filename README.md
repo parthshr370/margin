@@ -85,9 +85,11 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 - **Layouts**: Scroll, Single and Two-up, fit to width, page or reading width.
 - **Trim margins** automatically or by hand, without changing the PDF.
 - **Back after a jump**, from links, the outline, search or the scrubber.
-- **Focus mode** (<kbd>F</kbd>) and **full screen** (<kbd>Ctrl</kbd>+<kbd>L</kbd>).
+- **Focus mode** (<kbd>F</kbd>) and **full screen** (<kbd>Ctrl</kbd>+<kbd>L</kbd>), which keeps your layout and zoom.
 - **Tabs** for several documents, each keeping its own place.
-- **Sidebar**: Contents, Highlights, Pages, Bookmarks, Find and Tools.
+- **Sidebar**: Contents, Highlights, Pages, Bookmarks, Find and Tools, plus Attachments and Layers for a PDF that has them.
+- **Compare with…** shows two versions side by side, and **Word Count…** counts a document's words (both in the document menu).
+- **Contents** keeps the PDF outline's bold and italic titles and adjusts their colours for the theme.
 - **OCR** for scanned pages, run locally.
 - **Live reload** when another program rewrites the file.
 - **SyncTeX** jumps between source and PDF (see [LaTeX](#latex-and-synctex)).
@@ -96,7 +98,7 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 
 ### Highlights and notes
 
-- **Selection bar**: copy, four colours, underline, comment and copy as callout.
+- **Selection bar**: copy, four colours, underline, comment and copy as callout, also for text selected across a page break (one mark per page, one undo).
 - **Real annotations**: highlights, underlines, notes, ink, text boxes and shapes.
 - **Read-only PDFs** keep highlights in a sidecar; **Save a copy with highlights** writes them in.
 - **Page notes** (<kbd>Shift</kbd>+<kbd>N</kbd>) and **bookmarks** (<kbd>B</kbd>).
@@ -373,7 +375,7 @@ from your keymap. On macOS the menu bar shows each command's <kbd>Cmd</kbd> shor
 | Scroll a line | <kbd>J</kbd> / <kbd>K</kbd>, <kbd>↓</kbd> / <kbd>↑</kbd> (in Single, <kbd>J</kbd> / <kbd>K</kbd> turn the page) |
 | Scroll a screen | <kbd>Space</kbd> / <kbd>Shift</kbd>+<kbd>Space</kbd>, <kbd>PgDn</kbd> / <kbd>PgUp</kbd> |
 | Next / previous page | <kbd>→</kbd> / <kbd>←</kbd> |
-| First / last page | <kbd>Home</kbd> / <kbd>End</kbd> |
+| Start / end of document | <kbd>Home</kbd> / <kbd>End</kbd> |
 | Go to page | <kbd>G</kbd> |
 | Back / forward | <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd>, <kbd>Ctrl</kbd>+<kbd>[</kbd> / <kbd>Ctrl</kbd>+<kbd>]</kbd> |
 | Zoom in / out / 100% | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
@@ -392,7 +394,7 @@ from your keymap. On macOS the menu bar shows each command's <kbd>Cmd</kbd> shor
 | With text selected: highlight, underline, strikethrough, squiggly | <kbd>H</kbd>, <kbd>U</kbd>, <kbd>S</kbd>, <kbd>Q</kbd> |
 | With text or a mark selected: Yellow, Red, Note, Important | <kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd>, <kbd>4</kbd> |
 | Delete the selected mark | <kbd>Delete</kbd> or <kbd>Backspace</kbd> |
-| In annotate mode: select, snapshot, highlight, underline, strikethrough, squiggly, note, pen, text box, rectangle, eraser | <kbd>V</kbd> <kbd>C</kbd> <kbd>H</kbd> <kbd>U</kbd> <kbd>S</kbd> <kbd>Q</kbd> <kbd>N</kbd> <kbd>P</kbd> <kbd>T</kbd> <kbd>R</kbd> <kbd>E</kbd> |
+| In annotate mode: select, snapshot, highlight, freehand highlight, underline, strikethrough, squiggly, note, pen, text box, rectangle, eraser | <kbd>V</kbd> <kbd>C</kbd> <kbd>H</kbd> <kbd>M</kbd> <kbd>U</kbd> <kbd>S</kbd> <kbd>Q</kbd> <kbd>N</kbd> <kbd>P</kbd> <kbd>T</kbd> <kbd>R</kbd> <kbd>E</kbd> |
 | Undo / redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
 | Save / save as | <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
 | Print | <kbd>Ctrl</kbd>+<kbd>P</kbd> |

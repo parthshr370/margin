@@ -73,7 +73,7 @@ fn current(h: &Harness<'static, PdfCraftApp>) -> Option<usize> {
 }
 
 fn field_focused(h: &Harness<'static, PdfCraftApp>) -> bool {
-    h.ctx.memory(|m| m.focused()) == Some(egui::Id::new("find-input"))
+    h.ctx.memory(|m| m.focused()) == Some(egui::Id::unique("find-input"))
 }
 
 #[test]

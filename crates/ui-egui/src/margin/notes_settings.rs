@@ -3,10 +3,16 @@
 //! writes `settings.jsonc` (`library.folders`, `notes.*`) through the comment-keeping edit, and
 //! the setting applies at once. Uses the window's row layout from its parent module.
 
+use egui::{RichText, Vec2, vec2};
 use margin_config::settings::{ExportTarget, NoteUpdateMode, Notes as NotesConfig};
 
-use super::*;
+use super::{
+    CHEVRON_SIZE, CONTROL_HEIGHT, DESCRIPTION_SIZE, DROPDOWN_WIDTH, FIELD_TEXT, NAME_GAP, NAME_SIZE, ROW_PAD_Y, RowText, field_style, row, section,
+};
+use crate::PdfCraftApp;
+use crate::margin::look::{self, ButtonSize};
 use crate::margin::{obsidian, welcome};
+use crate::theme::{self, Tokens};
 
 /// The Save button beside a template field.
 const TEMPLATE_SAVE_WIDTH: f32 = 56.0;
@@ -102,7 +108,7 @@ fn export_target_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, 
     let current = app.notes.config.export_target;
     let mut selected = current;
     let chevron = t.icon;
-    let dropdown = egui::ComboBox::from_id_salt("notes-export-target")
+    let dropdown = craft_ui::ComboBox::from_id_salt("notes-export-target")
         .width(DROPDOWN_WIDTH)
         .icon(move |ui, rect, _, _| crate::icons::paint(ui, rect, "chevron-down", CHEVRON_SIZE, chevron))
         .selected_text(RichText::new(export_target_name(current)).font(theme::regular(FIELD_TEXT)).color(t.text))
@@ -113,7 +119,7 @@ fn export_target_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, 
                 }
             }
         });
-    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
+    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), name));
     if selected != current {
         let mut config = app.notes.config.clone();
         config.export_target = selected;
@@ -133,7 +139,7 @@ fn update_mode_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, na
     let current = app.notes.config.update_mode;
     let mut selected = current;
     let chevron = t.icon;
-    let dropdown = egui::ComboBox::from_id_salt("notes-update-mode")
+    let dropdown = craft_ui::ComboBox::from_id_salt("notes-update-mode")
         .width(DROPDOWN_WIDTH)
         .icon(move |ui, rect, _, _| crate::icons::paint(ui, rect, "chevron-down", CHEVRON_SIZE, chevron))
         .selected_text(RichText::new(update_mode_name(current)).font(theme::regular(FIELD_TEXT)).color(t.text))
@@ -144,7 +150,7 @@ fn update_mode_dropdown(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, na
                 }
             }
         });
-    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
+    dropdown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), name));
     if selected != current {
         let mut config = app.notes.config.clone();
         config.update_mode = selected;
@@ -243,7 +249,7 @@ struct TemplateDraft {
 
 /// Where `setting`'s draft lives in egui's memory: one id for the field and for Done's save.
 fn template_draft_id(setting: NotesTextSetting) -> egui::Id {
-    egui::Id::new(("margin-notes-template-draft", setting.id()))
+    egui::Id::unique(("margin-notes-template-draft", setting.id()))
 }
 
 /// Done in the Settings window: saves every template field with unsaved text, as its own Save

@@ -344,3 +344,70 @@ fn bookmarks_keep_their_spot_take_a_name_and_say_when_full() {
     let message = reading::BookmarkToggle::Full.message(1);
     assert!(message.starts_with("Can't bookmark page 1") && !message.contains("Removed"), "{message}");
 }
+
+/// A highlight dragged across a page break on a read-only PDF: the engine's one edit for both
+/// pages goes to the sidecar as one mark per page, in one undo step, and the PDF stays clean.
+#[test]
+fn a_highlight_across_pages_on_a_read_only_pdf_stays_in_the_sidecar() {
+    const BROWN: usize = 10;
+    const OVER: usize = 31;
+    let place = Place::new("read-only-across");
+    place.read_only();
+    let mut h = harness(&place);
+    h.state_mut().set_option("quick", "highlight").unwrap();
+    h.run_steps(2);
+    let (from, to) = {
+        let view = &h.state().views[0];
+        (view.glyph_screen_pos(0, BROWN).expect("page 1's text"), view.glyph_screen_pos(1, OVER).expect("page 2's text"))
+    };
+    drag(&mut h, from, to);
+    let id = h.state().views[0].id;
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.info.annotations.is_empty(), "nothing goes into the PDF");
+    assert!(!doc.dirty, "the PDF is not changed");
+    let kept = marks::sidecar_highlights(&h.state().views[0]);
+    let mut pages: Vec<u32> = kept
+        .iter()
+        .filter_map(|highlight| match highlight.locator {
+            margin_config::Locator::Pdf { page, .. } => Some(page),
+            _ => None,
+        })
+        .collect();
+    pages.sort_unstable();
+    assert_eq!(pages, [0, 1], "one sidecar mark per page");
+
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(sidecar_highlights(&h), 0, "one undo takes back both pages' marks");
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    assert_eq!(sidecar_highlights(&h), 2);
+}
+
+/// The selection bar's colour on a selection across pages of a read-only PDF: one sidecar mark
+/// per page, recoloured together, each undone in one step.
+#[test]
+fn the_bar_marks_a_selection_across_pages_in_the_sidecar() {
+    const BROWN: usize = 10;
+    const OVER_END: usize = 31;
+    let place = Place::new("read-only-bar-across");
+    place.read_only();
+    let mut h = harness(&place);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().views[0].select_text_across((0, BROWN), (1, OVER_END));
+    h.run_steps(3);
+    h.get_by_label("Yellow").click();
+    h.run_steps(3);
+    assert_eq!(sidecar_highlights(&h), 2, "one mark per page");
+    h.get_by_label("Red").click();
+    h.run_steps(3);
+    assert_eq!(sidecar_highlights(&h), 2, "a colour restyles them");
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(sidecar_highlights(&h), 2, "the first undo takes back the colour");
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(sidecar_highlights(&h), 0, "the next both marks");
+    let id = h.state().views[0].id;
+    assert!(!h.state().session.get(id).unwrap().dirty);
+}

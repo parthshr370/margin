@@ -244,6 +244,29 @@ fn page_keys_follow_the_layout() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[test]
+fn end_shows_the_bottom_of_the_last_page() {
+    const PAGES: usize = 3;
+    const TALL_PAGE_POINTS: u32 = 1600;
+    let dir = config_dir("document-end");
+    let mut h = harness_with(&dir, pdf_sized(PAGES, TALL_PAGE_POINTS, ""));
+    h.state_mut().views[0].set_zoom(1.0);
+    h.run_steps(3);
+
+    press(&mut h, Key::End);
+
+    let view = &h.state().views[0];
+    assert_eq!(view.current, PAGES - 1);
+    let last = view.page_screen_rect(PAGES - 1).expect("the last page is on screen");
+    let viewport = view.viewport_rect();
+    assert!(last.height() > viewport.height(), "jumping to the top would hide the bottom");
+    assert!(
+        (viewport.top()..=viewport.bottom() + SAME_SPOT).contains(&last.bottom()),
+        "End should bring the bottom edge of the page {last:?} into the viewport {viewport:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// What the page field shows (between frames PdfCraft's canvas leaves the page number in
 /// `DocView::page_input`; Margin's field shows the label).
 fn page_field_text(h: &Harness<'static, PdfCraftApp>) -> String {
@@ -251,7 +274,7 @@ fn page_field_text(h: &Harness<'static, PdfCraftApp>) -> String {
 }
 
 fn page_field_focused(h: &Harness<'static, PdfCraftApp>) -> bool {
-    h.ctx.memory(|m| m.has_focus(egui::Id::new("page-input")))
+    h.get_by_label("Go to page").is_focused()
 }
 
 /// G, then `typed` into the page field (G selects what it holds, so the typing replaces it),
@@ -374,6 +397,7 @@ fn screen_steps_glide_add_up_and_yield_to_the_wheel() {
         delta: egui::Vec2::ZERO,
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.try_run().expect("idle");
     let moved = top - first_page_top(&h);

@@ -246,6 +246,7 @@ fn scroll_sheet_down(h: &mut Harness<'static, PdfCraftApp>) {
             delta: egui::vec2(0.0, -400.0),
             phase: egui::TouchPhase::Move,
             modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(1);
     }
@@ -506,6 +507,7 @@ fn perf_corpus_scan_and_grid() {
             delta: egui::vec2(0.0, -400.0),
             phase: egui::TouchPhase::Move,
             modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(1);
     }

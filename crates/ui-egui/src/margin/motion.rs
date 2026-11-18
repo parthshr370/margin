@@ -29,7 +29,7 @@ pub(crate) fn ease(t: f32) -> f32 {
 }
 
 fn reduced_id() -> Id {
-    Id::new("margin-reduce-motion")
+    Id::unique("margin-reduce-motion")
 }
 
 /// Apply `ui.reduce_motion` for this frame: Margin's durations and egui's own fade time (popups

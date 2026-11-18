@@ -172,8 +172,11 @@ struct ViewState {
 }
 
 impl ViewState {
+    /// The display outside full screen: what full screen replaced while it is on, so leaving it
+    /// never records the full-screen display.
     fn of(view: &DocView) -> Self {
-        let fit = match (view.fit, view.margin.read_fit.is_some()) {
+        let shown = view.normal_display();
+        let fit = match (shown.fit, view.margin.read_fit.is_some()) {
             (Fit::None, true) => "read",
             (Fit::Width, _) => "width",
             (Fit::Page, _) => "page",
@@ -181,10 +184,10 @@ impl ViewState {
         };
         Self {
             display: view.margin.display,
-            layout: layout_of(view),
-            cover: view.cover,
+            layout: layout_from(shown.layout, shown.continuous),
+            cover: shown.cover,
             fit,
-            zoom: (fit == "zoom").then(|| (view.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32),
+            zoom: (fit == "zoom").then(|| (shown.zoom * PERCENT).round().clamp(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT) as u32),
             // Fit "read" is only the same fit with the width it was picked at.
             read_width: view.margin.read_fit.map(|read| read.width_px.round() as u32),
             trim: view.margin.trim.on,
@@ -413,7 +416,11 @@ pub fn set_fit(view: &mut DocView, fit: Fit) {
 /// Margin's page display of `view`: Scroll is one page across scrolling, Single one page at a
 /// time, Two-up spreads (PdfCraft's two-page view that doesn't scroll shows as Two-up too).
 pub(crate) fn layout_of(view: &DocView) -> margin_config::Layout {
-    match (view.layout, view.continuous) {
+    layout_from(view.layout, view.continuous)
+}
+
+fn layout_from(layout: PageLayout, continuous: bool) -> margin_config::Layout {
+    match (layout, continuous) {
         (PageLayout::TwoUp, _) => margin_config::Layout::TwoUp,
         (PageLayout::Single, true) => margin_config::Layout::Scroll,
         (PageLayout::Single, false) => margin_config::Layout::Single,
@@ -762,6 +769,7 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Step::Tell(message) => notices.push(message),
         }
         let generation = doc.edit_generation();
+        let waits = waits_for_save(view, app.recovered_paths.contains(&view.id));
         let state = &mut view.margin.autosave;
         if generation != state.seen {
             state.seen = generation;
@@ -770,7 +778,14 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
         // A change on disk waits to be compared with these edits, or for the reader's answer
         // (`margin::reload`): saving now would write over the other program's version.
         let held = app.margin_reload.holds(view.id);
-        if autosave_on && autosave_possible(doc, state) && doc.dirty && generation != state.opened && state.failed != Some(generation) && !held {
+        if autosave_on
+            && autosave_possible(doc, state)
+            && doc.dirty
+            && generation != state.opened
+            && state.failed != Some(generation)
+            && !held
+            && !waits
+        {
             #[cfg(not(target_arch = "wasm32"))]
             if app.margin_saves.contains(view.id) {
                 continue;
@@ -816,6 +831,15 @@ fn autosave_possible(doc: &Document, state: &Autosave) -> bool {
     doc.path.is_some() && doc.read_only_reason.is_none() && !state.file_read_only && !doc.is_signed()
 }
 
+/// Whether the document's changes wait for a Save the reader asks for, autosave or not: Save
+/// would ask where to write (an Apply redactions not saved yet proposes a `_Redacted` copy, and
+/// an Undo past a saved one must never put removed content back into the redacted file), or the
+/// document was recovered and its path, read back from a recovery sidecar, is not trusted until
+/// a save confirms it (#3923).
+fn waits_for_save(view: &DocView, recovered: bool) -> bool {
+    recovered || crate::editing::asks_where_to_save(view)
+}
+
 /// The footer's save state for view `index`.
 pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
     let autosave_on = app.margin_keys.settings().reader.autosave;
@@ -844,7 +868,7 @@ pub fn save_status(app: &PdfCraftApp, index: usize) -> SaveStatus {
         SaveStatus::Saved { autosave }
     } else if state.failed == Some(generation) {
         SaveStatus::Failed
-    } else if autosave && generation != state.opened {
+    } else if autosave && generation != state.opened && !waits_for_save(view, app.recovered_paths.contains(&doc.id)) {
         SaveStatus::Saving
     } else {
         SaveStatus::Unsaved

@@ -110,6 +110,7 @@ fn settings_rows_write_the_preferences() {
         delta: egui::vec2(0.0, SCROLL_TO_END),
         phase: egui::TouchPhase::Move,
         modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(3);
     h.get_by_role_and_label(Role::CheckBox, "Acrobat JavaScript").click();

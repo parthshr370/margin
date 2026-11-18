@@ -24,7 +24,7 @@ pub(crate) fn hint(app: &PdfCraftApp, ctx: &egui::Context) {
     }
     let t = Tokens::get(ctx);
     let window = ctx.content_rect();
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("margin-drop-hint")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("margin-drop-hint")));
     painter.rect_filled(window, CornerRadius::ZERO, egui::Color32::from_black_alpha(SCRIM_ALPHA));
     let title = if count == 1 { "Drop to open".to_owned() } else { format!("Drop to open {count} files") };
     let note = if app.active.is_some() { "The document you are reading stays as it is." } else { "Each PDF opens in its own tab." };

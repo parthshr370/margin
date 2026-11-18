@@ -2,7 +2,8 @@
 //! the top row (the reader's header or the Library's bar) ends in Minimize, Maximize and Close,
 //! which send the window's viewport commands, and the row's own buttons make room for them. Focus
 //! mode hides them with the header, `ui.titlebar: "system"` gives the window back to the desktop
-//! (at once, without a restart), and PdfCraft never draws them.
+//! (at once, without a restart). PdfCraft only draws window buttons on desktops that leave it
+//! the frame, unless its own Use system title bar preference is on.
 #![cfg(target_os = "linux")]
 
 use egui::ViewportCommand;
@@ -11,6 +12,8 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{Flavor, PdfCraftApp};
 
 const WINDOW_BUTTONS: [&str; 3] = ["Minimize", "Maximize", "Close"];
+/// The trailing title-bar space for the three controls and their spacing.
+const WINDOW_CONTROL_BAND_WIDTH: f32 = 160.0;
 /// The reader's window; the Library's narrower one makes its bar reach under the buttons.
 const READER_WINDOW: egui::Vec2 = egui::vec2(1440.0, 900.0);
 const NARROW_WINDOW: egui::Vec2 = egui::vec2(1000.0, 800.0);
@@ -149,9 +152,17 @@ fn focus_mode_hides_the_window_buttons_with_the_header() {
 fn the_system_title_bar_setting_and_pdfcraft_draw_no_window_buttons() {
     let system = harness(Setup { name: "system", settings: Some(r#"{ "ui": { "titlebar": "system" } }"#), ..Setup::reader("") });
     let pdfcraft = harness(Setup { flavor: Flavor::PdfCraft, name: "pdfcraft", ..Setup::reader("") });
-    for h in [&system, &pdfcraft] {
+    for (flavor, h) in [("Margin", &system), ("PdfCraft", &pdfcraft)] {
+        let window = h.ctx.content_rect();
+        let band_left = window.right() - WINDOW_CONTROL_BAND_WIDTH;
+        let band_bottom = window.top() + pdfcraft_ui_egui::margin::header::HEIGHT;
         for label in WINDOW_BUTTONS {
-            assert!(h.query_by_label(label).is_none(), "{label} is the desktop's");
+            // egui 0.37 can name an unlabeled icon button from its tooltip. A document's
+            // Close button (outside the window-control band) is not a window button.
+            for node in h.query_all_by_label(label) {
+                let center = node.rect().center();
+                assert!(center.x < band_left || center.y >= band_bottom, "{flavor}'s {label} belongs to the desktop: {node:?}");
+            }
         }
     }
 }

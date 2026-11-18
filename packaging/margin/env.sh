@@ -31,11 +31,3 @@ copy_margin_docs() {
   if [ -f "$ROOT/NOTICE" ]; then cp "$ROOT/NOTICE" "$1/"; fi
   cp "$ROOT/ATTRIBUTION.md" "$1/"
 }
-
-# Fetch and verify the attributed models and their CC-BY-SA licence texts even for
-# --skip-build: packaging must never produce a build without text recognition.
-copy_margin_models() {
-  (cd "$ROOT" && cargo xtask models)
-  mkdir -p "$1"
-  cp "$ROOT"/assets/models/*.rten "$ROOT"/assets/models/*.LICENCE.txt "$1/"
-}

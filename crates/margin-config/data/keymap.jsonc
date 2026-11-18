@@ -20,7 +20,10 @@
       "alt-1": ["view.tab.go", { "index": 1 }], "alt-2": ["view.tab.go", { "index": 2 }], "alt-3": ["view.tab.go", { "index": 3 }],
       "alt-4": ["view.tab.go", { "index": 4 }], "alt-5": ["view.tab.go", { "index": 5 }], "alt-6": ["view.tab.go", { "index": 6 }],
       "alt-7": ["view.tab.go", { "index": 7 }], "alt-8": ["view.tab.go", { "index": 8 }], "alt-9": ["view.tab.go", { "index": 9 }],
-      "escape": "app.close_layer", "?": "help.shortcuts" } },
+      "escape": "app.close_layer", "?": "help.shortcuts",
+      // PdfCraft's static keys for chrome Margin doesn't draw ($pdfcraft_ignored below): unbound,
+      // so they don't fall back to PdfCraft's commands.
+      "secondary-\\": null, "f8": null, "f4": null, "shift-f4": null, "secondary-shift-h": null, "secondary-m": null } },
   { "context": "Library", "bindings": { "/": "library.search", "secondary-f": "library.search" } },
   { "context": "Reader", "bindings": {
       "/": "edit.find", "f3": "reader.find.next", "shift-f3": "reader.find.prev",
@@ -49,8 +52,8 @@
       "1": ["annotation.color", { "color": "yellow" }], "2": ["annotation.color", { "color": "red" }],
       "3": ["annotation.color", { "color": "note" }], "4": ["annotation.color", { "color": "important" }] } },
   { "context": "AnnotateMode", "bindings": {
-      "v": "reader.tool.select", "c": "edit.snapshot", "h": "comment.highlight", "u": "comment.underline",
-      "s": "comment.strikeout", "q": "comment.squiggly", "n": "comment.note", "p": "comment.ink",
+      "v": "reader.tool.select", "c": "edit.snapshot", "h": "comment.highlight", "m": "comment.freehand_highlight",
+      "u": "comment.underline", "s": "comment.strikeout", "q": "comment.squiggly", "n": "comment.note", "p": "comment.ink",
       "t": "comment.freetext", "r": "comment.square", "e": "comment.eraser" } },
   { "context": "Annotation", "bindings": {
       "delete": "annotation.delete", "backspace": "annotation.delete",
@@ -60,5 +63,13 @@
       "view.fit_visible": "Ctrl+3 shows the Pages sidebar tab in Margin (mockup keys); Fit visible stays in the palette",
       "view.read_mode": "Ctrl+Cmd+H (Ctrl+H elsewhere) runs view.focus_mode.toggle, Margin's read mode, so the keysheet names it Focus mode",
       "view.next_tab": "Ctrl+Tab runs view.tab.next, Margin's document step, which view.next_tab also runs in Margin",
-      "view.previous_tab": "Ctrl+Shift+Tab runs view.tab.prev, Margin's document step, which view.previous_tab also runs in Margin" } }
+      "view.previous_tab": "Ctrl+Shift+Tab runs view.tab.prev, Margin's document step, which view.previous_tab also runs in Margin",
+      "view.previous_view": "Cmd/Ctrl+[ and Alt+Left run reader.back, Margin's place history",
+      "view.next_view": "Cmd/Ctrl+] and Alt+Right run reader.forward, Margin's place history",
+      "view.split": "Margin has no split view yet; Cmd/Ctrl+\\ stays unbound until it does",
+      "view.toggle_interface": "Margin draws its own chrome; F8 stays unbound",
+      "view.side_panel": "Margin's sidebar is view.sidebar.toggle ([); F4 stays unbound",
+      "view.tools_pane": "Margin has no PdfCraft Tools pane; Shift+F4 stays unbound",
+      "edit.replace": "Margin is a reader: find and replace in page text stays out of its keymap",
+      "comment.list": "Margin's highlights are the sidebar's Highlights tab (Cmd/Ctrl+2)" } }
 ]

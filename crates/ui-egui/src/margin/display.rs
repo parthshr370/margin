@@ -450,7 +450,7 @@ fn trim_rows(view: &mut DocView, pages: &[(f32, f32)], ui: &mut egui::Ui, t: &To
     }
     let shown = view.margin.trim.on && view.margin.trim.manual;
     // The editor slides open and shut instead of pushing the rows below in one frame.
-    look::collapsible(ui, egui::Id::new("margin-display-manual-trim"), shown, |ui| manual_trim_editor(view, pages, ui, t));
+    look::collapsible(ui, egui::Id::unique("margin-display-manual-trim"), shown, |ui| manual_trim_editor(view, pages, ui, t));
 }
 
 /// Manual trim's editor: the page previews to drag the kept part on, the hint and the odd and
@@ -503,7 +503,7 @@ fn trim_preview(view: &mut DocView, page: usize, size: Option<(f32, f32)>, label
     let (w, h) = size.filter(|(w, h)| *w > 0.0 && *h > 0.0).unwrap_or((1.0, 1.41));
     let preview = vec2(TRIM_PREVIEW_WIDTH, TRIM_PREVIEW_WIDTH * h / w);
     let (rect, resp) = ui.allocate_exact_size(preview, Sense::drag());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, format!("Trim preview: {label}")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, format!("Trim preview: {label}")));
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::ZERO, view.page_color.paper());
     if let Some(tex) = view.page_texture(page) {
@@ -581,7 +581,7 @@ const SWATCH_RADIUS: u8 = 9;
 fn swatch(ui: &mut egui::Ui, t: &Tokens, mode: PageMode, selected: bool, width: f32) -> egui::Response {
     let name = i18n::t(mode.name());
     let (rect, resp) = ui.allocate_exact_size(vec2(width, SWATCH_HEIGHT + SWATCH_NAME_HEIGHT), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
     let painter = ui.painter();
     // The pick moves between swatches with a crossfade, hover fills fade in and out.
     let picked = motion::toggle(ui.ctx(), resp.id.with("margin-picked"), selected, motion::FADE);

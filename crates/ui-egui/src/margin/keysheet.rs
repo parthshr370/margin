@@ -125,7 +125,7 @@ fn pretty_stroke(stroke: &str, mac: bool) -> String {
     if mac { format!("{}{name}", modifiers.concat()) } else { modifiers.into_iter().chain([name.as_str()]).collect::<Vec<_>>().join("+") }
 }
 
-fn is_mac() -> bool {
+pub(crate) fn is_mac() -> bool {
     cfg!(target_os = "macos")
 }
 
@@ -140,7 +140,9 @@ fn all_sections(app: &PdfCraftApp) -> Vec<Section> {
     let fallback: Vec<Row> = pdfcraft_engine::commands::COMMANDS
         .iter()
         .filter(|spec| keys.falls_back(spec))
-        .filter_map(|spec| spec.shortcut.map(|shortcut| Row { keys: shortcut.label(mac), title: spec.label.trim_end_matches('…').to_owned() }))
+        .filter_map(|spec| {
+            spec.shortcut_for(mac).map(|shortcut| Row { keys: shortcut.label(mac), title: spec.label.trim_end_matches('…').to_owned() })
+        })
         .collect();
     if !fallback.is_empty() {
         all.push(Section { context: PDFCRAFT_SECTION.to_owned(), rows: fallback });
@@ -169,11 +171,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(sheet) = app.margin_keys.sheet.as_mut() else { return };
     let mut close = false;
     let mut key_context = false;
-    let modal = crate::margin::look::modal(ctx, egui::Id::new("margin-keysheet"), &t).show(ctx, |ui| {
+    let modal = crate::margin::look::modal(ctx, egui::Id::unique("margin-keysheet"), &t).show(ctx, |ui| {
         ui.set_width(SHEET_WIDTH);
         close |= crate::margin::look::sheet_header(ui, &t, "Keyboard shortcuts");
         ui.add_space(8.0);
-        crate::margin::look::text_field(ui, egui::Id::new("margin-keysheet-filter"), &mut sheet.filter, "Filter", FILTER_WIDTH);
+        crate::margin::look::text_field(ui, egui::Id::unique("margin-keysheet-filter"), &mut sheet.filter, "Filter", FILTER_WIDTH);
         ui.add_space(8.0);
         // A fixed body, so filtering never resizes the sheet and its buttons stay put.
         egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(BODY_HEIGHT).max_height(BODY_HEIGHT).show(ui, |ui| {
@@ -313,7 +315,7 @@ pub(crate) fn key_context(app: &mut PdfCraftApp, ctx: &egui::Context) {
 pub(crate) fn pending_chord(app: &PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let text = format!("{} …", pretty_keys(app.margin_keys.pending(), is_mac()));
-    egui::Area::new(egui::Id::new("margin-pending-chord")).order(egui::Order::Foreground).anchor(Align2::CENTER_BOTTOM, [0.0, -48.0]).show(
+    egui::Area::new(egui::Id::unique("margin-pending-chord")).order(egui::Order::Foreground).anchor(Align2::CENTER_BOTTOM, [0.0, -48.0]).show(
         ctx,
         |ui| {
             crate::margin::look::floating_frame(&t, crate::margin::look::RADIUS_MENU).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
@@ -348,7 +350,7 @@ mod tests {
         assert_eq!(pretty_keys(&["shift-space".to_owned()], false), "Shift+Space");
     }
 
-    /// Every built-in binding is listed once, under its context, in file order.
+    /// Every active built-in binding is listed once, under its context, in file order.
     #[test]
     fn the_sheet_lists_every_binding_by_context() {
         let (keymap, registry) = table("[]");
@@ -360,7 +362,9 @@ mod tests {
         let single = sections.iter().find(|section| section.context == single).unwrap();
         assert_eq!(single.rows[0], Row { keys: "J".to_owned(), title: "Next page".to_owned() });
         let rows: usize = sections.iter().map(|s| s.rows.len()).sum();
-        assert_eq!(rows, keymap.bindings.len());
+        // Null entries suppress PdfCraft shortcuts for chrome that Margin does not draw.
+        let active = keymap.bindings.iter().filter(|binding| binding.command.is_some()).count();
+        assert_eq!(rows, active);
         let everywhere = &sections[0].rows;
         assert_eq!(everywhere[0], Row { keys: "Ctrl+K".to_owned(), title: "Find tools and commands".to_owned() });
         let reader = sections.iter().find(|section| section.context == "Reader").unwrap();

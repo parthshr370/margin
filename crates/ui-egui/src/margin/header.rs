@@ -33,9 +33,11 @@ enum Entry {
     Recent,
     Export,
     Import,
+    /// A sidebar tab only some documents have (Attachments, Layers): shown for those.
+    Tab(SidebarTab),
 }
 
-use Entry::{Command, Export, Import, Recent, Separator};
+use Entry::{Command, Export, Import, Recent, Separator, Tab};
 
 /// The document menu ("…" in the header), top to bottom.
 const DOCUMENT_MENU: &[Entry] = &[
@@ -50,6 +52,10 @@ const DOCUMENT_MENU: &[Entry] = &[
     Command("Save a Copy with Highlights…", "reader.save_with_highlights", "copy-plus"),
     Export,
     Command("Document Properties…", "file.properties", "file-text"),
+    Command("Word Count…", "file.word_count", "hash"),
+    Command("Compare with…", "doc.compare", "git-compare"),
+    Tab(SidebarTab::Attachments),
+    Tab(SidebarTab::Layers),
     Command("Print…", "print.dialog", "printer"),
     Separator,
     Command("Choose Obsidian Vault…", "app.choose_vault", "folder-open"),
@@ -108,7 +114,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> bool {
         .show(ui, |ui| {
             let full = ui.max_rect();
             // The whole bar, its padding too, moves the window where nothing else takes the press.
-            window_chrome::drag_area(app, ui, full.expand2(egui::vec2(GAP_LARGE, 0.0)), ui.id().with("margin-header-drag"));
+            window_chrome::drag_area(app, ui, full.expand2(egui::vec2(GAP_LARGE, 0.0)), ui.scope_id().with("margin-header-drag"));
             let traffic_lights = window_chrome::traffic_lights_inset(ui.ctx(), full);
             let window_buttons = window_chrome::window_buttons_inset(ui.ctx(), full);
             let mut left_end = full.left();
@@ -175,7 +181,7 @@ fn right_cluster(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if look::icon_button(ui, "maximize", BUTTON, app.full_screen, "Full screen", keys.as_deref()).clicked() {
         app.execute("view.full_screen");
     }
-    let display_id = egui::Id::new("margin-display-popover");
+    let display_id = egui::Id::unique("margin-display-popover");
     let display_open = egui::Popup::is_id_open(ui.ctx(), display_id);
     let display = look::icon_button(ui, "contrast", BUTTON, display_open, "Page colour and layout", None);
     let popup = look::popover(&display, display_id).frame(crate::margin::display::popover_frame(ui.style()));
@@ -260,7 +266,7 @@ pub(crate) fn title(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, full: egui
         }
     }
     let identity = Identity { name, file: doc.path.clone().unwrap_or_else(|| doc.name.clone()), section, unsaved: doc.dirty };
-    let resp = ui.interact(rect, ui.id().with("margin-header-title"), egui::Sense::hover());
+    let resp = ui.interact(rect, ui.scope_id().with("margin-header-title"), egui::Sense::hover());
     look::tooltip_ui(&resp, |ui| identity.show(ui));
 }
 
@@ -350,7 +356,20 @@ fn menu_rows(app: &mut PdfCraftApp, ui: &mut egui::Ui, rows: &[Entry]) {
             #[cfg(target_arch = "wasm32")]
             Import => {}
             Command(title, id, icon) => command_row(app, ui, title, id, icon),
+            Tab(tab) => tab_row(app, ui, tab),
         }
+    }
+}
+
+/// A sidebar tab's row, only while the active document has what it lists; a click shows it.
+fn tab_row(app: &mut PdfCraftApp, ui: &mut egui::Ui, tab: SidebarTab) {
+    if !crate::margin::active_info(app).is_some_and(|doc| tab.shows_for(doc)) {
+        return;
+    }
+    let keys = tab.key().and_then(|key| look::shortcut_with(app, "view.sidebar.tab", &serde_json::json!({ "tab": key })));
+    if look::menu_row(ui, Some(tab.icon()), tab.label(), keys.as_deref(), false).clicked() {
+        ui.close();
+        open_tab(app, tab);
     }
 }
 

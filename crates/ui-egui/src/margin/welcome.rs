@@ -55,7 +55,7 @@ pub(crate) fn card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let folders = app.margin_keys.settings().library.folders.clone();
     let open_keys = look::shortcut(app, "file.open");
     let mut step = None;
-    look::collapsible(ui, egui::Id::new("margin-setup-card"), shown, |ui| {
+    look::collapsible(ui, egui::Id::unique("margin-setup-card"), shown, |ui| {
         look::card_frame(t).inner_margin(CARD_PAD).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = GAP;

@@ -147,26 +147,29 @@ impl Preview {
         }
         let label = info.pages.get(destination.0).map_or("?", |page| page.label.as_str());
         // No fade or movement animation, including with reduce_motion enabled.
-        egui::Area::new(egui::Id::new("margin-link-preview")).order(egui::Order::Tooltip).fixed_pos(position).interactable(false).show(ctx, |ui| {
-            look::floating_frame(tokens, look::RADIUS_FLOATING).inner_margin(look::GAP as i8).show(ui, |ui| {
-                ui.set_width(width);
-                ui.label(egui::RichText::new(format!("Page {label} · click the link to jump")).color(tokens.text_muted));
-                if let Some(texture) = &self.texture {
-                    ui.add(egui::Image::new((texture.id(), size)));
-                } else {
-                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                    let [red, green, blue] = color.mode.paper();
-                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(red, green, blue));
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        self.error.as_deref().unwrap_or("Rendering preview…"),
-                        crate::theme::regular(12.0),
-                        tokens.text_muted,
-                    );
-                }
-            });
-        });
+        egui::Area::new(egui::Id::unique("margin-link-preview")).order(egui::Order::Tooltip).fixed_pos(position).interactable(false).show(
+            ctx,
+            |ui| {
+                look::floating_frame(tokens, look::RADIUS_FLOATING).inner_margin(look::GAP as i8).show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.label(egui::RichText::new(format!("Page {label} · click the link to jump")).color(tokens.text_muted));
+                    if let Some(texture) = &self.texture {
+                        ui.add(egui::Image::new((texture.id(), size)));
+                    } else {
+                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                        let [red, green, blue] = color.mode.paper();
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(red, green, blue));
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            self.error.as_deref().unwrap_or("Rendering preview…"),
+                            crate::theme::regular(12.0),
+                            tokens.text_muted,
+                        );
+                    }
+                });
+            },
+        );
     }
 }
 
@@ -209,6 +212,10 @@ mod tests {
                 view: DestView::FitH { top: Some(top) },
                 children: Vec::new(),
                 open: false,
+                action: None,
+                color: None,
+                italic: false,
+                bold: false,
             })
             .collect();
         let section = |y| super::super::contents::current_section_at(&info, Spot { page: 0, y, x: None }, 0);

@@ -656,3 +656,45 @@ fn disabling_per_document_memory_keeps_bookmarks_but_ignores_and_preserves_view_
     assert_eq!(rewritten["settings"], saved["settings"]);
     assert_eq!(rewritten["bookmarks"].as_array().unwrap().len(), 2);
 }
+
+/// Full screen keeps the reader's layout and zoom (no one-page-at-a-time presentation, even when
+/// PdfCraft's saved preferences ask for it), and the sidecar never records a display changed in
+/// full screen: leaving it brings back, and keeps, the display it was entered from.
+#[test]
+fn full_screen_keeps_the_layout_and_never_saves_its_display() {
+    let place = Place::new("full-screen", "paper.pdf", &paper(6));
+    let mut app = app(&place);
+    // A PdfCraft preferences file from before Margin turned the fill off.
+    app.restore(r#"{ "full_screen_fill": true }"#);
+    let mut h = Harness::builder().with_size(egui::vec2(1300.0, 900.0)).with_step_dt(STEP_SECS).build_eframe(move |_cc| app);
+    settle(&mut h);
+    h.state_mut().set_option("zoom", "150").unwrap();
+    settle(&mut h);
+    reading::flush(h.state_mut());
+    let before = sidecar_json(&place)["settings"]["view"].clone();
+    assert_eq!(before["layout"], "scroll");
+    assert_eq!(before["zoom"], 150);
+
+    h.state_mut().apply_full_screen(true);
+    settle(&mut h);
+    let view = &h.state().views[0];
+    assert!(view.continuous, "full screen keeps scrolling");
+    assert_eq!(view.fit, Fit::None, "full screen keeps the zoom fit");
+    assert!((view.zoom - 1.5).abs() < 1e-3, "zoom {}", view.zoom);
+
+    // A change made in full screen is full screen's own: the sidecar keeps the reader's display.
+    h.state_mut().set_option("zoom", "200").unwrap();
+    h.state_mut().set_option("layout", "single").unwrap();
+    settle(&mut h);
+    wait(&mut h, 1.5);
+    reading::flush(h.state_mut());
+    assert_eq!(sidecar_json(&place)["settings"]["view"], before, "full screen's display is not saved");
+
+    h.state_mut().apply_full_screen(false);
+    settle(&mut h);
+    wait(&mut h, 1.5);
+    reading::flush(h.state_mut());
+    let view = &h.state().views[0];
+    assert!(view.continuous && (view.zoom - 1.5).abs() < 1e-3, "left as entered: zoom {}", view.zoom);
+    assert_eq!(sidecar_json(&place)["settings"]["view"], before);
+}

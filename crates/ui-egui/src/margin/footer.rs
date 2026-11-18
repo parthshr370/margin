@@ -15,8 +15,6 @@ use crate::theme::{self, Tokens};
 pub const HEIGHT: f32 = 40.0;
 /// A zoom stop this close (as a factor) is the zoom shown.
 const ZOOM_MATCH: f32 = 0.005;
-/// The id of the page box, shared with PdfCraft's `view.focus_page_input` (⇧⌘N).
-const PAGE_INPUT: &str = "page-input";
 const STATUS_WIDTH: f32 = 200.0;
 const DETAIL_MIN_WIDTH: f32 = 180.0;
 const DETAIL_MAX_WIDTH: f32 = 300.0;
@@ -162,11 +160,9 @@ fn time_left_text(seconds: f64) -> Option<String> {
 /// current label back. A page it doesn't have leaves the text there to fix, with the document's
 /// pages on a card over the field.
 fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[String]) {
-    let id = egui::Id::new(PAGE_INPUT);
+    let id = view.page_input_id();
     let current = page_label(labels, view.current);
-    // PdfCraft's canvas keeps the number in `page_input` while the field is idle; Margin's field
-    // shows the label, and an edit starts from it, all selected, however the field got focus
-    // (G's command runs before this frame's field, a click inside it).
+    // Start an edit with the current label selected whether G or a click focused the field.
     let editing_id = id.with("margin-page-editing");
     let was_editing = ui.data(|d| d.get_temp::<bool>(editing_id)).unwrap_or(false);
     let focused = ui.memory(|m| m.has_focus(id));
@@ -201,7 +197,7 @@ fn page_box(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, labels: &[
             .frame(egui::Frame::NONE)
             .desired_width(ui.available_width())
             .char_limit(PAGE_INPUT_CHARS)
-            .horizontal_align(Align::Center)
+            .align(egui::Align2::CENTER_TOP)
             .font(font.clone())
             .margin(Vec2::ZERO);
         ui.add(edit)
@@ -305,7 +301,7 @@ fn zoom_group(ui: &mut egui::Ui, t: &Tokens, view: &crate::DocView, steps: &[u32
         let button = look::Button::ghost(look::ButtonSize::Standard, &percent).tip("Zoom and fit");
         let width = button.widest(ui, &[PERCENT_TEMPLATE]);
         let menu = button.fixed_width(width).show(ui);
-        look::popover(&menu, egui::Id::new("margin-zoom-menu")).show(|ui| {
+        look::popover(&menu, egui::Id::unique("margin-zoom-menu")).show(|ui| {
             look::menu_body(ui);
             let fits = [
                 ("view.fit.width", !reads && view.fit == Fit::Width, "Fit width"),

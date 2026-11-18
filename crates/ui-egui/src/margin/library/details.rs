@@ -268,7 +268,7 @@ fn field(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut String, hint: &
     look::control_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = GAP;
         let label = label_cell(ui, t, label, look::CONTROL_ROW);
-        let id = ui.id().with(label.id);
+        let id = ui.scope_id().with(label.id);
         look::text_field(ui, id, value, hint, FIELD_WIDTH).labelled_by(label.id);
     });
 }
@@ -290,7 +290,7 @@ fn tags_row(ui: &mut egui::Ui, t: &Tokens, sheet: &mut Sheet) {
         label_cell(ui, t, "Tags", look::CONTROL_ROW);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = GAP / 2.0;
-            let id = egui::Id::new(NEW_TAG_ID);
+            let id = egui::Id::unique(NEW_TAG_ID);
             let resp = look::text_field(ui, id, &mut sheet.new_tag, "Add a tag", FIELD_WIDTH / 2.0);
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 add_tag(sheet);
@@ -327,7 +327,7 @@ fn add_tag(sheet: &mut Sheet) {
 fn draw(ctx: &egui::Context, sheet: &mut Sheet, looking_up: bool) -> Option<Action> {
     let t = Tokens::get(ctx);
     let mut action = None;
-    let modal = look::modal(ctx, egui::Id::new("margin-book-details"), &t).show(ctx, |ui| {
+    let modal = look::modal(ctx, egui::Id::unique("margin-book-details"), &t).show(ctx, |ui| {
         ui.set_width(SHEET_WIDTH);
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
         if look::sheet_header(ui, &t, "Details") {

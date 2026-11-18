@@ -398,7 +398,7 @@ mod tests {
         off_page.locator = Locator::Pdf { page: 9, quads: vec![[0.0; 8]], at: None };
         let highlights = [highlight("A", T1, None, Some("why it matters")), off_page];
         let notes = [page_note("N", "a page note")];
-        let look = |_: &Highlight| Style { color: [1.0, 0.8, 0.0], opacity: 0.5, width: 1.0, fill: None };
+        let look = |_: &Highlight| Style { color: [1.0, 0.8, 0.0], opacity: 0.5, width: 1.0, fill: None, ..Style::default() };
         let copy = MarksCopy {
             name: "text.pdf",
             bytes: bytes.clone(),

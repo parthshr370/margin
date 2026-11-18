@@ -150,7 +150,7 @@ fn pill(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, now: f64) -> O
     if !showing {
         view.margin.history.pill_since = None;
     }
-    let id = egui::Id::new(("margin-back-pill", view.id));
+    let id = egui::Id::unique(("margin-back-pill", view.id));
     let shown = motion::toggle(ctx, id, showing, motion::FADE);
     let area = view.viewport_rect();
     let place = view.back.last()?;

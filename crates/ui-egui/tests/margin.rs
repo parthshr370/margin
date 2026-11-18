@@ -1,8 +1,6 @@
 //! Margin's reader layout (`Flavor::Margin`) in the real shell: no mode bar or tab strip, the
 //! header, sidebar tabs, footer and annotate rail, each running PdfCraft's own commands.
 
-mod support;
-
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::comments::CommentTool;
@@ -55,6 +53,22 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
 fn click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
     h.get_by_label(label).click();
     h.run_steps(3);
+}
+
+/// Step frames until `ready` holds; fail the test after 30 seconds. A file opened from disk is
+/// read and prepared between frames, so a frame count is not enough.
+fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl Fn(&PdfCraftApp) -> bool) {
+    const WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+    const POLL: std::time::Duration = std::time::Duration::from_millis(5);
+    let deadline = std::time::Instant::now() + WAIT_LIMIT;
+    loop {
+        h.step();
+        if ready(h.state()) {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}: views={}, toast={:?}", h.state().views.len(), h.state().toast);
+        std::thread::sleep(POLL);
+    }
 }
 
 #[test]
@@ -150,16 +164,18 @@ fn sidebar_tabs_drive_pdfcrafts_panels() {
     h.get_by_label("No highlights yet.");
     tab(&mut h, "Tools");
     assert!(h.state().left_open);
-    // R10: Margin's own list, working items only: Edit a PDF's ready items show, its planned
-    // "Attach file" doesn't, and nothing says Ready.
+    // Margin's list picks up newly shipped items without PdfCraft's Ready pills.
     h.get_by_label("Edit a PDF").click();
     h.run_steps(3);
     h.get_by_label("Rotate pages");
-    assert!(h.query_by_label("Attach file").is_none(), "planned items stay out of Margin's Tools");
+    h.get_by_label("Attach file");
     assert!(h.query_by_label_contains("Ready").is_none(), "no Ready pills");
     h.get_by_label("Back to all tools").click();
     h.run_steps(3);
     h.get_by_label("Edit a PDF");
+    click(&mut h, "Export a PDF");
+    h.get_by_label("Microsoft Word (.docx)");
+    assert!(h.query_by_label("Spreadsheet (.xlsx)").is_none(), "planned items stay out of Margin's Tools");
     tab(&mut h, "Contents");
     assert_eq!((h.state().right, h.state().left_open), (None, false));
     // A command that opens a PdfCraft panel switches the sidebar to it.
@@ -187,6 +203,15 @@ fn contents_footer_and_document_menu_work() {
     h.get_by_label_contains("Document Properties…").click();
     h.run_steps(3);
     assert!(matches!(h.state().dialog, Some(Dialog::Properties(_))));
+}
+
+/// The document menu's "Word Count…" opens PdfCraft's word count.
+#[test]
+fn document_menu_counts_words() {
+    let mut h = harness(Flavor::Margin);
+    click(&mut h, "Document: save, export, print, settings");
+    click(&mut h, "Word Count…");
+    assert!(matches!(h.state().dialog, Some(Dialog::WordCount)));
 }
 
 #[test]
@@ -368,6 +393,7 @@ fn pages_grid_reveals_the_current_page_and_leaves_scrolling_alone() {
             delta: egui::vec2(0.0, 400.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(1);
         if h.query_by_label("Page 1").is_some() {
@@ -685,6 +711,7 @@ fn contents_follows_the_section_without_fighting_the_reader() {
             delta: egui::vec2(0.0, 400.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(1);
     }
@@ -876,7 +903,7 @@ fn recent_in_the_document_menu_opens_and_focuses() {
     };
     pick(&mut h, "other.pdf");
     // The file is read and prepared in the background; its tab opens on a later frame.
-    support::wait_until(&mut h, "other.pdf to open", |app| app.views.len() == 2);
+    wait_until(&mut h, "other.pdf to open", |app| app.views.len() == 2);
     assert_eq!((h.state().views.len(), h.state().active), (2, Some(1)), "Recent opens the file");
     h.state_mut().active = Some(0);
     h.run_steps(2);

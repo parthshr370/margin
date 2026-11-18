@@ -114,19 +114,41 @@ pub(crate) fn undoable(app: &mut PdfCraftApp, text: &str, doc: DocId) {
     app.margin_chrome.notices.undo = Some(UndoOffer { text: text.to_owned(), doc });
 }
 
-/// Every Margin frame, last: the routine message (with Undo when it offers it) over the held
-/// failure, centred above the footer in the reading area, above PdfCraft's progress notice. The
-/// Back pill (`pill`) has the area's bottom-left corner: the toast goes above it only in an area
-/// too narrow for both side by side. Repaints only until the routine message expires.
+/// Every Margin frame, last: the routine message (with Undo when it offers it, or Cancel while
+/// a batch recognition runs) over the held failure, centred above the footer in the reading
+/// area, above PdfCraft's progress notice. Form script messages waiting their turn
+/// (`show_script_messages`) take the routine slot one after another, with their icon and title,
+/// as PdfCraft's toast shows them. The Back pill (`pill`) has the area's bottom-left corner: the
+/// toast goes above it only in an area too narrow for both side by side. Repaints only until the
+/// routine message expires.
 pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill: Option<Rect>) {
     let now = ctx.input(|i| i.time);
-    let routine = app.toast.take().map(|(text, start)| (text, if start == 0.0 { now } else { start }));
+    if app.toast.is_none() {
+        app.toast_script = None;
+        // A left-out count whose message was cleared before its time is said again.
+        app.script_messages_dropped = app.script_messages_dropped.saturating_add(std::mem::take(&mut app.toast_dropped));
+        app.next_script_message();
+    }
+    let mut routine = app.toast.take().map(|(text, start)| (text, if start == 0.0 { now } else { start }));
     let active = app.active_ids().map(|(_, id)| id);
-    let notices = &mut app.margin_chrome.notices;
-    let undo = notices.undo.take().filter(|offer| routine.as_ref().is_some_and(|(text, _)| *text == offer.text) && active == Some(offer.doc));
-    let life = if undo.is_some() { UNDO_SECS } else { ROUTINE_SECS };
-    let routine = routine.filter(|(_, start)| now - start <= life);
+    let mut undo = app
+        .margin_chrome
+        .notices
+        .undo
+        .take()
+        .filter(|offer| routine.as_ref().is_some_and(|(text, _)| *text == offer.text) && active == Some(offer.doc));
+    let mut life = if undo.is_some() { UNDO_SECS } else { ROUTINE_SECS };
+    if routine.as_ref().is_some_and(|(_, start)| now - start > life) {
+        // Shown its time: a left-out count it said is done, and the next waiting script message
+        // takes its place.
+        app.toast_script = None;
+        app.toast_dropped = 0;
+        undo = None;
+        life = ROUTINE_SECS;
+        routine = if app.next_script_message() { app.toast.take().map(|(text, _)| (text, now)) } else { None };
+    }
     app.toast.clone_from(&routine);
+    let notices = &mut app.margin_chrome.notices;
     notices.undo = undo.filter(|_| routine.is_some());
     let held = notices.held.clone();
     if routine.is_none() && held.is_none() {
@@ -151,20 +173,36 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill: Option<Rect
     }
     let t = Tokens::get(ctx);
     let offers_undo = app.margin_chrome.notices.undo.is_some();
+    // A running batch keeps its message up (`poll_ocr` says each file again), so it carries the
+    // one control a long job needs: Cancel. The file in flight finishes; the rest are not run.
+    let batch_running = app.ocr_batch.is_some();
+    let script = app.toast_script.as_ref().map(|message| (message.title.clone(), crate::js_ui::message_icon(message.icon)));
     let mut clicked = Clicked::default();
-    egui::Area::new(egui::Id::new("margin-toast"))
+    egui::Area::new(egui::Id::unique("margin-toast"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(pos2(area.center().x, bottom))
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = GAP;
             if let Some((text, _)) = &routine {
-                let action = offers_undo.then_some("Undo");
-                clicked.undo = card(ui, &t, text, max_width, &[action], false).is_some();
+                let actions = [offers_undo.then_some("Undo"), batch_running.then_some("Cancel")];
+                let message = Card {
+                    text,
+                    title: script.as_ref().and_then(|(title, _)| title.as_deref()),
+                    icon: script.as_ref().map(|(_, icon)| *icon),
+                    actions: &actions,
+                    dismissable: false,
+                };
+                match card(ui, &t, max_width, &message) {
+                    Some(Pressed::Action(0)) => clicked.undo = true,
+                    Some(Pressed::Action(_)) => clicked.cancel_batch = true,
+                    _ => {}
+                }
             }
             if let Some(held) = &held {
-                let labels = [held.action.map(Action::label), held.second.map(Action::label)];
-                match card(ui, &t, &held.text, max_width, &labels, held.second.is_none()) {
+                let actions = [held.action.map(Action::label), held.second.map(Action::label)];
+                let message = Card { text: &held.text, title: None, icon: None, actions: &actions, dismissable: held.second.is_none() };
+                match card(ui, &t, max_width, &message) {
                     Some(Pressed::Action(0)) => clicked.action = held.action,
                     Some(Pressed::Action(_)) => clicked.action = held.second,
                     Some(Pressed::Dismiss) => clicked.dismiss = true,
@@ -172,6 +210,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill: Option<Rect
                 }
             }
         });
+    if clicked.cancel_batch {
+        app.cancel_ocr_batch();
+    }
     if clicked.undo {
         app.toast = None;
         app.margin_chrome.notices.undo = None;
@@ -193,6 +234,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context, pill: Option<Rect
 #[derive(Default)]
 struct Clicked {
     undo: bool,
+    cancel_batch: bool,
     action: Option<Action>,
     dismiss: bool,
 }
@@ -203,29 +245,60 @@ enum Pressed {
     Dismiss,
 }
 
-/// One message: its text, wrapped within `max_width` less its buttons, then the `actions`
-/// buttons and, when `dismissable`, a × button.
-fn card(ui: &mut egui::Ui, t: &Tokens, text: &str, max_width: f32, actions: &[Option<&str>], dismissable: bool) -> Option<Pressed> {
+/// One message card's content.
+struct Card<'a> {
+    text: &'a str,
+    /// A form script message's title, over its text.
+    title: Option<&'a str>,
+    /// A form script message's icon, before its text.
+    icon: Option<&'static str>,
+    /// Its buttons' labels, by position; `None` leaves a position out.
+    actions: &'a [Option<&'a str>],
+    /// Whether it has a × button.
+    dismissable: bool,
+}
+
+/// The size of a form script message's icon.
+const SCRIPT_ICON: f32 = 16.0;
+
+/// One message: its icon and title when it has them, its text wrapped within `max_width` less
+/// its buttons, then its action buttons and, when dismissable, a × button.
+fn card(ui: &mut egui::Ui, t: &Tokens, max_width: f32, message: &Card<'_>) -> Option<Pressed> {
     let pad = egui::Margin::symmetric(GAP_LARGE as i8, (GAP / 2.0) as i8);
-    let close = if dismissable { BUTTON_HEIGHT + GAP } else { 0.0 };
-    let buttons: f32 = actions.iter().flatten().map(|label| look::Button::secondary(look::ButtonSize::Compact, label).width(ui) + GAP).sum();
-    let reserved = buttons + close + pad.sum().x;
+    let close = if message.dismissable { BUTTON_HEIGHT + GAP } else { 0.0 };
+    let icon = if message.icon.is_some() { SCRIPT_ICON + GAP } else { 0.0 };
+    let buttons: f32 = message.actions.iter().flatten().map(|label| look::Button::secondary(look::ButtonSize::Compact, label).width(ui) + GAP).sum();
+    let reserved = buttons + close + icon + pad.sum().x;
     let wrap = (max_width - reserved).max(BUTTON_HEIGHT);
-    let galley = ui.painter().layout(text.to_owned(), theme::regular(TEXT_SIZE), t.text, wrap);
+    let galley = ui.painter().layout(message.text.to_owned(), theme::regular(TEXT_SIZE), t.text, wrap);
+    let title = message.title.map(|title| ui.painter().layout(title.to_owned(), theme::semibold(TEXT_SIZE), t.text, wrap));
     let mut pressed = None;
     look::floating_frame(t, look::RADIUS_MENU).inner_margin(pad).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
             ui.set_min_height(BUTTON_HEIGHT);
-            ui.add(egui::Label::new(galley).selectable(false));
-            for (index, label) in actions.iter().enumerate() {
+            if let Some(icon) = message.icon {
+                ui.add(crate::icons::image(icon, SCRIPT_ICON, t.text));
+            }
+            match title {
+                Some(title) => {
+                    ui.vertical(|ui| {
+                        ui.add(egui::Label::new(title).selectable(false));
+                        ui.add(egui::Label::new(galley).selectable(false));
+                    });
+                }
+                None => {
+                    ui.add(egui::Label::new(galley).selectable(false));
+                }
+            }
+            for (index, label) in message.actions.iter().enumerate() {
                 if let Some(label) = label
                     && look::button_secondary(ui, look::ButtonSize::Compact, label).clicked()
                 {
                     pressed = Some(Pressed::Action(index));
                 }
             }
-            if dismissable && look::icon_button(ui, "x", BUTTON_HEIGHT, false, "Dismiss", None).clicked() {
+            if message.dismissable && look::icon_button(ui, "x", BUTTON_HEIGHT, false, "Dismiss", None).clicked() {
                 pressed = Some(Pressed::Dismiss);
             }
         });
@@ -257,9 +330,9 @@ pub(crate) fn progress(app: &PdfCraftApp, ctx: &egui::Context, notice: &crate::w
         .unwrap_or_else(|| ctx.content_rect());
     let width = PROGRESS_WIDTH.min(area.width() - 2.0 * GAP_SECTION).max(0.0);
     let fraction = if notice.fraction.is_finite() { notice.fraction.clamp(0.0, 1.0) } else { 0.0 };
-    let shown = ctx.animate_value_with_time(egui::Id::new("margin-progress-bar"), fraction, PROGRESS_EASE);
+    let shown = ctx.animate_value_with_time(egui::Id::unique("margin-progress-bar"), fraction, PROGRESS_EASE);
     let mut cancel = false;
-    let drawn = egui::Area::new(egui::Id::new("margin-progress-notice"))
+    let drawn = egui::Area::new(egui::Id::unique("margin-progress-notice"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(pos2(area.center().x, area.bottom() - PILL_LIFT))
@@ -279,7 +352,7 @@ pub(crate) fn progress(app: &PdfCraftApp, ctx: &egui::Context, notice: &crate::w
                 });
                 let (track, resp) = ui.allocate_exact_size(egui::vec2(width, PROGRESS_BAR), egui::Sense::hover());
                 resp.widget_info(|| {
-                    let mut info = egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator);
+                    let mut info = egui::WidgetInfo::new(egui::Role::ProgressIndicator);
                     info.value = Some(f64::from(fraction) * 100.0);
                     info
                 });
@@ -296,4 +369,74 @@ pub(crate) fn progress(app: &PdfCraftApp, ctx: &egui::Context, notice: &crate::w
         });
     ctx.request_repaint_after(PROGRESS_REPAINT);
     (cancel, drawn.response.rect)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+    use pdfcraft_engine::js::Message;
+
+    use super::*;
+    use crate::Flavor;
+
+    const STEP_SECS: f32 = 0.1;
+    /// Longer than a routine message stays.
+    const PAST_A_MESSAGE_SECS: f64 = ROUTINE_SECS + 0.5;
+
+    /// Margin's window reading a blank page, with its settings in a temporary folder.
+    fn window(name: &str) -> (Harness<'static, PdfCraftApp>, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("margin-toast-{name}-{}", std::process::id()));
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.margin_keys.set_config_dir(root.join("config"));
+        app.margin_keys.set_data_dir(root.join("data"));
+        let blank = pdfcraft_engine::Session::new().create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes("blank.pdf", None, (*blank).clone()).unwrap();
+        let window = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_step_dt(STEP_SECS).build_eframe(move |_cc| app);
+        (window, root)
+    }
+
+    fn remove(root: std::path::PathBuf) {
+        if root.exists() {
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    fn shown(window: &Harness<'static, PdfCraftApp>) -> Option<String> {
+        window.state().toast.as_ref().map(|(text, _)| text.clone())
+    }
+
+    /// M4: form script messages from one run show one after another, as PdfCraft's toast shows
+    /// them, instead of the first alone with the rest left waiting.
+    #[test]
+    fn form_script_messages_show_one_after_another() {
+        let (mut window, root) = window("script-queue");
+        window.run_steps(2);
+        window.state_mut().show_script_messages(vec![Message::plain("first alert"), Message::plain("second alert")]);
+        window.run_steps(2);
+        assert_eq!(shown(&window).as_deref(), Some("first alert"));
+        window.get_by_label("first alert");
+        window.run_steps((PAST_A_MESSAGE_SECS / f64::from(STEP_SECS)).ceil() as usize);
+        assert_eq!(shown(&window).as_deref(), Some("second alert"), "the next message takes the toast");
+        window.get_by_label("second alert");
+        drop(window);
+        remove(root);
+    }
+
+    /// M4: a batch recognition's message carries Cancel, the one control a long job needs.
+    #[test]
+    fn a_batch_recognition_can_be_cancelled_from_its_message() {
+        let (mut window, root) = window("batch-cancel");
+        window.run_steps(2);
+        let batch = Arc::new(Mutex::new(crate::ocr_ui::BatchProgress { done: 0, total: 3, message: None, cancel: false }));
+        window.state_mut().ocr_batch = Some(batch.clone());
+        window.run_steps(2);
+        window.get_by_label("Cancel").click();
+        window.run_steps(2);
+        assert!(batch.lock().unwrap().cancel, "the files not yet read are not run");
+        drop(window);
+        remove(root);
+    }
 }
