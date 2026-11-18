@@ -1,13 +1,17 @@
 //! Headless screenshot of the real PdfCraft shell (egui_kittest + wgpu, no window needed).
 //!
 //! ```text
-//! cargo run -p pdfcraft-ui-egui --example shot -- out.png [file.pdf] [--size 1440x900] [--scale 2] [--page 3 --panel pages …]
+//! cargo run -p pdfcraft-ui-egui --example shot -- out.png [file.pdf …] [--size 1440x900] [--scale 2] [--page 3 --panel pages …]
 //! ```
+//! Several files open as tabs, the last one shown.
 //! `--width N` downscales the image to N pixels wide (README screenshots). `--flavor margin`
 //! shows Margin's reader layout (dark theme, like `apps/margin`); `--margin-run ID` then runs a
-//! Margin id (`app.stats`, `library.open`…) before the shot; `--click LABEL` and `--hover LABEL`
+//! Margin id (`app.stats`, `library.open`…) before the shot, `--margin-run 'ID={"tab":"layers"}'`
+//! with JSON arguments; `--click LABEL` and `--hover LABEL`
 //! (in the order given, after the runs) click or point at the widget with that accessible label;
 //! `--scroll N` (in the same order) turns the wheel at the window's middle to scroll down N points.
+//! `--select-text PAGE:FROM-TO` selects glyphs FROM to TO of a page, `PAGE:FROM-PAGE:TO` from one
+//! page to another (1-based pages, glyph indices in reading order).
 //! `--margin-home DIR` gives Margin `DIR/config` and `DIR/data` (a prepared library or stats
 //! history) instead of an empty temporary data folder. `--integrated-titlebar` (no value) draws
 //! the title bar as `apps/margin` does on macOS and Linux (Margin's window buttons on Linux).
@@ -70,15 +74,15 @@ fn load_ocr_verify(app: &mut PdfCraftApp) -> Result<(), String> {
 
 fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let out = args.next().ok_or("usage: shot <out.png> [file.pdf] [--option value …]")?;
-    let (mut file, mut opts) = (None, Vec::new());
+    let out = args.next().ok_or("usage: shot <out.png> [file.pdf …] [--option value …]")?;
+    let (mut files, mut opts) = (Vec::new(), Vec::new());
     let (mut size, mut scale) = (egui::vec2(1440.0, 900.0), 2.0f32);
     let mut width: Option<u32> = None;
     let mut ocr_verify = false;
     let mut flavor = Flavor::PdfCraft;
     let mut margin_runs = Vec::new();
     let mut pointer = Vec::new();
-    let mut select_text: Option<(usize, usize, usize)> = None;
+    let mut select_text: Option<((usize, usize), (usize, usize))> = None;
     let mut margin_home: Option<std::path::PathBuf> = None;
     let mut integrated_titlebar = false;
     while let Some(a) = args.next() {
@@ -102,13 +106,20 @@ fn main() -> Result<(), String> {
             Some("margin-home") => margin_home = Some(args.next().ok_or("--margin-home DIR")?.into()),
             Some("integrated-titlebar") => integrated_titlebar = true,
             Some("select-text") => {
-                // `--select-text PAGE:FROM-TO`: 1-based page, glyph indices in reading order.
+                // `--select-text PAGE:FROM-TO` or `PAGE:FROM-PAGE:TO`: 1-based pages, glyph
+                // indices in reading order.
                 let v = args.next().unwrap_or_default();
+                let page_index = |page: &str| page.parse::<usize>().ok()?.checked_sub(1);
                 let parsed = v.split_once(':').and_then(|(page, glyphs)| {
+                    let page = page_index(page)?;
                     let (from, to) = glyphs.split_once('-')?;
-                    Some((page.parse::<usize>().ok()?.checked_sub(1)?, from.parse().ok()?, to.parse().ok()?))
+                    let to = match to.split_once(':') {
+                        Some((to_page, to)) => (page_index(to_page)?, to.parse().ok()?),
+                        None => (page, to.parse().ok()?),
+                    };
+                    Some(((page, from.parse().ok()?), to))
                 });
-                select_text = Some(parsed.ok_or("--select-text PAGE:FROM-TO")?);
+                select_text = Some(parsed.ok_or("--select-text PAGE:FROM-TO or PAGE:FROM-PAGE:TO")?);
             }
             Some(verb @ ("click" | "hover")) => {
                 let label = args.next().ok_or("--click/--hover LABEL")?;
@@ -116,7 +127,7 @@ fn main() -> Result<(), String> {
             }
             Some("scroll") => pointer.push(Step::Scroll(args.next().and_then(|v| v.parse().ok()).ok_or("bad --scroll")?)),
             Some(k) => opts.push((k.to_string(), args.next().unwrap_or_default())),
-            None => file = Some(a),
+            None => files.push(a),
         }
     }
     let mut harness = Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |_cc| {
@@ -140,12 +151,14 @@ fn main() -> Result<(), String> {
                 // an empty Verify screen must not pass for the documentation's screenshot
                 std::process::exit(1);
             }
-        } else if let Some(f) = &file {
-            let bytes = std::fs::read(f).unwrap_or_default();
-            let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let path = (flavor == Flavor::PdfCraft).then(|| f.clone());
-            if let Err(e) = app.open_bytes(&name, path, bytes) {
-                eprintln!("shot: {f}: {e}");
+        } else {
+            for f in &files {
+                let bytes = std::fs::read(f).unwrap_or_default();
+                let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let path = (flavor == Flavor::PdfCraft).then(|| f.clone());
+                if let Err(e) = app.open_bytes(&name, path, bytes) {
+                    eprintln!("shot: {f}: {e}");
+                }
             }
         }
         for (k, v) in &opts {
@@ -158,17 +171,21 @@ fn main() -> Result<(), String> {
     // Let fonts install, layout settle and background renders arrive.
     harness.run_steps(4);
     settle(&mut harness);
-    for id in &margin_runs {
-        if !pdfcraft_ui_egui::margin::run(harness.state_mut(), id, &serde_json::Value::Null) {
-            eprintln!("shot: --margin-run {id}: not a Margin id");
+    for run in &margin_runs {
+        let (id, args) = match run.split_once('=') {
+            Some((id, json)) => (id, serde_json::from_str(json).map_err(|e| format!("--margin-run {run}: {e}"))?),
+            None => (run.as_str(), serde_json::Value::Null),
+        };
+        if !pdfcraft_ui_egui::margin::run(harness.state_mut(), id, &args) {
+            eprintln!("shot: --margin-run {run}: not a Margin id");
         }
         harness.run_steps(6);
         settle(&mut harness);
     }
-    if let Some((page, from, to)) = select_text {
+    if let Some((from, to)) = select_text {
         let app = harness.state_mut();
         let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) else { return Err("--select-text: no document".into()) };
-        view.select_text(page, from, to);
+        view.select_text_across(from, to);
         harness.run_steps(6);
         settle(&mut harness);
     }
