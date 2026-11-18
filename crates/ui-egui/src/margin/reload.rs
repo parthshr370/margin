@@ -356,6 +356,8 @@ pub(crate) fn resolve(app: &mut PdfCraftApp, doc: DocId, reload: bool) {
     let Some(watched) = app.margin_reload.docs.get_mut(&doc) else { return };
     let Phase::Conflict { bytes } = std::mem::take(&mut watched.phase) else { return };
     if !reload {
+        // Keep mine chose to write over the file's version: Save doesn't ask about it again.
+        seen_on_disk(app, doc);
         return;
     }
     let Some(index) = index_of(app, doc) else { return };
@@ -363,6 +365,19 @@ pub(crate) fn resolve(app: &mut PdfCraftApp, doc: DocId, reload: bool) {
         app.notify(format!("Couldn't reload: {err}. Your edits are still here."));
     }
 }
+
+/// The file's version on disk is now the one document `doc` is based on (it was reloaded, or
+/// Keep mine chose to write over it): Save's check for a file changed on disk (#2166) compares
+/// with this version.
+#[cfg(not(target_arch = "wasm32"))]
+fn seen_on_disk(app: &mut PdfCraftApp, doc: DocId) {
+    if let Some(path) = app.session.get(doc).and_then(|document| document.path.clone()) {
+        app.watch.known_now(doc, &path);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn seen_on_disk(_: &mut PdfCraftApp, _: DocId) {}
 
 /// Read `path` on a worker thread; the result arrives on the receiver and wakes `ctx`.
 fn read_in_background(ctx: &egui::Context, path: &Path) -> Receiver<Disk> {
@@ -411,6 +426,7 @@ pub(crate) fn apply(app: &mut PdfCraftApp, index: usize, bytes: Arc<Vec<u8>>) ->
     app.session.reload(id, bytes).map_err(|err| err.to_string())?;
     // Nothing unsaved is left to recover.
     app.forget_recovery(id);
+    seen_on_disk(app, id);
     let (Some(doc), Some(view)) = (app.session.get(id), app.views.get_mut(index)) else { return Ok(()) };
     view.document_changed(&doc.info);
     // Edits typed or queued against the old version would land on the wrong content.
@@ -674,5 +690,47 @@ mod tests {
         assert_eq!(carried_place(place, 10), place);
         assert_eq!(carried_place(place, 3), Spot { page: 2, y: 0.0, x: Some(0.5) });
         assert_eq!(carried_place(place, 0).page, 0);
+    }
+
+    /// M3 (#2166): a version Margin reloaded, or one Keep mine chose to write over, is what
+    /// Save's changed-on-disk check compares with, so Save writes without asking again.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reloaded_and_kept_over_versions_are_not_asked_about_again() {
+        let root = std::env::temp_dir().join(format!("margin-reload-seen-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("paper.pdf");
+        let path = file.to_string_lossy().into_owned();
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.margin_keys.set_config_dir(root.join("config"));
+        app.margin_keys.set_data_dir(root.join("data"));
+        let ours = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        std::fs::write(&file, ours.as_slice()).unwrap();
+        app.open_bytes("paper.pdf", Some(path.clone()), ours.to_vec()).unwrap();
+        let id = app.views[0].id;
+        app.watch.known_now(id, &path);
+        let rotate = || pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 };
+
+        let reloaded = app.session.create_blank(300.0, 400.0, 2).unwrap();
+        std::fs::write(&file, reloaded.as_slice()).unwrap();
+        apply(&mut app, 0, reloaded).unwrap();
+        app.session.apply(id, rotate()).unwrap();
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        assert_eq!(app.dialog, None, "the reloaded version is no change on disk");
+
+        let theirs = app.session.create_blank(300.0, 400.0, 3).unwrap();
+        std::fs::write(&file, theirs.as_slice()).unwrap();
+        app.session.apply(id, rotate()).unwrap();
+        let conflict = Watched { opened_as: path.clone(), path: file.clone(), phase: Phase::Conflict { bytes: theirs } };
+        app.margin_reload.docs.insert(id, conflict);
+        resolve(&mut app, id, false);
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        assert_eq!(app.dialog, None, "Keep mine already chose to write over that version");
+        let saved = Arc::new(std::fs::read(&file).unwrap());
+        assert_eq!(pdfcraft_render::inspect(saved, None).unwrap().pages.len(), 2, "Margin's version is on disk");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

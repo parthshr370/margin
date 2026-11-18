@@ -1,9 +1,15 @@
 //! Margin PDF writes: one worker owns serialization and atomic replacement. The UI holds
 //! immutable graph snapshots, never a whole-file copy or a reparsed saved document.
 //!
-//! Each document has at most one write in flight. Writes asked for meanwhile (Save, Save As,
-//! close-after-save) wait in order and all happen; none replaces another. Callbacks run only
-//! once the document's last requested write holds every edit made before it.
+//! Each document has at most one write in flight. Writes asked for meanwhile (Save,
+//! close-after-save, autosave) wait in order and all happen; none replaces another. Callbacks
+//! run only once the document's last requested write holds every edit made before it.
+//!
+//! Only writes over the document's own file come here (`editing::save`): Save As to another
+//! file and a recovered document's first save are PdfCraft's clean full rewrites. What
+//! PdfCraft's save does around the write is done here too: Will Save scripts, the Fill & Sign
+//! preferences and question, the watcher's record of the file's version, and Apply redactions'
+//! rule that only an asked-for save writes redacted (or un-redacted) content over the file.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
@@ -11,6 +17,7 @@ use std::thread::JoinHandle;
 
 use pdfcraft_engine::{DocId, SaveAck, SaveSnapshot, SavedFile};
 
+use crate::file_watch::Stamp;
 use crate::{Flavor, PdfCraftApp};
 
 type AfterSave = Box<dyn FnOnce(&mut PdfCraftApp) + Send>;
@@ -33,12 +40,38 @@ struct Job {
 struct Completion {
     job: Job,
     result: Result<SavedFile, String>,
+    /// The written file's version, read on the worker right after the write, so the watcher's
+    /// record (`watch.known_as`) is this write and not a later one by another program.
+    written_version: Option<Stamp>,
+}
+
+/// A view's Apply redactions bookkeeping (`DocView::redactions_applied` and the rest).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Redactions {
+    applied: usize,
+    undone_after_save: usize,
+    cut_off: bool,
+    downloaded: usize,
+}
+
+impl Redactions {
+    fn of(app: &PdfCraftApp, id: DocId) -> Self {
+        app.views.iter().find(|view| view.id == id).map_or_else(Self::default, |view| Self {
+            applied: view.redactions_applied,
+            undone_after_save: view.redactions_undone_after_save,
+            cut_off: view.saved_redactions_cut_off,
+            downloaded: view.redactions_downloaded,
+        })
+    }
 }
 
 /// A write asked for while another write of the same document is in flight.
 struct Request {
     destination: String,
     after: Vec<AfterSave>,
+    /// The redaction state the user chose to save over the file in (an explicit Save, after
+    /// Save asked where if it had to); `None` for autosave.
+    approved: Option<Redactions>,
 }
 
 struct Pending {
@@ -46,6 +79,10 @@ struct Pending {
     destination: String,
     /// Runs once the in-flight write succeeds and nothing newer is waiting.
     after: Vec<AfterSave>,
+    /// The approval of the requests merged into the in-flight write, for its follow-up write.
+    approved: Option<Redactions>,
+    /// The redaction state when the in-flight write's bytes were taken.
+    taken_with: Redactions,
     next: VecDeque<Request>,
 }
 
@@ -76,7 +113,8 @@ impl SaveQueue {
                         Ok(job.snapshot.written(bytes))
                     }))
                     .unwrap_or_else(|_| Err("the save worker failed unexpectedly; the document remains unsaved".into()));
-                    if finished.send(Completion { job, result }).is_err() {
+                    let written_version = result.as_ref().ok().and_then(|_| Stamp::at(&job.destination));
+                    if finished.send(Completion { job, result, written_version }).is_err() {
                         // The app has shut down; completed writes remain durable on disk.
                         break;
                     }
@@ -114,18 +152,50 @@ impl Drop for SaveQueue {
 }
 
 impl PdfCraftApp {
+    /// Write document `id` over `destination` (its own file) without asking: autosave and
+    /// Margin's own callers. The document's Will Save scripts run first, as for any save (#6969).
     pub(crate) fn queue_margin_save(&mut self, id: DocId, destination: String, after: Option<AfterSave>) -> bool {
-        self.request_margin_save(id, Request { destination, after: after.into_iter().collect() })
+        self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
+        self.request_margin_save(id, Request { destination, after: after.into_iter().collect(), approved: None })
     }
 
+    /// An explicit Save of document `id` over its own file (`editing::save`), the steps
+    /// PdfCraft's save takes before and after the write included: what was typed is committed
+    /// (#166), Fill & Sign marks are flattened when that is the preference and the Will Save
+    /// scripts run; once written, the placed signature is not asked about again (#2149). Save
+    /// asked where first if Apply redactions needed it, so the current redaction state is the
+    /// one the user chose to write over the file.
+    pub(crate) fn queue_explicit_margin_save(&mut self, id: DocId, destination: &str, after: AfterSave) {
+        if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
+            return;
+        }
+        self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
+        let approved = Some(Redactions::of(self, id));
+        let after: AfterSave = Box::new(move |app: &mut PdfCraftApp| {
+            app.placed_signatures.remove(&id);
+            after(app);
+        });
+        self.request_margin_save(id, Request { destination: destination.to_owned(), after: vec![after], approved });
+    }
+
+    /// Send `request` to the worker, or queue it behind the write in flight. A request sent at
+    /// once was checked by its caller (autosave waits while Save would ask where; an explicit
+    /// Save was approved just now); a queued one is checked when its bytes are taken
+    /// (`finish_margin_save`).
     fn request_margin_save(&mut self, id: DocId, request: Request) -> bool {
-        let Request { destination, mut after } = request;
+        let Request { destination, mut after, approved } = request;
         if let Some(pending) = self.margin_saves.pending.get_mut(&id) {
             match pending.next.back_mut() {
-                Some(last) if last.destination == destination => last.after.append(&mut after),
+                Some(last) if last.destination == destination => {
+                    last.after.append(&mut after);
+                    last.approved = approved.or(last.approved);
+                }
                 // Same file as the write in flight: its completion writes again if edits arrived meanwhile.
-                None if pending.destination == destination => pending.after.append(&mut after),
-                _ => pending.next.push_back(Request { destination, after }),
+                None if pending.destination == destination => {
+                    pending.after.append(&mut after);
+                    pending.approved = approved.or(pending.approved);
+                }
+                _ => pending.next.push_back(Request { destination, after, approved }),
             }
             return true;
         }
@@ -142,7 +212,8 @@ impl PdfCraftApp {
             self.margin_save_failed(id, error);
             return false;
         }
-        let pending = Pending { destination: destination.clone(), after, next: VecDeque::new() };
+        let taken_with = Redactions::of(self, id);
+        let pending = Pending { destination: destination.clone(), after, approved, taken_with, next: VecDeque::new() };
         let sent = self.margin_saves.sender.as_ref().is_some_and(|sender| sender.send(Job { snapshot, destination }).is_ok());
         if !sent {
             self.margin_save_failed(id, "the save worker is unavailable".into());
@@ -150,6 +221,16 @@ impl PdfCraftApp {
         }
         self.margin_saves.pending.insert(id, pending);
         true
+    }
+
+    /// Whether a queued write of document `id` to `destination` may go ahead now. Over the
+    /// document's own file it may not when Save would ask where (`asks_where_to_save`) and the
+    /// user didn't choose this redaction state: an Apply redactions, or an Undo past a saved
+    /// one, landed after the write was asked for.
+    fn may_write_over(&self, id: DocId, destination: &str, approved: Option<Redactions>) -> bool {
+        let own = self.session.get(id).and_then(|doc| doc.path.as_deref()).is_some_and(|path| crate::same_file(path, destination));
+        let asks_where = self.views.iter().find(|view| view.id == id).is_some_and(crate::editing::asks_where_to_save);
+        !own || !asks_where || approved == Some(Redactions::of(self, id))
     }
 
     fn margin_save_failed(&mut self, id: DocId, error: String) {
@@ -160,12 +241,12 @@ impl PdfCraftApp {
     }
 
     fn finish_margin_save(&mut self, completion: Completion) {
-        let Completion { job, result } = completion;
+        let Completion { job, result, written_version } = completion;
         let id = job.snapshot.id;
         let generation = job.snapshot.generation;
-        let (mut after, mut next) = match self.margin_saves.pending.remove(&id) {
-            Some(Pending { after, next, .. }) => (after, next),
-            None => (Vec::new(), VecDeque::new()),
+        let (mut after, approved, taken_with, mut next) = match self.margin_saves.pending.remove(&id) {
+            Some(Pending { after, approved, taken_with, next, .. }) => (after, approved, taken_with, next),
+            None => (Vec::new(), None, Redactions::default(), VecDeque::new()),
         };
         let holds_every_edit = match result {
             Err(error) => {
@@ -183,6 +264,23 @@ impl PdfCraftApp {
                 }
                 Ok(ack) => {
                     super::reading::saved_pdf(self, id);
+                    // Margin's own write is not another program's change on disk (#2166).
+                    self.watch.known_as(id, written_version);
+                    // The file holds the redaction state the write was approved in: as after
+                    // PdfCraft's save, Save no longer asks where because of it. When a redaction
+                    // step was applied or undone during the write, the document no longer
+                    // matches a file that may now be redacted: Save asks where, and autosave
+                    // waits, as after an Undo past a saved redaction.
+                    let now = Redactions::of(self, id);
+                    for view in self.views.iter_mut().filter(|view| view.id == id) {
+                        if now == taken_with {
+                            view.redactions_applied = 0;
+                            view.redactions_undone_after_save = 0;
+                            view.saved_redactions_cut_off = false;
+                        } else if taken_with != Redactions::default() {
+                            view.saved_redactions_cut_off = true;
+                        }
+                    }
                     // A full rewrite gives the document a new renderer and nothing else: the
                     // reader's selection and place must survive their own save landing.
                     if ack == SaveAck::Reopened
@@ -207,17 +305,32 @@ impl PdfCraftApp {
                 }
             }
             // Save and close-after-save include edits made during the write.
-            None if !after.is_empty() => next.push_back(Request { destination: job.destination, after }),
+            None if !after.is_empty() => next.push_back(Request { destination: job.destination, after, approved }),
             None => {}
         }
         // Every requested destination is written; a refused request leaves the rest to try.
+        let mut ask_where: Vec<AfterSave> = Vec::new();
         while let Some(request) = next.pop_front() {
+            if !self.may_write_over(id, &request.destination, request.approved) {
+                // Autosave waits (`margin::reading`); a Save the user asked for asks where.
+                ask_where.extend(request.after);
+                continue;
+            }
             if self.request_margin_save(id, request) {
                 if let Some(pending) = self.margin_saves.pending.get_mut(&id) {
                     pending.next = next;
                 }
                 break;
             }
+        }
+        if !ask_where.is_empty()
+            && let Some(index) = self.views.iter().position(|view| view.id == id)
+        {
+            self.save_then(index, crate::SaveTarget::As, move |app| {
+                for callback in ask_where {
+                    callback(app);
+                }
+            });
         }
     }
 
@@ -514,7 +627,7 @@ trailer << /Root 1 0 R >>
         assert!(matches!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::ReadOnly { dirty: false, .. }));
         edit(&mut app, "copy");
         app.save_override = Some(root.join("copy.pdf").to_string_lossy().into_owned());
-        assert!(!app.save_active(crate::SaveTarget::As), "the write completes asynchronously");
+        assert!(app.save_active(crate::SaveTarget::As), "Save As to another file is a clean copy, written at once");
         app.wait_margin_saves();
         assert_eq!(super::super::reading::save_status(&app, 0), super::super::reading::SaveStatus::Saved { autosave: true });
         edit(&mut app, "new edit");
@@ -580,6 +693,286 @@ trailer << /Root 1 0 R >>
         assert!(remaining.dirty);
         assert_eq!(remaining.info_value("Title").as_deref(), Some("keep these unsaved edits"));
         drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A document whose file already holds `title` in its first revision.
+    fn titled(title: &str) -> Vec<u8> {
+        let mut session = pdfcraft_engine::Session::new();
+        let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+        let id = session.open_new("titled.pdf", blank).unwrap();
+        session.apply(id, Edit::SetInfo { key: "Title".into(), value: title.into() }).unwrap();
+        (*session.save_full_bytes(id).unwrap()).clone()
+    }
+
+    fn contains(bytes: &[u8], needle: &[u8]) -> bool {
+        bytes.windows(needle.len()).any(|window| window == needle)
+    }
+
+    /// H3 (#2165): Save As to another file is PdfCraft's clean full rewrite, not the file as
+    /// opened plus an increment that still holds what was replaced or deleted.
+    #[test]
+    fn save_as_to_another_file_is_a_clean_copy() {
+        let (mut app, id, root) = app("clean-copy", titled("secret-original"));
+        edit(&mut app, "public");
+        let copy = root.join("copy.pdf");
+        app.save_override = Some(text(&copy));
+        assert!(app.save_active(crate::SaveTarget::As));
+        app.wait_margin_saves();
+        let written = std::fs::read(&copy).unwrap();
+        assert!(!contains(&written, b"secret-original"), "the replaced title is not recoverable from the copy");
+        assert_eq!(pdfcraft_cos::Document::open(Arc::new(written)).unwrap().revisions().len(), 1);
+        assert_eq!(title_on_disk(&copy).as_deref(), Some("public"));
+        assert_eq!(app.session.get(id).unwrap().path.as_deref(), Some(text(&copy).as_str()));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// M3 (#2166): an explicit Save over a file another program changed since it was opened asks
+    /// first, as PdfCraft's does; Save anyway then writes it.
+    #[test]
+    fn an_explicit_save_over_a_file_changed_on_disk_asks_first() {
+        let (mut app, id, root) = app("changed-on-disk", blank());
+        let original = root.join("document.pdf");
+        app.watch.known_now(id, &text(&original));
+        edit(&mut app, "mine");
+        let theirs = titled("theirs");
+        std::fs::write(&original, &theirs).unwrap();
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        assert_eq!(app.dialog, Some(crate::Dialog::OverwriteChanged), "the changed-on-disk question shows");
+        assert_eq!(std::fs::read(&original).unwrap(), theirs, "the other program's version is untouched");
+        app.overwrite_changed_file();
+        app.wait_margin_saves();
+        assert_eq!(title_on_disk(&original).as_deref(), Some("mine"));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// M3: the watcher's record follows Margin's own writes, so neither an autosave nor an
+    /// explicit Save after it reads as another program's change.
+    #[test]
+    fn margin_writes_are_not_changes_on_disk() {
+        let (mut app, id, root) = app("own-writes", blank());
+        let original = text(&root.join("document.pdf"));
+        app.watch.known_now(id, &original);
+        edit(&mut app, "autosaved");
+        assert!(app.queue_margin_save(id, original.clone(), None));
+        app.wait_margin_saves();
+        assert!(!app.watch.disk_differs(id, &original, None), "the autosave is the version the document came from");
+        edit(&mut app, "saved");
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        assert_eq!(app.dialog, None, "nothing asks about Margin's own write");
+        assert_eq!(title_on_disk(&root.join("document.pdf")).as_deref(), Some("saved"));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A one-field form (`log`) whose Will Save action stamps the field.
+    fn stamped_on_save() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AA << /WS << /S /JavaScript /JS (getField\\('log'\\).value = 'stamped';) >> >> /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (number, object) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", number + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// M3 (#6969): the document's Will Save scripts run before Margin's write, and what they
+    /// change is in the file.
+    #[test]
+    fn an_explicit_save_runs_will_save_scripts() {
+        let (mut app, _, root) = app("will-save", stamped_on_save());
+        edit(&mut app, "edited");
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        let mut reader = pdfcraft_engine::Session::new();
+        reader.set_javascript(false);
+        let saved = Arc::new(std::fs::read(root.join("document.pdf")).unwrap());
+        let reopened = reader.open("document.pdf", None, saved, None).unwrap();
+        let log = reader.get(reopened).unwrap().form.iter().find(|field| field.name == "log").unwrap().value.join(",");
+        assert_eq!(log, "stamped");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// M3 (#2149): with "flatten on every save" remembered, an explicit Save locks Fill & Sign
+    /// marks into the page, and the saved document isn't asked about again.
+    #[test]
+    fn an_explicit_save_flattens_fill_and_sign_and_forgets_the_placed_signature() {
+        let (mut app, id, root) = app("flatten", blank());
+        let check = pdfcraft_engine::Shape::Mark { rect: [40.0, 80.0, 56.0, 96.0], mark: pdfcraft_engine::FillMark::Check };
+        let style = pdfcraft_engine::Style::default_for(&check);
+        let mark =
+            Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page: 0, shape: check, style, contents: String::new(), author: "Ada".into() });
+        app.session.apply(id, mark).unwrap();
+        app.placed_signatures.insert(id);
+        app.flatten_fill_sign_on_save = true;
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        let saved = Arc::new(std::fs::read(root.join("document.pdf")).unwrap());
+        let annotations = pdfcraft_render::inspect(saved, None).unwrap().annotations;
+        assert!(annotations.is_empty(), "the mark is page content: {annotations:?}");
+        assert!(!app.placed_signatures.contains(&id), "what was saved isn't asked about again");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// M3 (#1937): Save writes the repair of a file that opened damaged, edited or not.
+    #[test]
+    fn an_explicit_save_writes_the_repair_of_an_unedited_file() {
+        let (mut app, id, root) = app("repair-unedited", NEEDS_REPAIR.to_vec());
+        assert!(!app.session.get(id).unwrap().dirty);
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        let saved = std::fs::read(root.join("document.pdf")).unwrap();
+        assert_ne!(saved, NEEDS_REPAIR, "the damaged bytes are not what Save writes");
+        assert!(pdfcraft_cos::Document::open(Arc::new(saved)).unwrap().repair_log().is_empty());
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// M1: once Save has written the redacted document over its file (the user chose to, when
+    /// Save asked where), later saves don't ask where again.
+    #[test]
+    fn a_save_over_the_file_clears_the_redaction_counts() {
+        let (mut app, id, root) = app("redaction-counts", blank());
+        let original = text(&root.join("document.pdf"));
+        // As Apply redactions leaves them.
+        app.views[0].redactions_applied = 1;
+        edit(&mut app, "redacted");
+        app.save_override = Some(original.clone());
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        app.wait_margin_saves();
+        assert_eq!(title_on_disk(&root.join("document.pdf")).as_deref(), Some("redacted"));
+        assert_eq!(app.views[0].redactions_applied, 0);
+        assert!(!crate::editing::asks_where_to_save(&app.views[0]), "the next Save writes the file again");
+        assert_eq!(app.session.get(id).unwrap().path.as_deref(), Some(original.as_str()));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// M1: a Save the user chose to write over the file in one redaction state never writes
+    /// another one there: an Undo of the redaction during the write asks where instead.
+    #[test]
+    fn a_redaction_undone_during_a_save_is_not_written_over_the_file() {
+        let (mut app, _, root) = app("redaction-during", blank());
+        let (started, release) = hold_writes(&mut app);
+        let original = root.join("document.pdf");
+        let copy = root.join("restored.pdf");
+        app.views[0].redactions_applied = 1;
+        edit(&mut app, "redacted");
+        app.save_override = Some(text(&original));
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        assert_eq!(started.recv_timeout(WAIT).unwrap(), text(&original));
+        app.save_override = None;
+        // Undo of the unsaved Apply redactions, then the content it brings back.
+        app.views[0].redactions_applied = 0;
+        edit(&mut app, "restored");
+        app.pick_override = Some(vec![text(&copy)]);
+        release.send(()).unwrap();
+        app.wait_margin_saves();
+        app.process_picked();
+        assert!(started.try_recv().is_err(), "the original is written once");
+        assert_eq!(title_on_disk(&original).as_deref(), Some("redacted"));
+        assert_eq!(title_on_disk(&copy).as_deref(), Some("restored"), "the restored content went where the user chose");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// App time each frame of [`window`] steps.
+    const STEP_SECS: f32 = 0.1;
+    /// Longer than autosave's debounce (`reading::DEBOUNCE_SECS`), with room for its write.
+    const PAST_DEBOUNCE_SECS: f32 = 3.0;
+
+    /// Margin's window over `app`, so `reading::tick` autosaves as it does for a reader.
+    fn window(app: PdfCraftApp) -> egui_kittest::Harness<'static, PdfCraftApp> {
+        egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_step_dt(STEP_SECS).build_eframe(move |_cc| app)
+    }
+
+    /// Run `secs` of app time, letting each write the worker was handed land.
+    fn run_for(window: &mut egui_kittest::Harness<'static, PdfCraftApp>, secs: f32) {
+        for _ in 0..(secs / STEP_SECS).ceil() as usize {
+            window.run_steps(1);
+            window.state_mut().wait_margin_saves();
+        }
+    }
+
+    /// H2 (#3923): a recovered document's path comes from its recovery sidecar, which anyone who
+    /// can write the recovery folder can name; autosave never writes there before a Save has
+    /// confirmed it, and the footer says the changes are unsaved.
+    #[test]
+    fn a_recovered_document_is_not_autosaved_to_the_path_its_sidecar_names() {
+        let root = std::env::temp_dir().join(format!("margin-save-recovered-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let named = root.join("named.pdf");
+        std::fs::write(&named, blank()).unwrap();
+        let store = crate::RecoveryStore::new(root.join("recovery"));
+        {
+            let mut crashed = PdfCraftApp::new();
+            crashed.enable_recovery(store.clone());
+            crashed.open_bytes("named.pdf", Some(text(&named)), blank()).unwrap();
+            assert!(crashed.apply_edit(Edit::SetInfo { key: "Title".into(), value: "recovered".into() }));
+            crashed.autosave_now();
+        }
+        let before = std::fs::read(&named).unwrap();
+        let mut app = PdfCraftApp::with_flavor(Flavor::Margin);
+        app.margin_keys.set_config_dir(root.join("config"));
+        app.margin_keys.set_data_dir(root.join("data"));
+        app.enable_recovery(store);
+        let keys: Vec<String> = app.recoverable.iter().map(|meta| meta.key.clone()).collect();
+        assert_eq!(keys.len(), 1);
+        app.recover(&keys);
+        let mut window = window(app);
+        run_for(&mut window, PAST_DEBOUNCE_SECS);
+        assert_eq!(std::fs::read(&named).unwrap(), before, "the named file is untouched");
+        assert_eq!(super::super::reading::save_status(window.state(), 0), super::super::reading::SaveStatus::Unsaved);
+        drop(window);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// M1: after Apply redactions, Save asks where (and proposes a `_Redacted` copy); after an
+    /// Undo past a saved one, the file is redacted and the document isn't. Autosave writes
+    /// neither over the file; once Save no longer has to ask, it autosaves again.
+    #[test]
+    fn autosave_waits_while_save_would_ask_where_because_of_redactions() {
+        let (app, _, root) = app("redaction-autosave", blank());
+        let original = root.join("document.pdf");
+        let before = std::fs::read(&original).unwrap();
+        let mut window = window(app);
+        run_for(&mut window, STEP_SECS);
+        // As Apply redactions leaves the counts.
+        window.state_mut().views[0].redactions_applied = 1;
+        edit(window.state_mut(), "redacted");
+        run_for(&mut window, PAST_DEBOUNCE_SECS);
+        assert_eq!(std::fs::read(&original).unwrap(), before, "the redacted document is not written over the original");
+        assert_eq!(super::super::reading::save_status(window.state(), 0), super::super::reading::SaveStatus::Unsaved);
+        // As an Undo past a saved Apply redactions leaves them.
+        window.state_mut().views[0].redactions_applied = 0;
+        window.state_mut().views[0].redactions_undone_after_save = 1;
+        edit(window.state_mut(), "unredacted");
+        run_for(&mut window, PAST_DEBOUNCE_SECS);
+        assert_eq!(std::fs::read(&original).unwrap(), before, "removed content is not written back");
+        window.state_mut().views[0].redactions_undone_after_save = 0;
+        edit(window.state_mut(), "plain");
+        run_for(&mut window, PAST_DEBOUNCE_SECS);
+        assert_eq!(title_on_disk(&original).as_deref(), Some("plain"), "with nothing to ask, autosave writes");
+        drop(window);
         std::fs::remove_dir_all(root).unwrap();
     }
 

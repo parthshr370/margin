@@ -80,7 +80,6 @@ impl PdfCraftApp {
         // In the web build a delivered step stays counted, so only the steps applied since the
         // last delivery make Save ask where.
         let redacted = self.views.get(index).is_some_and(|v| v.redactions_applied > 0);
-        let not_delivered = self.views.get(index).is_some_and(|v| v.redactions_applied > v.redactions_downloaded);
         let name = if redacted { pdfcraft_engine::redacted_file_name(&name) } else { name };
         // Undo past a saved Apply redactions brings back content that the file on disk has
         // redacted: ask where instead of writing it over that file. In the web build a delivered
@@ -90,7 +89,7 @@ impl PdfCraftApp {
         // The restored content is not a redacted copy: propose the name without `_Redacted`, so
         // the dialog's default is not the redacted file.
         let name = if unredacted && !redacted { unredacted_file_name(&name) } else { name };
-        let target = if not_delivered || unredacted { SaveTarget::As } else { target };
+        let target = if self.views.get(index).is_some_and(asks_where_to_save) { SaveTarget::As } else { target };
         #[cfg(not(target_arch = "wasm32"))]
         {
             let doc_path = path.clone();
@@ -183,18 +182,24 @@ impl PdfCraftApp {
     /// Returns `true` if written now.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
-        // Margin writes an unsigned PDF on its save worker; the queue keeps the writes in order.
-        if self.flavor == crate::Flavor::Margin && self.session.get(id).is_some_and(|doc| !doc.is_signed()) {
-            // Save As answers on a later frame: commit what was typed meanwhile, too (#166).
-            if self.commit_typing_in(id) {
-                self.queue_margin_save(id, dest.to_string(), Some(after));
-            }
-            return false;
-        }
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
-        if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
+        // Margin writes an unsigned PDF over its own file on its save worker, which keeps the
+        // writes in order. Save As to another file and a recovered document's first save take
+        // the path below: they are clean full rewrites (#2165, #3923), not increments.
+        let on_worker = self.flavor == crate::Flavor::Margin
+            && own
+            && !self.recovered_paths.contains(&id)
+            && self.session.get(id).is_some_and(|doc| !doc.is_signed());
+        // While Margin's own write of the file is landing, the file on disk is that write, not
+        // another program's: the save queues behind it.
+        let own_write_landing = on_worker && self.margin_saves.contains(id);
+        if own && !own_write_landing && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
             self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
             self.dialog = Some(crate::Dialog::OverwriteChanged);
+            return false;
+        }
+        if on_worker {
+            self.queue_explicit_margin_save(id, dest, after);
             return false;
         }
         let saved = self.save_doc_to(id, dest, target);
@@ -382,6 +387,14 @@ pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
 /// delivered.
 fn restores_saved_redactions(view: &crate::DocView) -> bool {
     view.redactions_undone_after_save > 0 || view.saved_redactions_cut_off || view.redactions_applied < view.redactions_downloaded
+}
+
+/// Whether Save must ask where to write `view`'s document instead of writing over its file: an
+/// Apply redactions not yet saved (or, in the web build, not yet delivered) proposes a
+/// `_Redacted` copy, and undoing past a saved one must never put the removed content back into
+/// the redacted file. Margin's autosave waits while this holds (`margin::reading`).
+pub(crate) fn asks_where_to_save(view: &crate::DocView) -> bool {
+    view.redactions_applied > view.redactions_downloaded || restores_saved_redactions(view)
 }
 
 /// `name` without the `_Redacted` that [`pdfcraft_engine::redacted_file_name`] adds before the
