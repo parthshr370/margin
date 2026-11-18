@@ -325,3 +325,103 @@ fn two_column_selection_follows_reading_order_and_copy_callout_and_mark_agree() 
     settle(&mut h);
     assert_eq!(pdfcraft_ui_egui::margin::obsidian::callout_for(h.state(), 0, 0, 0).unwrap(), callout);
 }
+
+/// Two 300×200 pages of Helvetica text, a sentence on each.
+fn two_pages_pdf() -> Vec<u8> {
+    let first = "BT /F1 14 Tf 20 150 Td (The quick brown fox) Tj ET\n";
+    let second = "BT /F1 14 Tf 20 150 Td (jumps over the dog) Tj ET\n";
+    let page = |contents: usize| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents {contents} 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
+    };
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_owned(),
+        page(6),
+        page(7),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{first}endstream", first.len()),
+        format!("<< /Length {} >>\nstream\n{second}endstream", second.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, obj) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// The text marks of the document: (page, subtype, colour), top-level ones only.
+fn page_marks(h: &Harness<'static, PdfCraftApp>) -> Vec<(usize, String, Option<[f32; 3]>)> {
+    let id = h.state().views[0].id;
+    let info = &h.state().session.get(id).expect("the document").info;
+    info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| (a.page, a.subtype.clone(), a.color)).collect()
+}
+
+/// Select from "brown" on page 1 to "over" on page 2, as a drag over the page break would.
+fn select_across(h: &mut Harness<'static, PdfCraftApp>) {
+    const BROWN: usize = 10;
+    const OVER_END: usize = 9;
+    h.state_mut().views[0].select_text_across((0, BROWN), (1, OVER_END));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("brown fox\njumps over"));
+}
+
+#[test]
+fn a_selection_across_pages_gets_the_bar_and_one_mark_per_page_in_one_undo_step() {
+    let vault = Vault::new("across", &two_pages_pdf());
+    let mut h = harness(&vault);
+    select_across(&mut h);
+    assert!(bar_open(&h), "a selection across pages shows the bar");
+
+    h.get_by_label("Yellow").click();
+    h.run_steps(3);
+    let marked = page_marks(&h);
+    assert_eq!(marked.iter().map(|(page, subtype, _)| (*page, subtype.as_str())).collect::<Vec<_>>(), [(0, "Highlight"), (1, "Highlight")]);
+    assert!(marked.iter().all(|(_, _, color)| is_yellow(*color)));
+    h.get_by_label("Red").click();
+    h.run_steps(3);
+    assert!(page_marks(&h).iter().all(|(_, _, color)| is_red(*color)), "a colour restyles both pages' marks");
+    h.get_by_label("Underline").click();
+    h.run_steps(3);
+    let underlined = page_marks(&h);
+    assert_eq!(underlined.len(), 2);
+    assert!(underlined.iter().all(|(_, subtype, color)| subtype == "Underline" && is_red(*color)), "{underlined:?}");
+
+    for (step, left) in [("the underline", "Highlight"), ("the colour", "Highlight")] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run_steps(3);
+        let now = page_marks(&h);
+        assert_eq!(now.len(), 2, "one undo takes back {step} on both pages");
+        assert!(now.iter().all(|(_, subtype, _)| subtype == left), "{now:?}");
+    }
+    assert!(page_marks(&h).iter().all(|(_, _, color)| is_yellow(*color)));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert!(page_marks(&h).is_empty(), "and one more both marks");
+}
+
+#[test]
+fn copy_callout_across_pages_quotes_each_page() {
+    let vault = Vault::new("across-callout", &two_pages_pdf());
+    let mut h = harness(&vault);
+    select_across(&mut h);
+    h.get_by_label("Copy callout").click();
+    let mut copied = Vec::new();
+    for _ in 0..2 {
+        h.run_steps(1);
+        copied.extend(h.output().platform_output.commands.iter().filter_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        }));
+    }
+    let [callouts] = copied.as_slice() else { panic!("one copy, got {copied:?}") };
+    assert!(callouts.contains("#page=1|text, p.1]]\n> > brown fox"), "{callouts}");
+    assert!(callouts.contains("#page=2|text, p.2]]\n> > jumps over"), "{callouts}");
+}

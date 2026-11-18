@@ -629,10 +629,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, index: 
         match action {
             MarkAction::Color(id, i) => {
                 if let Some(rgb) = app.notes.colors.get(i).map(obsidian::NoteColor::rgb_f64) {
-                    marks::recolor(app, index, &id, rgb);
+                    marks::recolor(app, index, std::slice::from_ref(&id), rgb);
                 }
             }
-            MarkAction::Style(id, style) => marks::restyle(app, index, &id, style),
+            MarkAction::Style(id, style) => marks::restyle(app, index, std::slice::from_ref(&id), style),
             MarkAction::Delete(pick) => marks::delete(app, index, &pick),
             MarkAction::SaveNote(pick, text) => marks::set_note(app, index, &pick, text),
         }
@@ -793,7 +793,7 @@ pub(crate) fn run(app: &mut PdfCraftApp, id: &str, args: &Value) -> bool {
     if let Some(pick) = app.views.get(index).and_then(|view| view.margin.marks.selected.clone()) {
         match (id, pick, color) {
             (DELETE_ID, pick, _) => marks::delete(app, index, &pick),
-            (_, Pick::Highlight(mark), Some(rgb)) => marks::recolor(app, index, &mark, rgb),
+            (_, Pick::Highlight(mark), Some(rgb)) => marks::recolor(app, index, std::slice::from_ref(&mark), rgb),
             (_, Pick::Highlight(_), None) => app.notify(format!("{COLOR_ID}: no colour named \"{wanted}\" in notes.colors")),
             (_, Pick::Note(_), _) => {}
         }
@@ -883,47 +883,64 @@ fn kind_change_refused(info: &DocInfo, a: &Annotation) -> Option<&'static str> {
 /// that kind already). Refused, with a message, when the PDF takes no comment changes or the
 /// mark has replies or is locked.
 pub(crate) fn change_kind(app: &mut PdfCraftApp, i: usize, page: usize, index: usize, kind: Markup) -> Option<usize> {
+    change_kinds(app, i, &[(page, index)], kind)?.first().map(|(_, new)| *new)
+}
+
+/// [`change_kind`] for marks on different pages (a highlight across pages) together, as one undo
+/// step. Returns each mark's `(page, index)` after the change, in order; the first is selected.
+pub(crate) fn change_kinds(app: &mut PdfCraftApp, i: usize, marks: &[(usize, usize)], kind: Markup) -> Option<Vec<(usize, usize)>> {
     let (subtype, tool) = kind_parts(kind)?;
     let doc = app.session.get(app.views.get(i)?.id)?;
-    let a = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && obsidian::is_markup(a))?;
-    if a.subtype == subtype {
-        return Some(index);
+    let mut edits = Vec::new();
+    let mut changed = Vec::with_capacity(marks.len());
+    for &(page, index) in marks {
+        let a = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && obsidian::is_markup(a))?;
+        if a.subtype == subtype {
+            changed.push(false);
+            continue;
+        }
+        other_kind(a)?;
+        if !doc.allows_annotation() {
+            app.notify(NOT_ALLOWED);
+            return None;
+        }
+        if let Some(why) = kind_change_refused(&doc.info, a) {
+            let message = format!("Can't change this {}: {why}.", kind_label(a).to_lowercase());
+            app.notify(message);
+            return None;
+        }
+        let mut style = app.comment_prefs.style(tool);
+        if let Some(color) = a.color {
+            style.color = color.map(f64::from);
+        }
+        let mark = NewAnnotation {
+            page,
+            shape: Shape::TextMarkup { kind, quads: a.quads.iter().map(|quad| quad.map(f64::from)).collect() },
+            style,
+            contents: a.contents.clone().unwrap_or_default(),
+            author: a.author.clone().unwrap_or_else(|| app.comment_prefs.author.clone()),
+        };
+        edits.extend([Edit::DeleteAnnotation { page, index }, Edit::AddAnnotation(mark)]);
+        changed.push(true);
     }
-    other_kind(a)?;
-    if !doc.allows_annotation() {
-        app.notify(NOT_ALLOWED);
+    if edits.is_empty() {
+        return Some(marks.to_vec());
+    }
+    if !app.apply_edit(Edit::Batch { label: format!("Change to {}", subtype.to_lowercase()), edits }) {
         return None;
     }
-    if let Some(why) = kind_change_refused(&doc.info, a) {
-        let message = format!("Can't change this {}: {why}.", kind_label(a).to_lowercase());
-        app.notify(message);
-        return None;
-    }
-    let mut style = app.comment_prefs.style(tool);
-    if let Some(color) = a.color {
-        style.color = color.map(f64::from);
-    }
-    let mark = NewAnnotation {
-        page,
-        shape: Shape::TextMarkup { kind, quads: a.quads.iter().map(|quad| quad.map(f64::from)).collect() },
-        style,
-        contents: a.contents.clone().unwrap_or_default(),
-        author: a.author.clone().unwrap_or_else(|| app.comment_prefs.author.clone()),
-    };
-    let edit = Edit::Batch {
-        label: format!("Change to {}", subtype.to_lowercase()),
-        edits: vec![Edit::DeleteAnnotation { page, index }, Edit::AddAnnotation(mark)],
-    };
-    if !app.apply_edit(edit) {
-        return None;
-    }
-    // Added last, so the page's last comment.
+    // A changed mark is added last, so its page's last comment.
     let view = app.views.get_mut(i)?;
     let doc = app.session.get(view.id)?;
-    let new = doc.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max()?;
-    view.comments.selected = Some((page, new));
+    let last_on = |page: usize| doc.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max();
+    let now: Vec<(usize, usize)> = marks
+        .iter()
+        .zip(changed)
+        .map(|(&(page, index), changed)| Some((page, if changed { last_on(page)? } else { index })))
+        .collect::<Option<_>>()?;
+    view.comments.selected = now.first().copied();
     view.comments.reveal = true;
-    Some(new)
+    Some(now)
 }
 
 /// Whether `entry` is the selected mark of `view`.

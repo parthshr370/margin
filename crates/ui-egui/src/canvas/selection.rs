@@ -296,14 +296,27 @@ impl DocView {
         self.selection = Some(Selection::run(page, from, to));
     }
 
-    /// The text selection as (page, glyph range in reading order) when it lies on one page:
-    /// Margin's selection bar. A column selection, or one across pages, is no such range, so it
-    /// has no bar.
+    /// The text selection as (page, glyph range in reading order) when it lies on one page (a
+    /// page note's place). A column selection, or one across pages, is no such range.
     pub(crate) fn selection_range(&self) -> Option<(usize, Range<usize>)> {
         self.selection.filter(|s| !s.spans_pages()).and_then(|s| match s.span {
             Span::Run { anchor, head, .. } => Some((s.page, Selection::range(anchor, head))),
             Span::Column { .. } => None,
         })
+    }
+
+    /// A reading-order selection, on one page or across pages: its ends in reading order and the
+    /// page it ends on (Margin's selection bar). `None` for a column selection.
+    pub(crate) fn selection_span(&self) -> Option<(TextSpan, usize)> {
+        let selection = self.selection?;
+        Some((selection.text_span()?, selection.head_page()))
+    }
+
+    /// Select text in reading order from glyph `from.1` on page `from.0` to glyph `to.1` on page
+    /// `to.0`, across the pages between (tests and automation).
+    pub fn select_text_across(&mut self, from: (usize, usize), to: (usize, usize)) {
+        self.all_text = false;
+        self.selection = Some(Selection { page: from.0, span: Span::Run { anchor: from.1, head: to.1, head_page: to.0, head_x: None } });
     }
 
     /// Screen position of the centre of glyph `glyph` on `page`, if that page is on screen and its

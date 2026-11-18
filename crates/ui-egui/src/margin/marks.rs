@@ -113,11 +113,13 @@ pub struct NotePlace {
     pub at: [f64; 2],
 }
 
-/// One step of the sidecar history: a record before and after.
+/// One step of the sidecar history: a record before and after, or several changed together (a
+/// highlight across pages, one mark per page).
 #[derive(Clone, Debug)]
 enum Change {
     Highlight { id: String, before: Option<Box<Highlight>>, after: Option<Box<Highlight>> },
     Note { id: String, before: Option<Box<PageNote>>, after: Option<Box<PageNote>> },
+    Group(Vec<Change>),
 }
 
 #[derive(Clone, Debug)]
@@ -302,6 +304,8 @@ impl Marks {
                 let value = if forward { after } else { before };
                 self.put_note(id, value.as_deref().cloned());
             }
+            Change::Group(changes) if forward => changes.iter().for_each(|change| self.apply(change, true)),
+            Change::Group(changes) => changes.iter().rev().for_each(|change| self.apply(change, false)),
         }
     }
 
@@ -514,48 +518,58 @@ pub(crate) struct NewMark {
     pub note: String,
 }
 
-/// Keep `mark` in view `i`'s sidecar as one undoable step and select it. Returns its id.
-pub(crate) fn add(app: &mut PdfCraftApp, i: usize, mark: NewMark) -> Option<String> {
+/// Keep `marks` (one, or a highlight across pages: one per page) in view `i`'s sidecar as one
+/// undoable step and select the first. Returns their ids, in order; `None` when none can be kept.
+pub(crate) fn add_all(app: &mut PdfCraftApp, i: usize, marks: Vec<NewMark>) -> Option<Vec<String>> {
     if !can_keep(app, i) {
         return None;
     }
     let depth = engine_depth(app, i);
-    let (color, hex) = color_fields(&app.notes, mark.rgb);
     let view = app.views.get(i)?;
     let doc = app.session.get(view.id)?;
-    let page = doc.info.pages.get(mark.page)?;
-    let quads: Vec<[f64; 8]> = mark.quads.into_iter().take(records::MAX_QUADS).collect();
-    if quads.is_empty() || view.margin.marks.highlights.len() >= records::MAX_HIGHLIGHTS {
+    let mut made = Vec::with_capacity(marks.len());
+    for mark in marks {
+        let (color, hex) = color_fields(&app.notes, mark.rgb);
+        let page = doc.info.pages.get(mark.page)?;
+        let quads: Vec<[f64; 8]> = mark.quads.into_iter().take(records::MAX_QUADS).collect();
+        if quads.is_empty() {
+            continue;
+        }
+        made.push(Highlight {
+            id: store::new_ulid(),
+            locator: Locator::Pdf { page: u32::try_from(mark.page).ok()?, quads, at: None },
+            geom: Some(geometry(page)),
+            text: mark.text.filter(|text| !text.trim().is_empty()),
+            style: records::style_of(mark.kind),
+            color,
+            hex: Some(hex),
+            note: Some(mark.note).filter(|note| !note.trim().is_empty()),
+            section: section_at(doc, mark.page),
+            source: HighlightSource::Margin,
+            created: store::now_rfc3339(),
+            modified: None,
+            pdf_annot: None,
+            obsidian: None,
+            state: None,
+            extra: Map::new(),
+        });
+    }
+    if made.is_empty() || view.margin.marks.highlights.len() + made.len() > records::MAX_HIGHLIGHTS {
         return None;
     }
-    let highlight = Highlight {
-        id: store::new_ulid(),
-        locator: Locator::Pdf { page: u32::try_from(mark.page).ok()?, quads, at: None },
-        geom: Some(geometry(page)),
-        text: mark.text.filter(|text| !text.trim().is_empty()),
-        style: records::style_of(mark.kind),
-        color,
-        hex: Some(hex),
-        note: Some(mark.note).filter(|note| !note.trim().is_empty()),
-        section: section_at(doc, mark.page),
-        source: HighlightSource::Margin,
-        created: store::now_rfc3339(),
-        modified: None,
-        pdf_annot: None,
-        obsidian: None,
-        state: None,
-        extra: Map::new(),
-    };
-    let id = highlight.id.clone();
-    let label = label_of(highlight.style);
+    let ids: Vec<String> = made.iter().map(|highlight| highlight.id.clone()).collect();
+    let label = label_of(made[0].style);
+    let mut changes: Vec<Change> =
+        made.into_iter().map(|highlight| Change::Highlight { id: highlight.id.clone(), before: None, after: Some(Box::new(highlight)) }).collect();
+    let change = if changes.len() == 1 { changes.remove(0) } else { Change::Group(changes) };
     let view = app.views.get_mut(i)?;
     let marks = &mut view.margin.marks;
-    marks.record(label, Change::Highlight { id: id.clone(), before: None, after: Some(Box::new(highlight)) }, depth);
-    marks.selected = Some(Pick::Highlight(id.clone()));
+    marks.record(label, change, depth);
+    marks.selected = Some(Pick::Highlight(ids[0].clone()));
     marks.reveal = true;
     view.comments.selected = None;
     tell_once(app, i);
-    Some(id)
+    Some(ids)
 }
 
 /// `geom` of a record made on `page`: its crop box, rotation and UserUnit (1: view pt are
@@ -591,37 +605,48 @@ fn tell_once(app: &mut PdfCraftApp, i: usize) {
     ));
 }
 
-/// Change sidecar highlight `id` of view `i` with `edit`, as one undoable step labelled `label`.
-fn change_highlight(app: &mut PdfCraftApp, i: usize, id: &str, label: &'static str, edit: impl FnOnce(&mut Highlight)) {
+/// Change sidecar highlights `ids` of view `i` with `edit`, together as one undoable step
+/// labelled `label`.
+fn change_highlights(app: &mut PdfCraftApp, i: usize, ids: &[String], label: &'static str, edit: impl Fn(&mut Highlight)) {
     if !can_keep(app, i) {
         return;
     }
     let depth = engine_depth(app, i);
     let Some(view) = app.views.get_mut(i) else { return };
     let marks = &mut view.margin.marks;
-    let Some(before) = marks.highlight(id).cloned() else { return };
-    let mut after = before.clone();
-    edit(&mut after);
-    if after == before {
-        return;
-    }
-    after.modified = Some(store::now_rfc3339());
-    marks.record(label, Change::Highlight { id: id.to_owned(), before: Some(Box::new(before)), after: Some(Box::new(after)) }, depth);
+    let mut changes: Vec<Change> = ids
+        .iter()
+        .filter_map(|id| {
+            let before = marks.highlight(id).cloned()?;
+            let mut after = before.clone();
+            edit(&mut after);
+            (after != before).then(|| {
+                after.modified = Some(store::now_rfc3339());
+                Change::Highlight { id: id.clone(), before: Some(Box::new(before)), after: Some(Box::new(after)) }
+            })
+        })
+        .collect();
+    let change = match changes.len() {
+        0 => return,
+        1 => changes.remove(0),
+        _ => Change::Group(changes),
+    };
+    marks.record(label, change, depth);
 }
 
-/// Give sidecar highlight `id` the colour `rgb`.
-pub(crate) fn recolor(app: &mut PdfCraftApp, i: usize, id: &str, rgb: [f64; 3]) {
+/// Give sidecar highlights `ids` the colour `rgb`.
+pub(crate) fn recolor(app: &mut PdfCraftApp, i: usize, ids: &[String], rgb: [f64; 3]) {
     let (color, hex) = color_fields(&app.notes, rgb);
-    change_highlight(app, i, id, "Change colour", |h| {
-        h.color = color;
-        h.hex = Some(hex);
+    change_highlights(app, i, ids, "Change colour", |h| {
+        h.color = color.clone();
+        h.hex = Some(hex.clone());
     });
 }
 
-/// Make sidecar highlight `id` a `style` mark (a highlight into an underline or back).
-pub(crate) fn restyle(app: &mut PdfCraftApp, i: usize, id: &str, style: HighlightStyle) {
+/// Make sidecar highlights `ids` `style` marks (highlights into underlines or back).
+pub(crate) fn restyle(app: &mut PdfCraftApp, i: usize, ids: &[String], style: HighlightStyle) {
     let label = if style == HighlightStyle::Underline { "Change to underline" } else { "Change to highlight" };
-    change_highlight(app, i, id, label, |h| h.style = style);
+    change_highlights(app, i, ids, label, |h| h.style = style);
 }
 
 /// Save `text` as the note of `pick` (a page note left empty is deleted).
@@ -629,7 +654,7 @@ pub(crate) fn set_note(app: &mut PdfCraftApp, i: usize, pick: &Pick, text: Strin
     match pick {
         Pick::Highlight(id) => {
             let note = Some(text).filter(|text| !text.trim().is_empty());
-            change_highlight(app, i, id, "Edit note", |h| h.note = note);
+            change_highlights(app, i, std::slice::from_ref(id), "Edit note", |h| h.note.clone_from(&note));
         }
         Pick::Note(id) if text.trim().is_empty() => delete(app, i, pick),
         Pick::Note(id) => {
@@ -714,28 +739,55 @@ pub(crate) fn save_draft(app: &mut PdfCraftApp, i: usize) {
 }
 
 /// Margin's `apply_edit` hook: a text mark on a document that keeps them beside the file goes
-/// to its sidecar instead of the engine. `Some(kept)` when the edit was taken, `None` to let
+/// to its sidecar instead of the engine, a text mark across pages (a batch of one per page) as
+/// one sidecar mark per page in one step. `Some(kept)` when the edit was taken, `None` to let
 /// the engine apply it.
 pub(crate) fn take_edit(app: &mut PdfCraftApp, edit: &Edit) -> Option<bool> {
     if app.flavor != Flavor::Margin {
         return None;
     }
-    let Edit::AddAnnotation(NewAnnotation { page, shape: Shape::TextMarkup { kind, quads }, style, contents, .. }) = edit else { return None };
+    let added = text_marks(edit)?;
     let (i, _) = app.active_ids()?;
     let view = app.views.get(i)?;
     view.margin.marks.beside?;
     let doc = app.session.get(view.id)?;
-    let info = doc.info.pages.get(*page)?;
-    let text = quoted(view, doc, *page, quads);
-    let quads = quads.iter().map(|quad| view_quad(info, quad)).collect();
-    let mark = NewMark { page: *page, quads, text, kind: *kind, rgb: style.color, note: contents.clone() };
-    let kept = add(app, i, mark).is_some();
+    let mut new = Vec::with_capacity(added.len());
+    for NewAnnotation { page, shape, style, contents, .. } in added {
+        let Shape::TextMarkup { kind, quads } = shape else { return None };
+        let info = doc.info.pages.get(*page)?;
+        let text = quoted(view, doc, *page, quads);
+        let quads = quads.iter().map(|quad| view_quad(info, quad)).collect();
+        new.push(NewMark { page: *page, quads, text, kind: *kind, rgb: style.color, note: contents.clone() });
+    }
+    let kept = add_all(app, i, new).is_some();
+    let Some(view) = app.views.get_mut(i) else { return Some(kept) };
+    // The engine never sees this edit, so it doesn't follow it up across pages.
+    view.marks_across_pages = None;
     // As a mark the engine takes: a one-shot comment tool goes back to Select.
-    let one_shot = app.views.get_mut(i).is_some_and(|view| std::mem::take(&mut view.comments.tool_done));
+    let one_shot = std::mem::take(&mut view.comments.tool_done);
     if kept && one_shot && !app.comment_prefs.pinned {
         app.quick_tool = crate::QuickTool::Select;
     }
     Some(kept)
+}
+
+/// The text marks `edit` adds: itself, or every edit of a batch that adds only text marks (a
+/// selection across pages marks each page). `None` for any other edit.
+fn text_marks(edit: &Edit) -> Option<Vec<&NewAnnotation>> {
+    let is_text_mark = |edit: &Edit| matches!(edit, Edit::AddAnnotation(NewAnnotation { shape: Shape::TextMarkup { .. }, .. }));
+    match edit {
+        Edit::AddAnnotation(added) if is_text_mark(edit) => Some(vec![added]),
+        Edit::Batch { edits, .. } if !edits.is_empty() && edits.iter().all(is_text_mark) => Some(
+            edits
+                .iter()
+                .filter_map(|edit| match edit {
+                    Edit::AddAnnotation(added) => Some(added),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 /// The sidecar's part of `edit.undo` (`undo`) or `edit.redo` on the active document: takes the

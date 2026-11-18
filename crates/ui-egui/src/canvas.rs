@@ -70,7 +70,7 @@ use organize::sharp_enough;
 pub(crate) use page_input::PageToolContext;
 use page_input::{PageInput, cancel_on_escape, page_overlays, page_tool_input, text_layer};
 use selection::{Selection, Span, click_unit, selection_actions, start_selection_drag};
-pub(crate) use selection::{TextSpan, ToolMarks};
+pub(crate) use selection::{TextSpan, ToolMarks, one_undo_step};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
 use zoom::anchored_scroll;
