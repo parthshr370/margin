@@ -55,7 +55,6 @@ fi
 echo "==> Margin $VERSION release from ${SHA::9}"
 if [ "$CHECKS" = 1 ]; then "$ROOT/packaging/margin/check.sh"; fi
 
-margin_build_inputs
 if ! command -v nfpm >/dev/null; then
   tools="$CARGO_TARGET_DIR/margin-tools"
   if [ ! -x "$tools/nfpm" ]; then

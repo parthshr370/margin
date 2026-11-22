@@ -47,6 +47,8 @@ BASENAME="margin-$VERSION-linux-$ARCH"
 
 echo "==> Margin $VERSION for Linux $ARCH ($FORMATS)"
 
+# The translations and Japanese face (also needed when staging: their licences go in the package).
+margin_build_inputs
 TARGET="${MARGIN_TARGET:-}"
 if [ "$SKIP_BUILD" = 0 ]; then
   if [ -n "$TARGET" ]; then

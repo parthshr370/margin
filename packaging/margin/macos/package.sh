@@ -51,7 +51,10 @@ fi
 echo "==> Margin $VERSION for macOS ($ARCH), identity: $IDENTITY"
 
 # ---- build -------------------------------------------------------------------------------------
+# The translations and Japanese face (also needed when staging: their licences go in the app).
+margin_build_inputs
 if [ "$SKIP_BUILD" = 0 ]; then
+  if command -v rustup >/dev/null; then rustup target add "${TARGETS[@]}"; fi
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
   (cd "$ROOT" && cargo build --release --locked -p margin "${args[@]}")

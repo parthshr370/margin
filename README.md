@@ -149,9 +149,19 @@ published next to it.
 
 ### macOS
 
-Download `margin-<ver>-macos-universal.dmg` (one build for Apple silicon and Intel), open it and
-drag **Margin** into **Applications**. Releases are built on Linux, so a DMG is only on the
-releases that list one (0.1.0); for newer versions, build from source on a Mac.
+Releases are built on Linux, so newer versions have no macOS download (0.1.0 has
+`margin-0.1.0-macos-universal.dmg`). Build the DMG on the Mac instead:
+
+```sh
+xcode-select --install                                         # git, clang, codesign
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # Rust
+. "$HOME/.cargo/env"                                            # Rust on PATH in this shell
+git clone https://github.com/parthshr370/margin.git && cd margin
+packaging/margin/macos/package.sh --arch aarch64                # x86_64 on an Intel Mac
+open dist/release/margin-*-macos-*.dmg
+```
+
+Drag **Margin** into **Applications**.
 
 Margin is not signed with an Apple Developer ID and not notarized, so macOS blocks it the first
 time. On macOS 15 (Sequoia) and later:
