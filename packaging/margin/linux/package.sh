@@ -12,8 +12,11 @@
 # The Margin twin of packaging/linux/package.sh: same staging and formats, but it builds only the
 # `margin` crate and carries Margin's id, metadata and icons. Needs: cargo; nfpm for deb/rpm
 # (https://nfpm.goreleaser.com); appimagetool for the AppImage (downloaded into
-# $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04, glibc 2.35) so the
-# binary runs on newer ones. Optional: desktop-file-validate, appstreamcli, zsyncmake.
+# $CARGO_TARGET_DIR if missing). Optional: desktop-file-validate, appstreamcli, zsyncmake.
+# The binary needs the glibc it was linked against or newer. To build for older distros on a
+# new one, set MARGIN_TARGET to a cargo-zigbuild target with a glibc version, e.g.
+# MARGIN_TARGET=x86_64-unknown-linux-gnu.2.35 (glibc 2.35: Ubuntu 22.04, Debian 12, Fedora 36
+# and newer); that needs zig and cargo-zigbuild. packaging/margin/release.sh does this.
 # Every format carries the OCR models in share/margin/models (`cargo xtask models` fetches and
 # verifies them with curl on the first run).
 set -euo pipefail
@@ -44,10 +47,20 @@ BASENAME="margin-$VERSION-linux-$ARCH"
 
 echo "==> Margin $VERSION for Linux $ARCH ($FORMATS)"
 
+TARGET="${MARGIN_TARGET:-}"
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p margin)
+  if [ -n "$TARGET" ]; then
+    (cd "$ROOT" && cargo zigbuild --release --locked -p margin --target "$TARGET")
+  else
+    (cd "$ROOT" && cargo build --release --locked -p margin)
+  fi
 fi
-BIN="$CARGO_TARGET_DIR/release"
+if [ -n "$TARGET" ]; then
+  # cargo-zigbuild builds into the plain triple's directory (no ".2.35").
+  BIN="$CARGO_TARGET_DIR/${TARGET%%.[0-9]*}/release"
+else
+  BIN="$CARGO_TARGET_DIR/release"
+fi
 WORK="$CARGO_TARGET_DIR/margin-linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"

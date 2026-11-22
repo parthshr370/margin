@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   house-rules:
-    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin runs margin-*.yml
+    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin checks and builds locally (packaging/margin)
     uses: storytold/craft-common-actions/.github/workflows/house-rules.yml@main
     with:
       rust: true

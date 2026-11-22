@@ -23,12 +23,12 @@ concurrency:
 jobs:
   # The shared gate doesn't check where git dependencies come from; release.yml runs the same job.
   git-sources:
-    if: github.repository == 'storytold/pdfcraft' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') # upstream only; Margin runs margin-*.yml
+    if: github.repository == 'storytold/pdfcraft' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') # upstream only; Margin checks and builds locally (packaging/margin)
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/git-sources.yml@main
 
   gate:
-    if: github.repository == 'storytold/pdfcraft' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') # upstream only; Margin runs margin-*.yml
+    if: github.repository == 'storytold/pdfcraft' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') # upstream only; Margin checks and builds locally (packaging/margin)
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:

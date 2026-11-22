@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   gate:
-    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin runs margin-*.yml
+    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin checks and builds locally (packaging/margin)
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:

@@ -129,8 +129,10 @@ Margin reads PDF only. It runs on Linux and macOS; there is no Windows build yet
 ## Install
 
 Download a build from the [Releases page](https://github.com/parthshr370/margin/releases).
-`<ver>` below is the version number, and `<arch>` is `x86_64` or `aarch64`. Each release has a
-`SHA256SUMS` file; check a download with `sha256sum -c SHA256SUMS --ignore-missing`.
+`<ver>` below is the version number, and `<arch>` is `x86_64` (newer releases) or `aarch64`
+(0.1.0 only). Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and
+later). Each release has a `SHA256SUMS` file; check a download with
+`sha256sum -c SHA256SUMS --ignore-missing`.
 
 ### Linux
 
@@ -148,7 +150,8 @@ published next to it.
 ### macOS
 
 Download `margin-<ver>-macos-universal.dmg` (one build for Apple silicon and Intel), open it and
-drag **Margin** into **Applications**.
+drag **Margin** into **Applications**. Releases are built on Linux, so a DMG is only on the
+releases that list one (0.1.0); for newer versions, build from source on a Mac.
 
 Margin is not signed with an Apple Developer ID and not notarized, so macOS blocks it the first
 time. On macOS 15 (Sequoia) and later:
@@ -184,7 +187,12 @@ On Linux, install the windowing and graphics headers first. On Debian or Ubuntu:
 sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
 ```
 
-The packaging scripts for the release builds are in [`packaging/`](packaging/).
+The packaging scripts for the release builds are in [`packaging/`](packaging/). Margin has no
+hosted CI: `packaging/margin/check.sh` runs formatting, clippy and the tests (`--full` for the
+whole workspace), and `packaging/margin/release.sh` runs the checks, builds the x86_64 Linux
+packages for glibc 2.35 with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild),
+checks them and uploads them to a draft GitHub Release. Both embed the interface translations
+and Japanese face upstream's releases carry (craft-i18n, craft-fonts at upstream's pins).
 The macOS app/DMG and every Linux format include the Latin OCR models, their CC-BY-SA-4.0
 licence texts and attribution. Packaging runs `cargo xtask models` to fetch and SHA-256 verify
 them. For a development build, run that command yourself once; models live in the gitignored

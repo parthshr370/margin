@@ -19,12 +19,12 @@ concurrency:
 
 jobs:
   lint:
-    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin runs margin-*.yml
+    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin checks and builds locally (packaging/margin)
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@main
 
   windows-install-policy:
-    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin runs margin-*.yml
+    if: github.repository == 'storytold/pdfcraft' # upstream only; Margin checks and builds locally (packaging/margin)
     timeout-minutes: 10
     name: Windows installation policy (no app build)
     runs-on: windows-latest
