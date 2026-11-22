@@ -39,9 +39,9 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(( ($(nproc) + 1) / 2 ))}"
 NFPM_VERSION=2.49.0
 
 [ "$(uname -m)" = x86_64 ] || { echo "error: release.sh builds x86_64 packages on an x86_64 machine" >&2; exit 2; }
-for tool in zig cargo-zigbuild; do
-  command -v "$tool" >/dev/null || { echo "error: $tool not found (see the header of $0)" >&2; exit 1; }
-done
+command -v zig >/dev/null || { echo "error: zig not found (see the header of $0)" >&2; exit 1; }
+# A cargo subcommand: cargo finds it in ~/.cargo/bin even when that isn't on PATH.
+cargo zigbuild --help >/dev/null 2>&1 || { echo "error: cargo-zigbuild not found (see the header of $0)" >&2; exit 1; }
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
   echo "error: the working tree has changes; commit them first so the release matches a commit" >&2
   exit 1
