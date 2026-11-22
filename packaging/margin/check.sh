@@ -30,6 +30,8 @@ echo "==> fmt"
 cargo fmt --all -- --check
 echo "==> attribution"
 cargo xtask assets
+echo "==> OCR models (the OCR tests read them from assets/models)"
+cargo xtask models
 echo "==> clippy"
 cargo clippy --workspace --all-targets --locked -- -D warnings
 if [ "$FULL" = 1 ]; then
