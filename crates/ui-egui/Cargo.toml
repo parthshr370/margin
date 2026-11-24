@@ -53,7 +53,7 @@ base64 = "0.23"
 unicode-bidi = "0.3"
 # Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
 # that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
-skrifa = "0.44"
+skrifa = "0.47"
 # Margin flavor: settings.jsonc and keymap.jsonc (src/margin).
 margin-config = { path = "../margin-config" }
 
@@ -66,7 +66,7 @@ arboard = { version = "3.6", default-features = false, features = ["image-data"]
 # Waits for native file pickers off the UI thread (already in the tree through wgpu).
 pollster = "1.0"
 # Margin flavor: reloads settings.jsonc and keymap.jsonc when they are saved.
-notify = "8"
+notify = "9"
 
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 # Discover configured font directories without linking libfontconfig or running a subprocess.
@@ -115,7 +115,7 @@ egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 image = { version = "0.25", default-features = false }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
-skrifa = "0.44"
+skrifa = "0.47"
 proptest = { workspace = true }
 
 [build-dependencies]
